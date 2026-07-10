@@ -1,20 +1,15 @@
 name: EduAI Backend CI
 
 on:
-  # Trigger on pushes to long-lived tracking branches
   push:
     branches:
       - main
       - dev
-
-  # Trigger on pull requests targeting our tracking branches
   pull_request:
     branches:
       - main
       - dev
 
-# Concurrency rules: If a teammate pushes a new commit while an older CI run on 
-# the same branch/PR is still running, cancel the old run automatically!
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -42,7 +37,7 @@ jobs:
       - name: Run Linter Check
         run: npm run lint
 
-      - name: Run Tests (Jest)
+      - name: Run Unit Tests (Jest)
         run: npm run test
 
       - name: Build Application
