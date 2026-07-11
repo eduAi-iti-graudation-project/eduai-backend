@@ -31,6 +31,7 @@ model User {
   taughtClasses Class[]      @relation("TeacherClasses")
   enrollments   Enrollment[]
   submissions   Submission[]
+  alerts        Alert[]
 
   @@map("users")
 }
@@ -85,7 +86,7 @@ model MaterialChunk {
   id         String                      @id @default(uuid()) @db.Uuid
   materialId String                      @db.Uuid
   content    String
-  embedding  Unsupported("vector(1536)")
+  embedding  Unsupported("vector(1536)")?
   createdAt  DateTime                    @default(now())
 
   // Relations
@@ -162,7 +163,7 @@ model SubmissionChunk {
   id           String                      @id @default(uuid()) @db.Uuid
   submissionId String                      @db.Uuid
   content      String
-  embedding    Unsupported("vector(1536)")
+  embedding    Unsupported("vector(1536)")?
   createdAt    DateTime                    @default(now())
 
   // Relations
@@ -187,4 +188,18 @@ model GradingScore {
 
   @@unique([submissionId, criteriaId])
   @@map("grading_scores")
+}
+
+model Alert {
+  id        String   @id @default(uuid()) @db.Uuid
+  type      String
+  reason    String
+  status    String   @default("ACTIVE")
+  studentId String   @db.Uuid
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  student   User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@map("alerts")
 }
