@@ -1,0 +1,205 @@
+datasource db {
+  provider   = "postgresql"
+  extensions = [vector]
+}
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+enum UserRole {
+  TEACHER
+  STUDENT
+}
+
+enum SubmissionStatus {
+  SUBMITTED
+  GRADING_IN_PROGRESS
+  REVIEWED
+}
+
+model User {
+  id          String       @id @default(uuid()) @db.Uuid
+  email       String       @unique
+  name        String
+  role        UserRole
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  
+  // Relations
+  taughtClasses Class[]      @relation("TeacherClasses")
+  enrollments   Enrollment[]
+  submissions   Submission[]
+  alerts        Alert[]
+
+  @@map("users")
+}
+
+model Class {
+  id          String       @id @default(uuid()) @db.Uuid
+  name        String
+  description String?
+  teacherId   String       @db.Uuid
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  // Relations
+  teacher     User         @relation("TeacherClasses", fields: [teacherId], references: [id])
+  enrollments Enrollment[]
+  materials   Material[]
+  assignments Assignment[]
+
+  @@map("classes")
+}
+
+model Enrollment {
+  id        String   @id @default(uuid()) @db.Uuid
+  classId   String   @db.Uuid
+  studentId String   @db.Uuid
+  createdAt DateTime @default(now())
+
+  // Relations
+  class     Class    @relation(fields: [classId], references: [id], onDelete: Cascade)
+  student   User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([classId, studentId])
+  @@map("enrollments")
+}
+
+model Material {
+  id        String          @id @default(uuid()) @db.Uuid
+  title     String
+  fileUrl   String?
+  classId   String          @db.Uuid
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  // Relations
+  class     Class           @relation(fields: [classId], references: [id], onDelete: Cascade)
+  chunks    MaterialChunk[]
+
+  @@map("materials")
+}
+
+model MaterialChunk {
+  id         String                      @id @default(uuid()) @db.Uuid
+  materialId String                      @db.Uuid
+  content    String
+  embedding  Unsupported("vector(1536)")?
+  createdAt  DateTime                    @default(now())
+
+  // Relations
+  material   Material                    @relation(fields: [materialId], references: [id], onDelete: Cascade)
+
+  @@map("material_chunks")
+}
+
+model Assignment {
+  id          String   @id @default(uuid()) @db.Uuid
+  title       String
+  description String?
+  dueDate     DateTime
+  totalPoints Int
+  classId     String   @db.Uuid
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  class       Class    @relation(fields: [classId], references: [id], onDelete: Cascade)
+  rubrics     Rubric[]
+  submissions Submission[]
+
+  @@map("assignments")
+}
+
+model Rubric {
+  id           String           @id @default(uuid()) @db.Uuid
+  title        String
+  assignmentId String           @db.Uuid
+  createdAt    DateTime         @default(now())
+
+  // Relations
+  assignment   Assignment       @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  criteria     RubricCriteria[]
+
+  @@map("rubrics")
+}
+
+model RubricCriteria {
+  id            String          @id @default(uuid()) @db.Uuid
+  rubricId      String          @db.Uuid
+  description   String
+  maxPoints     Int
+  createdAt     DateTime        @default(now())
+
+  // Relations
+  rubric        Rubric          @relation(fields: [rubricId], references: [id], onDelete: Cascade)
+  gradingScores GradingScore[]
+
+  @@map("rubric_criteria")
+}
+
+model Submission {
+  id           String            @id @default(uuid()) @db.Uuid
+  assignmentId String            @db.Uuid
+  studentId    String            @db.Uuid
+  status       SubmissionStatus  @default(SUBMITTED)
+  teacherNotes String?
+  finalScore   Int?
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  // Relations
+  assignment   Assignment        @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  student      User              @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  chunks       SubmissionChunk[]
+  scores       GradingScore[]
+
+  @@map("submissions")
+}
+
+model SubmissionChunk {
+  id           String                      @id @default(uuid()) @db.Uuid
+  submissionId String                      @db.Uuid
+  content      String
+  embedding    Unsupported("vector(1536)")?
+  createdAt    DateTime                    @default(now())
+
+  // Relations
+  submission   Submission                  @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  @@map("submission_chunks")
+}
+
+model GradingScore {
+  id           String         @id @default(uuid()) @db.Uuid
+  submissionId String         @db.Uuid
+  criteriaId   String         @db.Uuid
+  pointsAwarded Int
+  aiFeedback   String?
+  teacherNotes String?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  // Relations
+  submission   Submission     @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  criteria     RubricCriteria @relation(fields: [criteriaId], references: [id], onDelete: Cascade)
+
+  @@unique([submissionId, criteriaId])
+  @@map("grading_scores")
+}
+
+model Alert {
+  id        String   @id @default(uuid()) @db.Uuid
+  type      String
+  reason    String
+  status    String   @default("ACTIVE")
+  studentId String   @db.Uuid
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  student   User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@map("alerts")
+}
