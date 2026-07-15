@@ -181,6 +181,7 @@ model GradingScore {
   pointsAwarded Int
   aiFeedback   String?
   teacherNotes String?
+  isConfirmed  Boolean        @default(false)
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
 
