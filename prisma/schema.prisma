@@ -128,11 +128,12 @@ model Rubric {
 }
 
 model RubricCriteria {
-  id            String          @id @default(uuid()) @db.Uuid
-  rubricId      String          @db.Uuid
+  id            String                      @id @default(uuid()) @db.Uuid
+  rubricId      String                      @db.Uuid
   description   String
   maxPoints     Int
-  createdAt     DateTime        @default(now())
+  embedding     Unsupported("vector(1536)")?
+  createdAt     DateTime                    @default(now())
 
   // Relations
   rubric        Rubric          @relation(fields: [rubricId], references: [id], onDelete: Cascade)
