@@ -38,8 +38,14 @@ export class RubricsService {
     return rubric;
   }
 
-  confirm(id: string) {
-    return this.prisma.rubric.update({ where: { id }, data: {} });
+  async confirm(id: string) {
+    const rubric = await this.prisma.rubric.findUnique({ where: { id } });
+    if (!rubric) throw new NotFoundException('Rubric not found');
+    return this.prisma.rubric.update({
+      where: { id },
+      data: { isConfirmed: true },
+      include: { criteria: true },
+    });
   }
 
   importPdf() {
