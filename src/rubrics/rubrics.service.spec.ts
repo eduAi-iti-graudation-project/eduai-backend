@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { RubricsService } from './rubrics.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { LlmService } from '../common/llm/llm.service';
 import { NotFoundException } from '@nestjs/common';
 
 describe('RubricsService', () => {
@@ -15,11 +16,17 @@ describe('RubricsService', () => {
     },
   };
 
+  const mockLlm = {
+    generateStructured: jest.fn(),
+    embed: jest.fn(),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         RubricsService,
         { provide: PrismaService, useValue: mockPrisma },
+        { provide: LlmService, useValue: mockLlm },
       ],
     }).compile();
 

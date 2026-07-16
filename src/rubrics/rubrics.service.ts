@@ -1,9 +1,14 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { LlmService } from '../common/llm/llm.service';
+import { ExtractedRubricSchema } from './dto';
 
 @Injectable()
 export class RubricsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly llm: LlmService,
+  ) {}
 
   create(dto: {
     title: string;
@@ -48,7 +53,29 @@ export class RubricsService {
     });
   }
 
-  importPdf() {
-    throw new Error('Not implemented');
+  async importPdf(buffer: Buffer) {
+    const pdfParse = require('pdf-parse');
+    const pdfData = await pdfParse(buffer);
+    const rawText = pdfData.text;
+
+    const result = await this.llm.generateStructured({
+      systemPrompt: `You are a rubric extraction assistant. Extract grading criteria from the provided rubric document.
+
+For each criterion, determine:
+- description: A clear description of what is being evaluated
+- maxPoints: The maximum possible points for this criterion
+
+Also infer a title for the rubric if possible.
+
+Return valid JSON matching this schema:
+{
+  "title": "string (optional)",
+  "criteria": [{ "description": "string", "maxPoints": "number (positive integer)" }]
+}`,
+      userPrompt: `Extract all grading criteria from this rubric text:\n\n${rawText}`,
+      schema: ExtractedRubricSchema,
+    });
+
+    return result;
   }
 }

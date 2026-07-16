@@ -6,8 +6,11 @@ import {
   Param,
   Body,
   Query,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBody } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiTags, ApiOperation, ApiBody, ApiConsumes } from '@nestjs/swagger';
 import { RubricsService } from './rubrics.service';
 import { CreateRubricDto } from './dto';
 
@@ -42,8 +45,18 @@ export class RubricsController {
   }
 
   @Post('import-pdf')
+  @UseInterceptors(FileInterceptor('file'))
+  @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Upload a PDF rubric and extract criteria' })
-  importPdf() {
-    return this.rubricsService.importPdf();
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', format: 'binary' },
+      },
+    },
+  })
+  importPdf(@UploadedFile() file: Express.Multer.File) {
+    return this.rubricsService.importPdf(file.buffer);
   }
 }

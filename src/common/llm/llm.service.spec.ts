@@ -33,6 +33,7 @@ describe('LlmService', () => {
   let service: LlmService;
 
   beforeEach(async () => {
+    process.env.OLLAMA_EMBED_DIM = '1536';
     mockChatCreate.mockClear();
     mockEmbeddingsCreate.mockClear();
     mockRedact.mockClear();

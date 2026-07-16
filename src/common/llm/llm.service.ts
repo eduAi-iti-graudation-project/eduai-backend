@@ -7,16 +7,29 @@ import { validateWithRetry } from '../validation/retry-once';
 @Injectable()
 export class LlmService {
   private readonly openai: OpenAI;
+  private readonly chatModel: string;
+  private readonly embedModel: string;
+  private readonly embedDim: number | undefined;
 
   constructor(private readonly piiService: PiiService) {
-    this.openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    this.openai = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY || 'ollama',
+      ...(process.env.OLLAMA_BASE_URL
+        ? { baseURL: process.env.OLLAMA_BASE_URL }
+        : {}),
+    });
+    this.chatModel = process.env.OLLAMA_CHAT_MODEL || 'gpt-4o-mini';
+    this.embedModel = process.env.OLLAMA_EMBED_MODEL || 'text-embedding-3-small';
+    this.embedDim = process.env.OLLAMA_EMBED_DIM
+      ? Number(process.env.OLLAMA_EMBED_DIM)
+      : undefined;
   }
 
   async embed(text: string): Promise<number[]> {
     const response = await this.openai.embeddings.create({
-      model: 'text-embedding-3-small',
+      model: this.embedModel,
       input: text,
-      dimensions: 1536,
+      ...(this.embedDim ? { dimensions: this.embedDim } : {}),
     });
     return response.data[0].embedding;
   }
@@ -34,7 +47,7 @@ export class LlmService {
 
     const callLlm = async (): Promise<unknown> => {
       const response = await this.openai.chat.completions.create({
-        model: 'gpt-4o-mini',
+        model: this.chatModel,
         messages: [
           {
             role: 'system',
