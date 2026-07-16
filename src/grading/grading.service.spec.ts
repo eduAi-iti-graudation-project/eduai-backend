@@ -63,7 +63,11 @@ describe('GradingService', () => {
     it('should accept optional teacherNotes', async () => {
       const scoreId = 'test-score-id';
       const dto = { pointsAwarded: 10, teacherNotes: 'Good work' };
-      const existingScore = { id: scoreId, pointsAwarded: 7, teacherNotes: null };
+      const existingScore = {
+        id: scoreId,
+        pointsAwarded: 7,
+        teacherNotes: null,
+      };
 
       mockPrisma.gradingScore.findUnique.mockResolvedValue(existingScore);
       mockPrisma.gradingScore.update.mockResolvedValue({

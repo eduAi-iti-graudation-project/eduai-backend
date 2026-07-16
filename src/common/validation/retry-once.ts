@@ -27,7 +27,10 @@ export async function validateWithRetry<T>(
         secondError instanceof ZodError
           ? `Schema validation failed after retry: ${secondError.message}`
           : `Validation failed after retry: ${String(secondError)}`;
-      const errors = { first: firstError as Error, second: secondError as Error };
+      const errors = {
+        first: firstError as Error,
+        second: secondError as Error,
+      };
       throw new ValidationError(message, errors, 2);
     }
   }

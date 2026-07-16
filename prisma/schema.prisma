@@ -86,7 +86,7 @@ model MaterialChunk {
   id         String                      @id @default(uuid()) @db.Uuid
   materialId String                      @db.Uuid
   content    String
-  embedding  Unsupported("vector(2048)")?
+  embedding  Unsupported("vector(1024)")?
   createdAt  DateTime                    @default(now())
 
   // Relations
@@ -132,7 +132,7 @@ model RubricCriteria {
   rubricId      String                      @db.Uuid
   description   String
   maxPoints     Int
-  embedding     Unsupported("vector(1536)")?
+  embedding     Unsupported("vector(1024)")?
   createdAt     DateTime                    @default(now())
 
   // Relations
@@ -165,7 +165,7 @@ model SubmissionChunk {
   id           String                      @id @default(uuid()) @db.Uuid
   submissionId String                      @db.Uuid
   content      String
-  embedding    Unsupported("vector(1536)")?
+  embedding    Unsupported("vector(1024)")?
   createdAt    DateTime                    @default(now())
 
   // Relations

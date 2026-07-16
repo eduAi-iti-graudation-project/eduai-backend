@@ -8,6 +8,7 @@ import {
   Query,
   UploadedFile,
   UseInterceptors,
+  BadRequestException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiOperation, ApiBody, ApiConsumes } from '@nestjs/swagger';
@@ -45,7 +46,9 @@ export class RubricsController {
   }
 
   @Post('import-pdf')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(
+    FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } }),
+  )
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Upload a PDF rubric and extract criteria' })
   @ApiBody({
@@ -57,6 +60,11 @@ export class RubricsController {
     },
   })
   importPdf(@UploadedFile() file: Express.Multer.File) {
+    if (!file) {
+      throw new BadRequestException(
+        'File is required. Upload a PDF using the "file" field.',
+      );
+    }
     return this.rubricsService.importPdf(file.buffer);
   }
 }

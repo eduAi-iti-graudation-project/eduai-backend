@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { LlmService } from '../common/llm/llm.service';
 import { ExtractedRubricSchema } from './dto';
+import pdfParse from 'pdf-parse';
 
 @Injectable()
 export class RubricsService {
@@ -54,12 +55,28 @@ export class RubricsService {
   }
 
   async importPdf(buffer: Buffer) {
-    const pdfParse = require('pdf-parse');
-    const pdfData = await pdfParse(buffer);
-    const rawText = pdfData.text;
+    console.log(`[importPdf] processing PDF buffer (${buffer.length} bytes)`);
 
-    const result = await this.llm.generateStructured({
-      systemPrompt: `You are a rubric extraction assistant. Extract grading criteria from the provided rubric document.
+    let rawText: string;
+    try {
+      const pdfData = await pdfParse(buffer);
+      rawText = pdfData.text;
+      console.log(`[importPdf] extracted ${rawText.length} chars from PDF`);
+    } catch (err) {
+      console.error('[importPdf] pdf-parse failed:', err);
+      throw new Error(
+        `Failed to parse PDF: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    if (!rawText || rawText.trim().length === 0) {
+      throw new Error('PDF contained no extractable text');
+    }
+
+    console.log('[importPdf] calling LlmService.generateStructured...');
+    try {
+      const result = await this.llm.generateStructured({
+        systemPrompt: `You are a rubric extraction assistant. Extract grading criteria from the provided rubric document.
 
 For each criterion, determine:
 - description: A clear description of what is being evaluated
@@ -72,10 +89,42 @@ Return valid JSON matching this schema:
   "title": "string (optional)",
   "criteria": [{ "description": "string", "maxPoints": "number (positive integer)" }]
 }`,
-      userPrompt: `Extract all grading criteria from this rubric text:\n\n${rawText}`,
-      schema: ExtractedRubricSchema,
-    });
+        userPrompt: `Extract all grading criteria from this rubric text:\n\n${rawText}`,
+        schema: ExtractedRubricSchema,
+      });
 
-    return result;
+      if (!result.criteria || result.criteria.length === 0) {
+        throw new Error(
+          'Could not extract any grading criteria from the uploaded PDF. ' +
+            'The file may not contain a rubric with clearly defined criteria. ' +
+            'Please ensure the PDF includes labeled criteria (e.g., "Thesis — 10 points") and try again.',
+        );
+      }
+
+      console.log(
+        '[importPdf] LLM returned',
+        JSON.stringify(result).length,
+        'chars',
+      );
+      return result;
+    } catch (err) {
+      console.error('[importPdf] LLM call failed:', err);
+
+      if (
+        err instanceof Error &&
+        (err.message.includes('validation') ||
+          err.message.includes('Validation') ||
+          err.message.includes('Empty LLM'))
+      ) {
+        throw new Error(
+          'Could not extract grading criteria from the uploaded PDF. ' +
+            'The file may not contain a rubric with clearly defined criteria, ' +
+            'or the text could not be properly parsed. ' +
+            'Please try a PDF that clearly lists criteria (e.g., "Thesis — 10 points", "Evidence — 15 points").',
+        );
+      }
+
+      throw err;
+    }
   }
 }

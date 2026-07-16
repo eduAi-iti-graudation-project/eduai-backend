@@ -36,8 +36,16 @@ describe('SubmissionsService', () => {
         content: 'Student submission text',
       };
 
-      const createdSubmission = { id: 'submission-id', assignmentId: dto.assignmentId, studentId: '' };
-      const createdChunk = { id: 'chunk-id', submissionId: 'submission-id', content: dto.content };
+      const createdSubmission = {
+        id: 'submission-id',
+        assignmentId: dto.assignmentId,
+        studentId: '',
+      };
+      const createdChunk = {
+        id: 'chunk-id',
+        submissionId: 'submission-id',
+        content: dto.content,
+      };
 
       mockPrisma.submission.create.mockResolvedValue(createdSubmission);
       mockPrisma.submissionChunk.create.mockResolvedValue(createdChunk);
@@ -104,7 +112,9 @@ describe('SubmissionsService', () => {
 
     it('should throw when submission not found', async () => {
       mockPrisma.submission.findUnique.mockResolvedValue(null);
-      await expect(service.findOne('bad-id')).rejects.toThrow(NotFoundException);
+      await expect(service.findOne('bad-id')).rejects.toThrow(
+        NotFoundException,
+      );
     });
   });
 });
