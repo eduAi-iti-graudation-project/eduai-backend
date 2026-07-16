@@ -8,8 +8,10 @@ interface RedactionResult {
 @Injectable()
 export class PiiService {
   private readonly namePattern = /\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b/g;
-  private readonly emailPattern = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
-  private readonly uuidPattern = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
+  private readonly emailPattern =
+    /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
+  private readonly uuidPattern =
+    /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
 
   redact(text: string): RedactionResult {
     const replacements = new Map<string, string>();
