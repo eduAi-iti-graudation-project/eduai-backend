@@ -85,7 +85,7 @@ model MaterialChunk {
   id         String                      @id @default(uuid()) @db.Uuid
   materialId String                      @db.Uuid
   content    String
-  embedding  Unsupported("vector(1536)")
+  embedding  Unsupported("vector(2048)")?
   createdAt  DateTime                    @default(now())
 
   // Relations
