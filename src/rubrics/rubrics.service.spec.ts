@@ -120,7 +120,9 @@ describe('RubricsService', () => {
 
     it('should throw when rubric not found', async () => {
       mockPrisma.rubric.findUnique.mockResolvedValue(null);
-      await expect(service.findOne('bad-id')).rejects.toThrow(NotFoundException);
+      await expect(service.findOne('bad-id')).rejects.toThrow(
+        NotFoundException,
+      );
     });
   });
 });
