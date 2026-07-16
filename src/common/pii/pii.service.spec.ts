@@ -23,7 +23,9 @@ describe('PiiService', () => {
     it('should redact UUIDs', () => {
       const text = 'User 550e8400-e29b-41d4-a716-446655440000 submitted';
       const result = service.redact(text);
-      expect(result.redacted).not.toContain('550e8400-e29b-41d4-a716-446655440000');
+      expect(result.redacted).not.toContain(
+        '550e8400-e29b-41d4-a716-446655440000',
+      );
     });
 
     it('should redact full names', () => {
