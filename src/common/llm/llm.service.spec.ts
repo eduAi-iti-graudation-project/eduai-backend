@@ -1,27 +1,13 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { LlmService } from './llm.service';
 import { PiiService } from '../pii/pii.service';
+import { ProviderService } from '../ai/provider.service';
 import { z } from 'zod';
 
-const mockEmbeddingsCreate = jest.fn().mockResolvedValue({
-  data: [{ embedding: new Array(1536).fill(0.1) }],
-});
-const mockChatCreate = jest.fn().mockResolvedValue({
-  choices: [
-    {
-      message: {
-        content: JSON.stringify({ name: 'test', score: 85 }),
-      },
-    },
-  ],
-});
-
-jest.mock('openai', () => {
-  return jest.fn().mockImplementation(() => ({
-    embeddings: { create: mockEmbeddingsCreate },
-    chat: { completions: { create: mockChatCreate } },
-  }));
-});
+const mockHfEmbed = jest.fn().mockResolvedValue(new Array(1024).fill(0.1));
+const mockChat = jest
+  .fn()
+  .mockResolvedValue(JSON.stringify({ name: 'test', score: 85 }));
 
 const mockRedact = jest.fn().mockImplementation((text: string) => ({
   redacted: text,
@@ -33,20 +19,10 @@ describe('LlmService', () => {
   let service: LlmService;
 
   beforeEach(async () => {
-    process.env.OLLAMA_EMBED_DIM = '1536';
-    mockChatCreate.mockClear();
-    mockEmbeddingsCreate.mockClear();
+    mockChat.mockClear();
+    mockHfEmbed.mockClear();
     mockRedact.mockClear();
     mockRestore.mockClear();
-    mockChatCreate.mockResolvedValue({
-      choices: [
-        {
-          message: {
-            content: JSON.stringify({ name: 'test', score: 85 }),
-          },
-        },
-      ],
-    });
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -58,6 +34,13 @@ describe('LlmService', () => {
             restore: mockRestore,
           },
         },
+        {
+          provide: ProviderService,
+          useValue: {
+            chat: mockChat,
+            hfEmbed: mockHfEmbed,
+          },
+        },
       ],
     }).compile();
 
@@ -65,16 +48,13 @@ describe('LlmService', () => {
   });
 
   describe('embed', () => {
-    it('should return embedding vector', async () => {
+    it('should call hfEmbed and return vector', async () => {
       const result = await service.embed('test text');
+
+      expect(mockHfEmbed).toHaveBeenCalledWith('test text');
       expect(Array.isArray(result)).toBe(true);
-      expect(result).toHaveLength(1536);
+      expect(result).toHaveLength(1024);
       expect(result[0]).toBe(0.1);
-      expect(mockEmbeddingsCreate).toHaveBeenCalledWith({
-        model: 'text-embedding-3-small',
-        input: 'test text',
-        dimensions: 1536,
-      });
     });
   });
 
@@ -84,7 +64,7 @@ describe('LlmService', () => {
       score: z.number(),
     });
 
-    it('should call PiiService.redact before LLM call', async () => {
+    it('should call PiiService.redact before provider call', async () => {
       const result = await service.generateStructured({
         systemPrompt: 'You are a grader',
         userPrompt: 'Grade this submission',
@@ -92,6 +72,7 @@ describe('LlmService', () => {
       });
 
       expect(mockRedact).toHaveBeenCalled();
+      expect(mockChat).toHaveBeenCalled();
       expect(result).toEqual({ name: 'test', score: 85 });
     });
 
