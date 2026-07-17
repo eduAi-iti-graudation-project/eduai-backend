@@ -56,3 +56,29 @@ Output valid JSON matching the schema.`,
       schema: GradingOutputSchema,
     });
   }
+
+  private async upsertGradingScores(
+    submissionId: string,
+    scores: GradingOutput['scores'],
+  ) {
+    for (const score of scores) {
+      await this.prisma.gradingScore.upsert({
+        where: {
+          submissionId_criteriaId: {
+            submissionId,
+            criteriaId: score.criterionId,
+          },
+        },
+        create: {
+          submissionId,
+          criteriaId: score.criterionId,
+          pointsAwarded: score.pointsAwarded,
+          aiFeedback: score.feedback,
+        },
+        update: {
+          pointsAwarded: score.pointsAwarded,
+          aiFeedback: score.feedback,
+        },
+      });
+    }
+  }
