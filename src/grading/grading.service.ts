@@ -123,3 +123,4 @@ Output valid JSON matching the schema.`,
       });
     }
   }
+}
