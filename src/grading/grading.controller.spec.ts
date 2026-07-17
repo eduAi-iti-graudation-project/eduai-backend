@@ -13,9 +13,7 @@ describe('GradingController', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [GradingController],
-      providers: [
-        { provide: GradingService, useValue: mockGradingService },
-      ],
+      providers: [{ provide: GradingService, useValue: mockGradingService }],
     }).compile();
 
     controller = module.get<GradingController>(GradingController);

@@ -93,7 +93,7 @@ you MUST output:
 - feedback: specific explanation of why points were awarded or deducted
 
 Output valid JSON matching the schema.`,
-      userPrompt: `Rubric criteria:\n${JSON.stringify(criteria.map(c => ({ id: c.id, description: c.description, maxPoints: c.maxPoints })))}\n\nStudent submission chunk:\n${chunkContent}`,
+      userPrompt: `Rubric criteria:\n${JSON.stringify(criteria.map((c) => ({ id: c.id, description: c.description, maxPoints: c.maxPoints })))}\n\nStudent submission chunk:\n${chunkContent}`,
       schema: GradingOutputSchema,
     });
   }

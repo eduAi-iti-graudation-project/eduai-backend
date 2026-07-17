@@ -6,7 +6,11 @@ describe('GradingOutputSchema', () => {
 
   const validOutput = {
     scores: [
-      { criterionId: uuid1, pointsAwarded: 8, feedback: 'Good thesis statement' },
+      {
+        criterionId: uuid1,
+        pointsAwarded: 8,
+        feedback: 'Good thesis statement',
+      },
       { criterionId: uuid2, pointsAwarded: 12, feedback: 'Strong evidence' },
     ],
     overallFeedback: 'Well done overall',
@@ -18,7 +22,10 @@ describe('GradingOutputSchema', () => {
   });
 
   it('rejects empty scores array', () => {
-    const result = GradingOutputSchema.safeParse({ ...validOutput, scores: [] });
+    const result = GradingOutputSchema.safeParse({
+      ...validOutput,
+      scores: [],
+    });
     expect(result.success).toBe(false);
   });
 

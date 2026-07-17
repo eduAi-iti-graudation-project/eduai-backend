@@ -1,10 +1,4 @@
-import {
-  Controller,
-  Post,
-  Patch,
-  Param,
-  Body,
-} from '@nestjs/common';
+import { Controller, Post, Patch, Param, Body } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBody } from '@nestjs/swagger';
 import { GradingService } from './grading.service';
 import { ConfirmGradeDto } from './dto';
