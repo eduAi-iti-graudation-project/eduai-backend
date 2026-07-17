@@ -10,6 +10,7 @@ describe('RubricsService', () => {
   const mockPrisma = {
     rubric: {
       findUnique: jest.fn(),
+      findFirst: jest.fn(),
       update: jest.fn(),
       create: jest.fn(),
       findMany: jest.fn(),
@@ -197,6 +198,34 @@ describe('RubricsService', () => {
       await expect(service.findOne('bad-id')).rejects.toThrow(
         NotFoundException,
       );
+    });
+  });
+
+  describe('findConfirmedRubric', () => {
+    it('should return confirmed rubric with criteria', async () => {
+      const rubric = {
+        id: 'rubric-id',
+        title: 'Test',
+        isConfirmed: true,
+        criteria: [{ id: 'c1', description: 'Criterion 1', maxPoints: 10 }],
+      };
+      mockPrisma.rubric.findFirst.mockResolvedValue(rubric);
+
+      const result = await service.findConfirmedRubric('assignment-id');
+
+      expect(mockPrisma.rubric.findFirst).toHaveBeenCalledWith({
+        where: { assignmentId: 'assignment-id', isConfirmed: true },
+        include: { criteria: true },
+      });
+      expect(result).toEqual(rubric);
+    });
+
+    it('should throw when no confirmed rubric exists', async () => {
+      mockPrisma.rubric.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.findConfirmedRubric('assignment-id'),
+      ).rejects.toThrow(NotFoundException);
     });
   });
 });
