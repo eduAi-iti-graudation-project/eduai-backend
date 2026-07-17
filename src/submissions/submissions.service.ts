@@ -1,6 +1,11 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { chunkText } from './chunker';
+import pdfParse from 'pdf-parse';
 
 @Injectable()
 export class SubmissionsService {
@@ -23,6 +28,24 @@ export class SubmissionsService {
       where: { id: submission.id },
       include: { chunks: true, scores: true },
     });
+  }
+
+  async createFromPdf(buffer: Buffer, assignmentId: string) {
+    let rawText: string;
+    try {
+      const pdfData = await pdfParse(buffer);
+      rawText = pdfData.text;
+    } catch (err) {
+      throw new BadRequestException(
+        `Failed to parse PDF: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    if (!rawText || rawText.trim().length === 0) {
+      throw new BadRequestException('PDF contained no extractable text');
+    }
+
+    return this.create({ assignmentId, content: rawText });
   }
 
   findAll(status?: string, assignmentId?: string) {

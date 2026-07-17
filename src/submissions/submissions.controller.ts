@@ -1,10 +1,22 @@
-import { Controller, Get, Post, Param, Body, Query } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Param,
+  Body,
+  Query,
+  UploadedFile,
+  UseInterceptors,
+  BadRequestException,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApiTags,
   ApiOperation,
   ApiOkResponse,
   ApiBody,
   ApiQuery,
+  ApiConsumes,
 } from '@nestjs/swagger';
 import { SubmissionsService } from './submissions.service';
 import { CreateSubmissionDto, SubmissionDto } from './dto';
@@ -20,6 +32,37 @@ export class SubmissionsController {
   @ApiOkResponse({ type: SubmissionDto })
   create(@Body() dto: CreateSubmissionDto) {
     return this.submissionsService.create(dto);
+  }
+
+  @Post('import-pdf')
+  @UseInterceptors(
+    FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } }),
+  )
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: 'Upload a submission as PDF' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', format: 'binary' },
+        assignmentId: { type: 'string', format: 'uuid' },
+      },
+      required: ['file', 'assignmentId'],
+    },
+  })
+  importPdf(
+    @UploadedFile() file: Express.Multer.File,
+    @Body('assignmentId') assignmentId: string,
+  ) {
+    if (!file) {
+      throw new BadRequestException(
+        'File is required. Upload a PDF using the "file" field.',
+      );
+    }
+    if (!assignmentId) {
+      throw new BadRequestException('assignmentId is required');
+    }
+    return this.submissionsService.createFromPdf(file.buffer, assignmentId);
   }
 
   @Get()
