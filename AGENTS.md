@@ -48,7 +48,7 @@ We're building the end-to-end grading flow. The pipeline order:
 | #75 | Prompt Factory LLM call | ⬜ Not started |
 | #77 | Rubric confirm step | ⬜ Not started |
 | #79 | Embed criteria on confirm | ⬜ Not started |
-| #80 | HNSW index migration | ⬜ Not started |
+| #80 | HNSW index migration | ✅ Done |
 | #81–83 | PII redaction | ⬜ Not started |
 | #85 | Similarity-search retrieval for criteria | ⬜ Not started |
 | #86 | Grading Agent prompt + output schema | ⬜ Not started |

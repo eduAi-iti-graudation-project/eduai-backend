@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { chunkText } from './chunker';
 
 @Injectable()
 export class SubmissionsService {
@@ -9,9 +10,15 @@ export class SubmissionsService {
     const submission = await this.prisma.submission.create({
       data: { assignmentId: dto.assignmentId, studentId: '' },
     });
-    await this.prisma.submissionChunk.create({
-      data: { submissionId: submission.id, content: dto.content },
-    });
+    const chunks = chunkText(dto.content);
+    if (chunks.length > 0) {
+      await this.prisma.submissionChunk.createMany({
+        data: chunks.map((content) => ({
+          submissionId: submission.id,
+          content,
+        })),
+      });
+    }
     return this.prisma.submission.findUnique({
       where: { id: submission.id },
       include: { chunks: true, scores: true },

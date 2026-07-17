@@ -86,7 +86,7 @@ model MaterialChunk {
   id         String                      @id @default(uuid()) @db.Uuid
   materialId String                      @db.Uuid
   content    String
-  embedding  Unsupported("vector(1536)")?
+  embedding  Unsupported("vector(1024)")?
   createdAt  DateTime                    @default(now())
 
   // Relations
@@ -117,6 +117,7 @@ model Rubric {
   id           String           @id @default(uuid()) @db.Uuid
   title        String
   assignmentId String           @db.Uuid
+  isConfirmed  Boolean          @default(false)
   createdAt    DateTime         @default(now())
 
   // Relations
@@ -127,11 +128,12 @@ model Rubric {
 }
 
 model RubricCriteria {
-  id            String          @id @default(uuid()) @db.Uuid
-  rubricId      String          @db.Uuid
+  id            String                      @id @default(uuid()) @db.Uuid
+  rubricId      String                      @db.Uuid
   description   String
   maxPoints     Int
-  createdAt     DateTime        @default(now())
+  embedding     Unsupported("vector(1024)")?
+  createdAt     DateTime                    @default(now())
 
   // Relations
   rubric        Rubric          @relation(fields: [rubricId], references: [id], onDelete: Cascade)
@@ -163,7 +165,7 @@ model SubmissionChunk {
   id           String                      @id @default(uuid()) @db.Uuid
   submissionId String                      @db.Uuid
   content      String
-  embedding    Unsupported("vector(1536)")?
+  embedding    Unsupported("vector(1024)")?
   createdAt    DateTime                    @default(now())
 
   // Relations
@@ -179,6 +181,7 @@ model GradingScore {
   pointsAwarded Int
   aiFeedback   String?
   teacherNotes String?
+  isConfirmed  Boolean        @default(false)
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
 
