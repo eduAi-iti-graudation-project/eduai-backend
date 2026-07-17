@@ -12,6 +12,47 @@ export class GradingService {
     private readonly rubrics: RubricsService,
   ) {}
 
+  async gradeSubmission(submissionId: string) {
+    const submission = await this.prisma.submission.findUnique({
+      where: { id: submissionId },
+      include: { chunks: true, assignment: true },
+    });
+    if (!submission) throw new NotFoundException('Submission not found');
+
+    const rubric = await this.rubrics.findConfirmedRubric(
+      submission.assignmentId,
+    );
+
+    for (const chunk of submission.chunks) {
+      try {
+        await this.embedAndStoreChunk(chunk.id, chunk.content);
+      } catch (err) {
+        console.error(
+          `[GradingService] Failed to embed chunk ${chunk.id}:`,
+          err,
+        );
+      }
+
+      try {
+        const result = await this.callGradingLlm(
+          chunk.content,
+          rubric.criteria,
+        );
+        await this.upsertGradingScores(submission.id, result.scores);
+      } catch (err) {
+        console.error(
+          `[GradingService] Failed to grade chunk ${chunk.id}:`,
+          err,
+        );
+      }
+    }
+
+    return this.prisma.submission.findUnique({
+      where: { id: submissionId },
+      include: { chunks: true, scores: { include: { criteria: true } } },
+    });
+  }
+
   async confirm(
     id: string,
     dto: { pointsAwarded: number; teacherNotes?: string },
