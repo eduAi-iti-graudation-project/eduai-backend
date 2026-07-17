@@ -44,6 +44,18 @@ export class RubricsService {
     return rubric;
   }
 
+  async findConfirmedRubric(assignmentId: string) {
+    const rubric = await this.prisma.rubric.findFirst({
+      where: { assignmentId, isConfirmed: true },
+      include: { criteria: true },
+    });
+    if (!rubric)
+      throw new NotFoundException(
+        'No confirmed rubric found for this assignment',
+      );
+    return rubric;
+  }
+
   async confirm(id: string) {
     const rubric = await this.prisma.rubric.findUnique({
       where: { id },
