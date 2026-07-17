@@ -5,5 +5,6 @@ import { RubricsController } from './rubrics.controller';
 @Module({
   providers: [RubricsService],
   controllers: [RubricsController],
+  exports: [RubricsService],
 })
 export class RubricsModule {}
