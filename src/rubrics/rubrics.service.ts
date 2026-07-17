@@ -45,13 +45,36 @@ export class RubricsService {
   }
 
   async confirm(id: string) {
-    const rubric = await this.prisma.rubric.findUnique({ where: { id } });
+    const rubric = await this.prisma.rubric.findUnique({
+      where: { id },
+      include: { criteria: true },
+    });
     if (!rubric) throw new NotFoundException('Rubric not found');
-    return this.prisma.rubric.update({
+
+    const updated = await this.prisma.rubric.update({
       where: { id },
       data: { isConfirmed: true },
       include: { criteria: true },
     });
+
+    for (const criterion of updated.criteria) {
+      try {
+        const embedding = await this.llm.embed(criterion.description);
+        const vectorStr = `[${embedding.join(',')}]`;
+        await this.prisma.$executeRawUnsafe(
+          `UPDATE rubric_criteria SET embedding = $1::vector WHERE id = $2`,
+          vectorStr,
+          criterion.id,
+        );
+      } catch (err) {
+        console.error(
+          `[RubricsService] Failed to embed criterion ${criterion.id}:`,
+          err,
+        );
+      }
+    }
+
+    return updated;
   }
 
   async importPdf(buffer: Buffer) {

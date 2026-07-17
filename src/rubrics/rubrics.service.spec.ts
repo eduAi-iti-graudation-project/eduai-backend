@@ -14,6 +14,7 @@ describe('RubricsService', () => {
       create: jest.fn(),
       findMany: jest.fn(),
     },
+    $executeRawUnsafe: jest.fn(),
   };
 
   const mockLlm = {
@@ -35,28 +36,101 @@ describe('RubricsService', () => {
   });
 
   describe('confirm', () => {
-    it('should set isConfirmed to true', async () => {
-      const rubricId = 'test-rubric-id';
-      const expectedRubric = {
+    const fakeEmbedding = Array.from({ length: 1024 }, () => Math.random());
+
+    beforeEach(() => {
+      mockLlm.embed.mockResolvedValue(fakeEmbedding);
+    });
+
+    it('should confirm a rubric with no criteria (no embed calls)', async () => {
+      const rubricId = 'empty-id';
+      const rubric = {
         id: rubricId,
-        title: 'Test Rubric',
+        title: 'Empty Rubric',
         isConfirmed: true,
         criteria: [],
       };
-
-      mockPrisma.rubric.findUnique.mockResolvedValue(expectedRubric);
-      mockPrisma.rubric.update.mockResolvedValue(expectedRubric);
+      mockPrisma.rubric.findUnique.mockResolvedValue(rubric);
+      mockPrisma.rubric.update.mockResolvedValue(rubric);
 
       const result = await service.confirm(rubricId);
 
-      expect(mockPrisma.rubric.findUnique).toHaveBeenCalledWith({
-        where: { id: rubricId },
-      });
       expect(mockPrisma.rubric.update).toHaveBeenCalledWith({
         where: { id: rubricId },
         data: { isConfirmed: true },
         include: { criteria: true },
       });
+      expect(mockLlm.embed).not.toHaveBeenCalled();
+      expect(mockPrisma.$executeRawUnsafe).not.toHaveBeenCalled();
+      expect(result.isConfirmed).toBe(true);
+    });
+
+    it('should embed each criterion and store via raw SQL', async () => {
+      const rubricId = 'embed-id';
+      const criteria = [
+        { id: 'c1', description: 'Thesis clarity', maxPoints: 10 },
+        { id: 'c2', description: 'Evidence quality', maxPoints: 15 },
+      ];
+      const rubric = {
+        id: rubricId,
+        title: 'Essay',
+        isConfirmed: true,
+        criteria,
+      };
+      mockPrisma.rubric.findUnique.mockResolvedValue(rubric);
+      mockPrisma.rubric.update.mockResolvedValue(rubric);
+
+      await service.confirm(rubricId);
+
+      expect(mockLlm.embed).toHaveBeenCalledTimes(2);
+      expect(mockLlm.embed).toHaveBeenCalledWith('Thesis clarity');
+      expect(mockLlm.embed).toHaveBeenCalledWith('Evidence quality');
+
+      expect(mockPrisma.$executeRawUnsafe).toHaveBeenCalledTimes(2);
+      expect(mockPrisma.$executeRawUnsafe).toHaveBeenNthCalledWith(
+        1,
+        expect.stringContaining(
+          'UPDATE rubric_criteria SET embedding = $1::vector WHERE id = $2',
+        ),
+        expect.stringMatching(/^\[[\d.,\s-]+\]$/),
+        'c1',
+      );
+      expect(mockPrisma.$executeRawUnsafe).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining(
+          'UPDATE rubric_criteria SET embedding = $1::vector WHERE id = $2',
+        ),
+        expect.stringMatching(/^\[[\d.,\s-]+\]$/),
+        'c2',
+      );
+    });
+
+    it('should still confirm when one embed fails', async () => {
+      const rubricId = 'partial-fail';
+      const criteria = [
+        { id: 'c1', description: 'Thesis', maxPoints: 10 },
+        { id: 'c2', description: 'Evidence', maxPoints: 15 },
+      ];
+      const rubric = {
+        id: rubricId,
+        title: 'Essay',
+        isConfirmed: true,
+        criteria,
+      };
+      mockPrisma.rubric.findUnique.mockResolvedValue(rubric);
+      mockPrisma.rubric.update.mockResolvedValue(rubric);
+      mockLlm.embed
+        .mockResolvedValueOnce(fakeEmbedding)
+        .mockRejectedValueOnce(new Error('API error'));
+
+      const result = await service.confirm(rubricId);
+
+      expect(mockPrisma.$executeRawUnsafe).toHaveBeenCalledTimes(1);
+      expect(mockPrisma.$executeRawUnsafe).toHaveBeenCalledWith(
+        expect.stringContaining('UPDATE rubric_criteria'),
+        expect.any(String),
+        'c1',
+      );
       expect(result.isConfirmed).toBe(true);
     });
 
