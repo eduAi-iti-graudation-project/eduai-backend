@@ -174,7 +174,7 @@ describe('GradingService', () => {
       expect(mockLlm.embed).toHaveBeenCalledWith(chunk.content);
       expect(mockLlm.generateStructured).toHaveBeenCalledWith(
         expect.objectContaining({
-          schema: expect.any(Object),
+          schema: expect.any(Object) as object,
         }),
       );
       expect(mockPrisma.gradingScore.upsert).toHaveBeenCalledTimes(2);
@@ -186,8 +186,8 @@ describe('GradingService', () => {
               criteriaId: 'c1',
             },
           },
-          create: expect.objectContaining({ pointsAwarded: 8 }),
-          update: expect.objectContaining({ pointsAwarded: 8 }),
+          create: expect.objectContaining({ pointsAwarded: 8 }) as object,
+          update: expect.objectContaining({ pointsAwarded: 8 }) as object,
         }),
       );
       expect(result).toEqual(expectedChunkWithScores);
@@ -196,9 +196,9 @@ describe('GradingService', () => {
     it('should throw NotFoundException for missing submission', async () => {
       mockPrisma.submission.findUnique.mockResolvedValue(null);
 
-      await expect(
-        service.gradeSubmission('bad-id'),
-      ).rejects.toThrow(NotFoundException);
+      await expect(service.gradeSubmission('bad-id')).rejects.toThrow(
+        NotFoundException,
+      );
     });
 
     it('should still grade remaining chunks when one chunk LLM call fails', async () => {
