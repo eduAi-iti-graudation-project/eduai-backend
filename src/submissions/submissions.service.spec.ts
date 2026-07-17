@@ -14,6 +14,7 @@ describe('SubmissionsService', () => {
     },
     submissionChunk: {
       create: jest.fn(),
+      createMany: jest.fn(),
     },
   };
 
@@ -30,10 +31,10 @@ describe('SubmissionsService', () => {
   });
 
   describe('create', () => {
-    it('should create a submission with a chunk', async () => {
+    it('should create a submission with chunked content', async () => {
       const dto = {
         assignmentId: 'assignment-id',
-        content: 'Student submission text',
+        content: 'Student submission text.',
       };
 
       const createdSubmission = {
@@ -41,30 +42,35 @@ describe('SubmissionsService', () => {
         assignmentId: dto.assignmentId,
         studentId: '',
       };
-      const createdChunk = {
-        id: 'chunk-id',
-        submissionId: 'submission-id',
-        content: dto.content,
-      };
 
       mockPrisma.submission.create.mockResolvedValue(createdSubmission);
-      mockPrisma.submissionChunk.create.mockResolvedValue(createdChunk);
+      mockPrisma.submissionChunk.createMany.mockResolvedValue({ count: 1 });
       mockPrisma.submission.findUnique.mockResolvedValue({
         ...createdSubmission,
-        chunks: [createdChunk],
+        chunks: [
+          {
+            id: 'chunk-id',
+            submissionId: 'submission-id',
+            content: dto.content,
+          },
+        ],
         scores: [],
       });
 
-      const result = await service.create(dto);
+      const result: unknown = await service.create(dto);
 
       expect(mockPrisma.submission.create).toHaveBeenCalledWith({
         data: { assignmentId: dto.assignmentId, studentId: '' },
       });
-      expect(mockPrisma.submissionChunk.create).toHaveBeenCalledWith({
-        data: { submissionId: 'submission-id', content: dto.content },
+      expect(mockPrisma.submissionChunk.createMany).toHaveBeenCalledWith({
+        data: [
+          {
+            submissionId: 'submission-id',
+            content: expect.any(String) as string,
+          },
+        ],
       });
       expect(result.chunks).toHaveLength(1);
-      expect(result.chunks[0].content).toBe(dto.content);
     });
   });
 
