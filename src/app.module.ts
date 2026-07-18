@@ -9,7 +9,9 @@ import { RubricsModule } from './rubrics/rubrics.module';
 import { SubmissionsModule } from './submissions/submissions.module';
 import { GradingModule } from './grading/grading.module';
 import { AlertsModule } from './alerts/alerts.module';
+import { AnalysisModule } from './analysis/analysis.module';
 import { AssistantModule } from './assistant/assistant.module';
+import { MaterialsModule } from './materials/materials.module';
 import { StudentsModule } from './students/students.module';
 import { LlmModule } from './common/llm/llm.module';
 import { PiiModule } from './common/pii/pii.module';
@@ -25,7 +27,9 @@ import { ValidationModule } from './common/validation/validation.module';
     SubmissionsModule,
     GradingModule,
     AlertsModule,
+    AnalysisModule,
     AssistantModule,
+    MaterialsModule,
     StudentsModule,
     LlmModule,
     PiiModule,
