@@ -6,7 +6,9 @@ const GradeSchema = z.object({
   submissionId: z.string().uuid(),
   criteriaId: z.string().uuid(),
   pointsAwarded: z.number(),
+  aiFeedback: z.string().nullable(),
   teacherNotes: z.string().nullable(),
+  isConfirmed: z.boolean(),
   createdAt: z.string(),
 });
 
