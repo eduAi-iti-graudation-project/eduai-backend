@@ -13,7 +13,7 @@ export class SubmissionsService {
 
   async create(dto: { assignmentId: string; content: string }) {
     const submission = await this.prisma.submission.create({
-      data: { assignmentId: dto.assignmentId, studentId: '' },
+      data: { assignmentId: dto.assignmentId, studentId: '00000000-0000-0000-0000-000000000000' },
     });
     const chunks = chunkText(dto.content);
     if (chunks.length > 0) {
