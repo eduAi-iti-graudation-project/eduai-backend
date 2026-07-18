@@ -86,13 +86,19 @@ export class GradingService {
     return this.llm.generateStructured({
       systemPrompt: `You are a grading assistant evaluating student work against a rubric.
 Grade each criterion independently. Assign a score based solely on the
-provided rubric criteria — do not invent new criteria. For each criterion
-you MUST output:
-- criterionId: the ID from the rubric criteria list
-- pointsAwarded: integer between 0 and maxPoints
-- feedback: specific explanation of why points were awarded or deducted
+provided rubric criteria — do not invent new criteria. Output valid JSON
+matching this exact schema:
 
-Output valid JSON matching the schema.`,
+{
+  "scores": [
+    {
+      "criterionId": "uuid-from-the-rubric-criteria-list",
+      "pointsAwarded": 0,
+      "feedback": "explanation of why points were awarded or deducted"
+    }
+  ],
+  "overallFeedback": "optional summary comment"
+}`,
       userPrompt: `Rubric criteria:\n${JSON.stringify(criteria.map((c) => ({ id: c.id, description: c.description, maxPoints: c.maxPoints })))}\n\nStudent submission chunk:\n${chunkContent}`,
       schema: GradingOutputSchema,
     });
