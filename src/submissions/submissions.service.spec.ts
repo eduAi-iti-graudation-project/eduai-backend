@@ -68,7 +68,7 @@ describe('SubmissionsService', () => {
       const result: unknown = await service.create(dto);
 
       expect(mockPrisma.submission.create).toHaveBeenCalledWith({
-        data: { assignmentId: dto.assignmentId, studentId: '' },
+        data: { assignmentId: dto.assignmentId, studentId: '00000000-0000-0000-0000-000000000000' },
       });
       expect(mockPrisma.submissionChunk.createMany).toHaveBeenCalledWith({
         data: [
