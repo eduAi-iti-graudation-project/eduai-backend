@@ -13,6 +13,7 @@ import { SubmissionsModule } from './submissions/submissions.module';
 import { GradingModule } from './grading/grading.module';
 import { AlertsModule } from './alerts/alerts.module';
 import { AnalysisModule } from './analysis/analysis.module';
+import { AttendanceModule } from './attendance/attendance.module';
 import { AssistantModule } from './assistant/assistant.module';
 import { MaterialsModule } from './materials/materials.module';
 import { StudentsModule } from './students/students.module';
@@ -31,6 +32,7 @@ import { ValidationModule } from './common/validation/validation.module';
     GradingModule,
     AlertsModule,
     AnalysisModule,
+    AttendanceModule,
     AssistantModule,
     MaterialsModule,
     StudentsModule,
