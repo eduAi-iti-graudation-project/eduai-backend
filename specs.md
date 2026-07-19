@@ -87,9 +87,20 @@ teacher / management) delivered automatically via email.
       — what worked and what didn't — based on the teacher's assignments,
       rubrics, and student outcomes across their classes
 11. **Notification Delivery** — reports are auto-sent via email (SMTP /
-    nodemailer) to the student's guardians, the teacher, and the school
-    admin. Push notification infrastructure (FCM token storage) is built
-    into the `NotificationService` but only email is wired in MVP.
+     nodemailer) to the student's guardians, the teacher, and the school
+     admin. Push notification infrastructure (FCM token storage) is built
+     into the `NotificationService` but only email is wired in MVP.
+12. **Unified Dashboard** — a single `GET /dashboard/overview` endpoint
+     returns a role-specific dashboard payload. The authenticated user's
+     role (TEACHER / STUDENT / GUARDIAN / ADMIN) determines the shape:
+     - **Teacher**: class summaries, pending confirmations, recent alerts,
+       submissions needing review, pending reports
+     - **Student**: upcoming assignments, recent confirmed grades,
+       attendance rate, active alerts
+     - **Guardian**: each linked child's overall performance, attendance
+       rate, active reports and alerts
+     - **Admin**: teacher list with class averages, flagged student counts,
+       school-wide statistics, all management-tier reports
 
 ## 4. Non-negotiable rules (violating these is a bug, not a style choice)
 

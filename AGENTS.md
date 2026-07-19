@@ -35,6 +35,10 @@ complete in `dev`. We're now building three new features:
    management reports per flag in a single call.
 6. **Notification Service** — email delivery (nodemailer), push infra (FCM
    model + token storage, channel stored but not wired in MVP).
+7. **Unified Dashboard** — single `GET /dashboard/overview` endpoint that
+   auto-detects the user's role (via auth guard) and returns role-specific
+   data (teacher class summaries, student grades + attendance, guardian
+   children overview, admin school stats).
 
 ### Modules involved
 | Module | Role |
@@ -45,7 +49,7 @@ complete in `dev`. We're now building three new features:
 | `analysis/` | Existing overall-grade Analysis Agent + `criterion-detector.ts` + `report-generator.ts` |
 | `notifications/` | NotificationService (email + push), Notification model |
 | `materials/` | Supabase Storage integration for original file preservation |
-| `admin/` | Admin dashboard endpoints (teacher performance, reports view) |
+| `dashboard/` | Unified `GET /dashboard/overview` — role-aware aggregation |
 | `rubrics/` | CRUD, PDF import (Prompt Factory), confirm + embed criteria |
 | `common/llm/` | Single `LlmService` — all agents call through this (PII + Zod retry) |
 | `common/storage/` | Supabase Storage service (upload, get URL) |

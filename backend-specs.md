@@ -15,6 +15,7 @@ src/
   classes/         # Class, Enrollment
   rubrics/         # Rubric, RubricCriterion, Prompt Factory (PDF import)
   assignments/
+  dashboard/       # Unified GET /dashboard/overview — role-aware aggregation
   submissions/     # Submission, SubmissionChunk, status state machine
   grading/         # Grading Agent: retrieval + LLM call + citation
   analysis/        # Analysis Agent: threshold rule + explanation LLM call
@@ -22,7 +23,7 @@ src/
   assistant/       # Assistant Agent: tool-calling loop
   attendance/      # Mobile app batch import, view endpoints
   guardians/       # Guardian-student linking, parent dashboard data
-  admin/           # Admin dashboard endpoints (teacher performance, reports)
+  admin/           # Admin-specific endpoints (teacher performance, reports)
   notifications/   # NotificationService (email + push), Notification model
   materials/       # Material, MaterialChunk, curriculum chunking, file upload
   common/
