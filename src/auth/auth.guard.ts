@@ -4,9 +4,15 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import type { Request } from 'express';
+import type { User } from '@prisma/client';
 import { IS_PUBLIC_KEY } from './public.decorator';
 import { SupabaseService } from './supabase.service';
 import { PrismaService } from '../prisma/prisma.service';
+
+interface AuthenticatedRequest extends Request {
+  user: User;
+}
 
 @Injectable()
 export class AuthGuard {
@@ -24,7 +30,7 @@ export class AuthGuard {
 
     if (isPublic) return true;
 
-    const request = context.switchToHttp().getRequest();
+    const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
     const authHeader = request.headers.authorization;
 
     if (!authHeader) {

@@ -1,12 +1,15 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { createClient } from '@supabase/supabase-js';
+import type { SupabaseClient } from '@supabase/supabase-js';
+
+type Database = Record<string, never>;
 
 @Injectable()
 export class SupabaseService {
-  private client: SupabaseClient;
+  private client: SupabaseClient<Database>;
 
   constructor() {
-    this.client = createClient(
+    this.client = createClient<Database>(
       process.env.SUPABASE_URL!,
       process.env.SUPABASE_SERVICE_KEY!,
       {
@@ -15,7 +18,7 @@ export class SupabaseService {
     );
   }
 
-  getClient(): SupabaseClient {
+  getClient(): SupabaseClient<Database> {
     return this.client;
   }
 
