@@ -20,20 +20,24 @@ import {
 } from '@nestjs/swagger';
 import { SubmissionsService } from './submissions.service';
 import { CreateSubmissionDto, SubmissionDto } from './dto';
+import { Roles } from '../auth/roles.decorator';
+import { CurrentUser } from '../auth/current-user.decorator';
 
 @ApiTags('submissions')
 @Controller('submissions')
 export class SubmissionsController {
   constructor(private readonly submissionsService: SubmissionsService) {}
 
+  @Roles('STUDENT')
   @Post()
   @ApiOperation({ summary: 'Submit an assignment (student)' })
   @ApiBody({ type: CreateSubmissionDto })
   @ApiOkResponse({ type: SubmissionDto })
-  create(@Body() dto: CreateSubmissionDto) {
-    return this.submissionsService.create(dto);
+  create(@Body() dto: CreateSubmissionDto, @CurrentUser('id') studentId: string) {
+    return this.submissionsService.create(dto, studentId);
   }
 
+  @Roles('STUDENT')
   @Post('import-pdf')
   @UseInterceptors(
     FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } }),
@@ -53,6 +57,7 @@ export class SubmissionsController {
   importPdf(
     @UploadedFile() file: Express.Multer.File,
     @Body('assignmentId') assignmentId: string,
+    @CurrentUser('id') studentId: string,
   ) {
     if (!file) {
       throw new BadRequestException(
@@ -62,9 +67,10 @@ export class SubmissionsController {
     if (!assignmentId) {
       throw new BadRequestException('assignmentId is required');
     }
-    return this.submissionsService.createFromPdf(file.buffer, assignmentId);
+    return this.submissionsService.createFromPdf(file.buffer, assignmentId, studentId);
   }
 
+  @Roles('TEACHER')
   @Get()
   @ApiOperation({
     summary: 'List submissions, optionally filtered by status and assignment',
@@ -79,6 +85,7 @@ export class SubmissionsController {
     return this.submissionsService.findAll(status, assignmentId);
   }
 
+  @Roles('TEACHER', 'STUDENT')
   @Get(':id')
   @ApiOperation({ summary: 'Get submission with scores' })
   findOne(@Param('id') id: string) {

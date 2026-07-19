@@ -2,12 +2,14 @@ import { Controller, Post, Body } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiOkResponse } from '@nestjs/swagger';
 import { AssistantService } from './assistant.service';
 import { ChatDto, ChatResponseDto } from './dto';
+import { Roles } from '../auth/roles.decorator';
 
 @ApiTags('assistant')
 @Controller('assistant')
 export class AssistantController {
   constructor(private readonly assistantService: AssistantService) {}
 
+  @Roles('TEACHER')
   @Post('chat')
   @ApiOperation({ summary: 'Send a message to the AI assistant' })
   @ApiOkResponse({ type: ChatResponseDto })
