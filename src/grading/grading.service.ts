@@ -1,8 +1,11 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { SubmissionStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { LlmService } from '../common/llm/llm.service';
 import { RubricsService } from '../rubrics/rubrics.service';
+import { AnalysisService } from '../analysis/analysis.service';
 import { GradingOutput, GradingOutputSchema } from './dto';
+import { transitionStatus } from '../submissions/status-machine';
 
 @Injectable()
 export class GradingService {
@@ -10,6 +13,7 @@ export class GradingService {
     private readonly prisma: PrismaService,
     private readonly llm: LlmService,
     private readonly rubrics: RubricsService,
+    private readonly analysis: AnalysisService,
   ) {}
 
   async gradeSubmission(submissionId: string) {
@@ -19,13 +23,17 @@ export class GradingService {
     });
     if (!submission) throw new NotFoundException('Submission not found');
 
-    const rubric = await this.rubrics.findConfirmedRubric(
-      submission.assignmentId,
-    );
+    transitionStatus(submission.status, SubmissionStatus.GRADING_IN_PROGRESS);
+    await this.prisma.submission.update({
+      where: { id: submissionId },
+      data: { status: SubmissionStatus.GRADING_IN_PROGRESS },
+    });
 
     for (const chunk of submission.chunks) {
+      let embedding: number[] | undefined;
+
       try {
-        await this.embedAndStoreChunk(chunk.id, chunk.content);
+        embedding = await this.embedAndStoreChunk(chunk.id, chunk.content);
       } catch (err) {
         console.error(
           `[GradingService] Failed to embed chunk ${chunk.id}:`,
@@ -34,10 +42,15 @@ export class GradingService {
       }
 
       try {
-        const result = await this.callGradingLlm(
-          chunk.content,
-          rubric.criteria,
-        );
+        const criteria = embedding
+          ? await this.rubrics.findSimilarCriteria(
+              embedding,
+              submission.assignmentId,
+            )
+          : (await this.rubrics.findConfirmedRubric(submission.assignmentId))
+              .criteria;
+
+        const result = await this.callGradingLlm(chunk.content, criteria);
         await this.upsertGradingScores(submission.id, result.scores);
       } catch (err) {
         console.error(
@@ -46,6 +59,15 @@ export class GradingService {
         );
       }
     }
+
+    transitionStatus(
+      SubmissionStatus.GRADING_IN_PROGRESS,
+      SubmissionStatus.REVIEW_READY,
+    );
+    await this.prisma.submission.update({
+      where: { id: submissionId },
+      data: { status: SubmissionStatus.REVIEW_READY },
+    });
 
     return this.prisma.submission.findUnique({
       where: { id: submissionId },
@@ -57,9 +79,13 @@ export class GradingService {
     id: string,
     dto: { pointsAwarded: number; teacherNotes?: string },
   ) {
-    const score = await this.prisma.gradingScore.findUnique({ where: { id } });
+    const score = await this.prisma.gradingScore.findUnique({
+      where: { id },
+      include: { submission: true },
+    });
     if (!score) throw new NotFoundException('GradingScore not found');
-    return this.prisma.gradingScore.update({
+
+    const updated = await this.prisma.gradingScore.update({
       where: { id },
       data: {
         pointsAwarded: dto.pointsAwarded,
@@ -67,9 +93,36 @@ export class GradingService {
         isConfirmed: true,
       },
     });
+
+    const allScores = await this.prisma.gradingScore.findMany({
+      where: { submissionId: score.submissionId },
+    });
+    const allConfirmed = allScores.every((s) => s.isConfirmed);
+
+    if (allConfirmed) {
+      transitionStatus(score.submission.status, SubmissionStatus.CONFIRMED);
+      await this.prisma.submission.update({
+        where: { id: score.submissionId },
+        data: { status: SubmissionStatus.CONFIRMED },
+      });
+
+      await this.analysis
+        .evaluateStudent(score.submission.studentId)
+        .catch((err) =>
+          console.error(
+            `[GradingService] Analysis failed for student ${score.submission.studentId}:`,
+            err,
+          ),
+        );
+    }
+
+    return updated;
   }
 
-  private async embedAndStoreChunk(chunkId: string, content: string) {
+  private async embedAndStoreChunk(
+    chunkId: string,
+    content: string,
+  ): Promise<number[]> {
     const embedding = await this.llm.embed(content);
     const vectorStr = `[${embedding.join(',')}]`;
     await this.prisma.$executeRawUnsafe(
@@ -77,6 +130,7 @@ export class GradingService {
       vectorStr,
       chunkId,
     );
+    return embedding;
   }
 
   private async callGradingLlm(

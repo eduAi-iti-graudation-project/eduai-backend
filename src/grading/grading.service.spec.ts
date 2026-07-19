@@ -3,6 +3,7 @@ import { GradingService } from './grading.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { LlmService } from '../common/llm/llm.service';
 import { RubricsService } from '../rubrics/rubrics.service';
+import { AnalysisService } from '../analysis/analysis.service';
 import { NotFoundException } from '@nestjs/common';
 
 describe('GradingService', () => {
@@ -11,9 +12,11 @@ describe('GradingService', () => {
   const mockPrisma = {
     submission: {
       findUnique: jest.fn(),
+      update: jest.fn(),
     },
     gradingScore: {
       findUnique: jest.fn(),
+      findMany: jest.fn(),
       update: jest.fn(),
       upsert: jest.fn(),
     },
@@ -26,7 +29,12 @@ describe('GradingService', () => {
   };
 
   const mockRubrics = {
+    findSimilarCriteria: jest.fn(),
     findConfirmedRubric: jest.fn(),
+  };
+
+  const mockAnalysis = {
+    evaluateStudent: jest.fn().mockResolvedValue(undefined),
   };
 
   beforeEach(async () => {
@@ -36,6 +44,7 @@ describe('GradingService', () => {
         { provide: PrismaService, useValue: mockPrisma },
         { provide: LlmService, useValue: mockLlm },
         { provide: RubricsService, useValue: mockRubrics },
+        { provide: AnalysisService, useValue: mockAnalysis },
       ],
     }).compile();
 
@@ -44,55 +53,90 @@ describe('GradingService', () => {
   });
 
   describe('confirm', () => {
+    const scoreId = 'test-score-id';
+    const submissionId = 'sub-1';
+    const baseScore = {
+      id: scoreId,
+      submissionId,
+      pointsAwarded: 5,
+      teacherNotes: null,
+      submission: { id: submissionId, status: 'REVIEW_READY' },
+    };
+
     it('should set isConfirmed to true', async () => {
-      const scoreId = 'test-score-id';
       const dto = { pointsAwarded: 8 };
-      const existingScore = {
-        id: scoreId,
-        pointsAwarded: 5,
-        teacherNotes: null,
-      };
       const updatedScore = {
-        ...existingScore,
+        ...baseScore,
         pointsAwarded: 8,
-        teacherNotes: null,
         isConfirmed: true,
       };
 
-      mockPrisma.gradingScore.findUnique.mockResolvedValue(existingScore);
+      mockPrisma.gradingScore.findUnique.mockResolvedValue(baseScore);
+      mockPrisma.gradingScore.findMany.mockResolvedValue([updatedScore]);
       mockPrisma.gradingScore.update.mockResolvedValue(updatedScore);
 
       const result = await service.confirm(scoreId, dto);
 
       expect(mockPrisma.gradingScore.findUnique).toHaveBeenCalledWith({
         where: { id: scoreId },
+        include: { submission: true },
       });
       expect(mockPrisma.gradingScore.update).toHaveBeenCalledWith({
         where: { id: scoreId },
-        data: {
-          pointsAwarded: 8,
-          teacherNotes: undefined,
-          isConfirmed: true,
-        },
+        data: { pointsAwarded: 8, teacherNotes: undefined, isConfirmed: true },
       });
       expect(result.isConfirmed).toBe(true);
     });
 
-    it('should accept optional teacherNotes', async () => {
-      const scoreId = 'test-score-id';
-      const dto = { pointsAwarded: 10, teacherNotes: 'Good work' };
-      const existingScore = {
-        id: scoreId,
-        pointsAwarded: 7,
-        teacherNotes: null,
+    it('should transition submission to CONFIRMED when all scores confirmed', async () => {
+      const dto = { pointsAwarded: 8 };
+      const updatedScore = {
+        ...baseScore,
+        pointsAwarded: 8,
+        isConfirmed: true,
       };
 
-      mockPrisma.gradingScore.findUnique.mockResolvedValue(existingScore);
-      mockPrisma.gradingScore.update.mockResolvedValue({
-        ...existingScore,
-        ...dto,
-        isConfirmed: true,
+      mockPrisma.gradingScore.findUnique.mockResolvedValue(baseScore);
+      mockPrisma.gradingScore.findMany.mockResolvedValue([updatedScore]);
+      mockPrisma.gradingScore.update.mockResolvedValue(updatedScore);
+
+      await service.confirm(scoreId, dto);
+
+      expect(mockPrisma.submission.update).toHaveBeenCalledWith({
+        where: { id: submissionId },
+        data: { status: 'CONFIRMED' },
       });
+    });
+
+    it('should not transition submission when not all scores confirmed', async () => {
+      const dto = { pointsAwarded: 8 };
+      const updatedScore = {
+        ...baseScore,
+        pointsAwarded: 8,
+        isConfirmed: true,
+      };
+      const unconfirmedScore = { id: 'other-score', isConfirmed: false };
+
+      mockPrisma.gradingScore.findUnique.mockResolvedValue(baseScore);
+      mockPrisma.gradingScore.findMany.mockResolvedValue([
+        updatedScore,
+        unconfirmedScore,
+      ]);
+      mockPrisma.gradingScore.update.mockResolvedValue(updatedScore);
+
+      await service.confirm(scoreId, dto);
+
+      expect(mockPrisma.submission.update).not.toHaveBeenCalled();
+    });
+
+    it('should accept optional teacherNotes', async () => {
+      const dto = { pointsAwarded: 10, teacherNotes: 'Good work' };
+      const existingScore = { ...baseScore, pointsAwarded: 7 };
+      const updatedScore = { ...existingScore, ...dto, isConfirmed: true };
+
+      mockPrisma.gradingScore.findUnique.mockResolvedValue(existingScore);
+      mockPrisma.gradingScore.findMany.mockResolvedValue([updatedScore]);
+      mockPrisma.gradingScore.update.mockResolvedValue(updatedScore);
 
       const result = await service.confirm(scoreId, dto);
 
@@ -132,11 +176,10 @@ describe('GradingService', () => {
     const submission = {
       id: submissionId,
       assignmentId: 'assign-1',
+      status: 'SUBMITTED',
       chunks: [chunk],
       assignment: { id: 'assign-1' },
     };
-
-    const rubric = { id: 'rubric-1', criteria };
 
     const llmOutput = {
       scores: [
@@ -149,7 +192,8 @@ describe('GradingService', () => {
 
     beforeEach(() => {
       mockPrisma.submission.findUnique.mockResolvedValue(submission);
-      mockRubrics.findConfirmedRubric.mockResolvedValue(rubric);
+      mockPrisma.submission.update.mockResolvedValue(submission);
+      mockRubrics.findSimilarCriteria.mockResolvedValue(criteria);
       mockLlm.embed.mockResolvedValue(fakeEmbedding);
       mockLlm.generateStructured.mockResolvedValue(llmOutput);
       mockPrisma.gradingScore.upsert.mockResolvedValue({});
@@ -157,8 +201,9 @@ describe('GradingService', () => {
     });
 
     it('should embed chunk, call LLM, and upsert scores', async () => {
-      const expectedChunkWithScores = {
+      const gradedSubmission = {
         ...submission,
+        status: 'REVIEW_READY',
         chunks: [chunk],
         scores: [
           { criteria: { id: 'c1' }, pointsAwarded: 8 },
@@ -167,11 +212,15 @@ describe('GradingService', () => {
       };
       mockPrisma.submission.findUnique
         .mockResolvedValueOnce(submission)
-        .mockResolvedValueOnce(expectedChunkWithScores);
+        .mockResolvedValueOnce(gradedSubmission);
 
       const result = await service.gradeSubmission(submissionId);
 
       expect(mockLlm.embed).toHaveBeenCalledWith(chunk.content);
+      expect(mockRubrics.findSimilarCriteria).toHaveBeenCalledWith(
+        fakeEmbedding,
+        submission.assignmentId,
+      );
       expect(mockLlm.generateStructured).toHaveBeenCalledWith(
         expect.objectContaining({
           schema: expect.any(Object) as object,
@@ -190,7 +239,19 @@ describe('GradingService', () => {
           update: expect.objectContaining({ pointsAwarded: 8 }) as object,
         }),
       );
-      expect(result).toEqual(expectedChunkWithScores);
+      expect(result).toEqual(gradedSubmission);
+      expect(mockPrisma.submission.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: submissionId },
+          data: { status: 'GRADING_IN_PROGRESS' },
+        }),
+      );
+      expect(mockPrisma.submission.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: submissionId },
+          data: { status: 'REVIEW_READY' },
+        }),
+      );
     });
 
     it('should throw NotFoundException for missing submission', async () => {
@@ -221,6 +282,24 @@ describe('GradingService', () => {
       await service.gradeSubmission(submissionId);
 
       expect(mockPrisma.gradingScore.upsert).toHaveBeenCalledTimes(2);
+    });
+
+    it('should fall back to findConfirmedRubric when embedding fails', async () => {
+      mockLlm.embed.mockRejectedValue(new Error('Embedding API error'));
+      const rubric = { id: 'rubric-1', criteria };
+      mockRubrics.findConfirmedRubric.mockResolvedValue(rubric);
+      mockPrisma.submission.findUnique
+        .mockResolvedValueOnce(submission)
+        .mockResolvedValueOnce(submission);
+
+      const result = await service.gradeSubmission(submissionId);
+
+      expect(mockRubrics.findSimilarCriteria).not.toHaveBeenCalled();
+      expect(mockRubrics.findConfirmedRubric).toHaveBeenCalledWith(
+        submission.assignmentId,
+      );
+      expect(mockLlm.generateStructured).toHaveBeenCalled();
+      expect(result).toBeDefined();
     });
   });
 });

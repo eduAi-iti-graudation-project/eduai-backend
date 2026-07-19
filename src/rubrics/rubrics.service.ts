@@ -56,6 +56,30 @@ export class RubricsService {
     return rubric;
   }
 
+  async findSimilarCriteria(
+    embedding: number[],
+    assignmentId: string,
+    limit = 50,
+  ) {
+    const vectorStr = `[${embedding.join(',')}]`;
+    const criteria = await this.prisma.$queryRaw<
+      { id: string; description: string; maxPoints: number; distance: number }[]
+    >`
+      SELECT rc.id, rc.description, rc."maxPoints", rc.embedding <-> ${vectorStr}::vector AS distance
+      FROM rubric_criteria rc
+      JOIN rubrics r ON r.id = rc."rubricId"
+      WHERE r."assignmentId" = ${assignmentId}::uuid
+        AND r."isConfirmed" = true
+        AND rc.embedding IS NOT NULL
+      ORDER BY distance ASC
+      LIMIT ${limit}
+    `;
+    if (criteria.length === 0) {
+      return this.findConfirmedRubric(assignmentId).then((r) => r.criteria);
+    }
+    return criteria;
+  }
+
   async confirm(id: string) {
     const rubric = await this.prisma.rubric.findUnique({
       where: { id },

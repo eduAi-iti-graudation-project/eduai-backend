@@ -16,6 +16,7 @@ describe('RubricsService', () => {
       findMany: jest.fn(),
     },
     $executeRawUnsafe: jest.fn(),
+    $queryRaw: jest.fn(),
   };
 
   const mockLlm = {
@@ -226,6 +227,51 @@ describe('RubricsService', () => {
       await expect(
         service.findConfirmedRubric('assignment-id'),
       ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('findSimilarCriteria', () => {
+    const assignmentId = 'assign-1';
+    const fakeEmbedding = Array.from({ length: 1024 }, () => Math.random());
+    const criteriaRows = [
+      { id: 'c1', description: 'Thesis', maxPoints: 10, distance: 0.15 },
+      { id: 'c2', description: 'Evidence', maxPoints: 15, distance: 0.32 },
+    ];
+
+    it('should return criteria ordered by cosine distance', async () => {
+      mockPrisma.$queryRaw.mockResolvedValue(criteriaRows);
+
+      const result = await service.findSimilarCriteria(
+        fakeEmbedding,
+        assignmentId,
+      );
+
+      expect(mockPrisma.$queryRaw).toHaveBeenCalled();
+      expect(result).toHaveLength(2);
+      expect(result[0].id).toBe('c1');
+      expect(result[0].distance).toBeLessThan(result[1].distance);
+    });
+
+    it('should fall back to findConfirmedRubric when no embeddings exist', async () => {
+      mockPrisma.$queryRaw.mockResolvedValue([]);
+      const rubric = {
+        id: 'rubric-id',
+        title: 'Test',
+        isConfirmed: true,
+        criteria: [{ id: 'c1', description: 'Criterion 1', maxPoints: 10 }],
+      };
+      mockPrisma.rubric.findFirst.mockResolvedValue(rubric);
+
+      const result = await service.findSimilarCriteria(
+        fakeEmbedding,
+        assignmentId,
+      );
+
+      expect(mockPrisma.rubric.findFirst).toHaveBeenCalledWith({
+        where: { assignmentId, isConfirmed: true },
+        include: { criteria: true },
+      });
+      expect(result).toEqual(rubric.criteria);
     });
   });
 });

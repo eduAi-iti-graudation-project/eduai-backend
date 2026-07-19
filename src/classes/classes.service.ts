@@ -7,7 +7,11 @@ export class ClassesService {
 
   create(dto: { name: string; description?: string }) {
     return this.prisma.class.create({
-      data: { name: dto.name, description: dto.description, teacherId: '00000000-0000-0000-0000-000000000000' },
+      data: {
+        name: dto.name,
+        description: dto.description,
+        teacherId: '00000000-0000-0000-0000-000000000000',
+      },
     });
   }
 
