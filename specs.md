@@ -16,7 +16,13 @@ word. Once enough grades are confirmed for a student, a deterministic rule
 (not an AI judgment call) flags them as needing attention, and an AI call
 writes a plain-language explanation of why.
 
-Two roles: **Teacher**, **Student**. No admin role in MVP scope.
+Four roles: **Teacher**, **Student**, **Guardian** (parent/guardian), **Admin** (school management/IT).
+
+Attendance is tracked via a mobile app (fingerprint-based) that sends daily
+batch data to the API. Parents can view their children's attendance and
+academic reports. When a student repeatedly scores low on the same rubric
+criterion, a deterministic rule triggers a three-tier report (parent /
+teacher / management) delivered automatically via email.
 
 ## 2. Repos
 
@@ -62,6 +68,28 @@ Two roles: **Teacher**, **Student**. No admin role in MVP scope.
    must be deterministic and testable, never an AI "decision."
 7. **Vision/OCR submissions (stretch goal)** — photo of handwritten work,
    graded via a vision-capable LLM call. Build only after 1–6 are solid.
+8. **Attendance Tracking** — a mobile app (fingerprint-based) sends
+   attendance data to the API in batches per (class, date). Records are
+   upserted on `@@unique([studentId, classId, date])` for idempotency.
+   Teachers and parents view attendance records via dashboard endpoints.
+9. **Criterion-Specific Pattern Detection** — a deterministic function
+   checks every newly confirmed `GradingScore`: if the same rubric criterion
+   scored below 50% of `maxPoints` for 2 consecutive submissions, it flags
+   the student. This is plain code — same philosophy as §3.4. It is separate
+   from the Analysis Agent (§3.4), which checks overall grade averages.
+10. **Three-Tier Report Generation** — when a criterion pattern is detected,
+    an LLM generates three role-specific reports in a single call:
+    - **Parent report**: overall performance summary + at-home improvement
+      suggestions
+    - **Teacher report**: what went wrong + instructional recommendations
+      based on the assignment content and class curriculum
+    - **Management report**: honest evaluation of the teacher's performance
+      — what worked and what didn't — based on the teacher's assignments,
+      rubrics, and student outcomes across their classes
+11. **Notification Delivery** — reports are auto-sent via email (SMTP /
+    nodemailer) to the student's guardians, the teacher, and the school
+    admin. Push notification infrastructure (FCM token storage) is built
+    into the `NotificationService` but only email is wired in MVP.
 
 ## 4. Non-negotiable rules (violating these is a bug, not a style choice)
 
@@ -77,22 +105,57 @@ Two roles: **Teacher**, **Student**. No admin role in MVP scope.
   prompt.** If you find yourself writing a prompt that asks an LLM "is this
   student struggling," stop — that logic belongs in code, per §3.4.
 - **Every citation in a grading response must point to a real
-  `RubricCriterion.id`** the retrieval step actually returned — never a
-  criterion the LLM recalls from training or invents.
+   `RubricCriterion.id`** the retrieval step actually returned — never a
+   criterion the LLM recalls from training or invents.
+- **Criterion pattern detection trigger is plain code, not a prompt.**
+  The same rule as §3.4 applies: if you find yourself asking an LLM "is
+  this student struggling with grammar," that logic belongs in code.
+- **Reports are auto-sent on generation** — no manual approval gate in MVP.
+  Teacher and management may view all reports via dashboard endpoints.
+- **Attendance data from the mobile app is trusted as-is.** No teacher
+  verification step in MVP.
 
 ## 5. Data model
 
 Canonical schema is `schema.prisma` in the backend repo. Key entities:
-`User` (role: TEACHER/STUDENT), `Class`, `Enrollment`, `Rubric` →
-`RubricCriterion` (has `embedding vector(1536)`), `Assignment`, `Submission`
-(status: PENDING → GRADING → REVIEW_READY → CONFIRMED) → `SubmissionChunk`
-(has `embedding vector(1536)`), `CriterionFeedback` (suggested + confirmed
-score/feedback in one row, `isConfirmed` flag), `ClassMaterial` →
-`MaterialChunk` (curriculum RAG for the Assistant Agent), `Alert` (type,
-reason, status).
+`User` (role in `UserRole` enum: TEACHER, STUDENT, GUARDIAN, ADMIN),
+`Class`, `Enrollment`, `Rubric` → `RubricCriterion` (has
+`embedding vector(1024)`), `Assignment`, `Submission` (status:
+SUBMITTED → GRADING_IN_PROGRESS → REVIEW_READY → CONFIRMED) →
+`SubmissionChunk` (has `embedding vector(1024)`), `GradingScore`
+(pointsAwarded, aiFeedback, teacherNotes, `isConfirmed` flag,
+`@@unique([submissionId, criteriaId])`), `Material` →
+`MaterialChunk` (curriculum RAG for the Assistant Agent), `Alert`
+(type, reason, status), plus:
 
-Embeddings: **OpenAI, 1536 dimensions.** This is a locked decision — do not
-switch embedding providers without a schema migration.
+- **`GuardianStudent`** — links a guardian (`User.role = GUARDIAN`) to
+  one or more students. Enables a parent dashboard with attendance +
+  report data for their children.
+- **`Attendance`** — per-student daily attendance record:
+  `(studentId, classId, date, status: PRESENT/ABSENT/LATE/EXCUSED)` with
+  `@@unique([studentId, classId, date])`.
+- **`StudentReport`** — generated when a criterion pattern is detected.
+  Stores type (`CRITERION_FLAG`), `details` JSON (the three role-specific
+  report texts), and status (`PENDING / SENT`).
+- **`Notification`** — audit log of sent reports. Stores `reportId`,
+  `recipientType` (PARENT / TEACHER / ADMIN), `recipientEmail`, `channel`
+  (EMAIL / PUSH), status (`SENT / FAILED`).
+- **`PushToken`** — device tokens for push notifications:
+  `(userId, token, platform)`.
+
+**File storage (Supabase Storage):**
+- `Material.fileUrl` stores the Supabase Storage URL of the uploaded PDF.
+  The extracted text goes into `MaterialChunk.content` for RAG; the
+  original PDF is preserved for download.
+- `Submission` and `Rubric` imported PDFs: text is extracted and stored
+  in DB; the original file is discarded. Students submit via text
+  (browser), not file upload.
+
+Embeddings: **HuggingFace `mixedbread-ai/mxbai-embed-large-v1`, 1024
+dimensions.** Stored via `Unsupported("vector(1024)")` in Prisma and raw
+SQL `$executeRawUnsafe` with `::vector` cast. Chat LLM is a custom
+provider at `CUSTOM_PROVIDER_BASE_URL` (ITI API gateway), model
+`openai.gpt-oss-20b-1:0`.
 
 ## 6. RAG design
 
@@ -109,22 +172,25 @@ Two independent retrieval paths, both using pgvector cosine similarity:
    chunked and embedded at upload time into `MaterialChunk`; the Assistant's
    `search_curriculum` tool searches this when generating a quiz or summary.
 
-`Unsupported("vector(1536)")` fields need a raw SQL migration for a
-similarity index — Prisma does not generate this automatically:
+`Unsupported("vector(1024)")` fields need a raw SQL migration for a
+similarity index — Prisma does not generate this automatically (already
+applied in migration `add_hnsw_indexes`):
 ```sql
-CREATE INDEX ON "RubricCriterion" USING hnsw (embedding vector_cosine_ops);
-CREATE INDEX ON "SubmissionChunk" USING hnsw (embedding vector_cosine_ops);
-CREATE INDEX ON "MaterialChunk" USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX ON rubric_criteria USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX ON submission_chunks USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX ON material_chunks USING hnsw (embedding vector_cosine_ops);
 ```
 
 ## 7. Agent architecture — the honest version
 
 | Piece | What it actually is |
-|---|---|
+|---|---|---|
 | Grading Agent | One LLM call, retrieval feeds it, no tool use |
 | Analysis Agent | Plain code decides the flag; LLM only writes the explanation |
 | Assistant Agent | Real tool-calling loop (search_curriculum, create_quiz), max 5 iterations |
 | Orchestrator | Not an LLM at all — deterministic status-transition logic |
+| Criterion Detector | Plain code decides the flag (50% × 2 consecutive); LLM generates three role-specific reports |
+| Notification Dispatcher | Not AI — plain code that calls NotificationService after a report is created |
 
 Do not add tool-calling or autonomy to Grading or Analysis "to make it more
 agentic." Their determinism is a deliberate correctness choice, not a

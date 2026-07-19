@@ -10,55 +10,67 @@
 2. `backend-specs.md` — this repo's structure and conventions
 
 ## Project
-EduAI backend. NestJS + Prisma + Postgres/pgvector (Supabase) + OpenAI SDK.
+EduAI backend. NestJS + Prisma + Postgres/pgvector (Supabase) + Custom LLM
+provider (ITI API gateway) + HuggingFace embeddings (1024-dim) + Supabase
+Auth (to be wired) + Supabase Storage (file uploads).
 Modular monolith — one module per feature (see `backend-specs.md`).
 
-## Current sprint — Rubric → Grading pipeline (RAG-based)
-We're building the end-to-end grading flow. The pipeline order:
+## Current sprint — Criterion Pattern Detection + Reporting
 
-1. **Teacher creates assignment + rubric** — either via manual form or uploading a PDF in natural language → AI extracts structured criteria (Prompt Factory) → teacher reviews/edits → confirms
-2. **On confirm** → each rubric criterion's `description` is embedded (OpenAI 1536-dim) and stored in `RubricCriteria.embedding` (pgvector)
-3. **Student submits** → raw text gets chunked (~300–500 tokens, paragraph-aware, ~50 token overlap) → each chunk creates a `SubmissionChunk` row
-4. **Grading Agent triggers** → for each chunk, retrieve ALL rubric criteria for that assignment → send chunk + criteria to LLM with a structured prompt → LLM returns per-criterion score + feedback + citation of which criterion was violated
-5. **Result** → `GradingScore` records created per `(submission, criterion)`. Student sees per-criterion scores and why points were lost
-6. **Teacher reviews** → edits scores → confirms (`isConfirmed = true`) → grade becomes real
+The core grading pipeline (rubrics → submit → grade → confirm → analysis) is
+complete in `dev`. We're now building three new features:
+
+1. **Supabase Auth integration** — auth guard, roles guard, `@Roles()`
+   decorator. Replaces placeholder UUIDs with the authenticated user's ID
+   everywhere. Blocks all new features below until done.
+2. **Schema additions** — `GuardianStudent`, `Attendance`, `StudentReport`,
+   `Notification`, `PushToken`, `ADMIN` and `GUARDIAN` roles in `UserRole`
+   enum, Supabase Storage integration for `Material.fileUrl`.
+3. **Attendance module** — `POST /attendance/import` (mobile app batch),
+   `GET /students/:id/attendance`, `GET /classes/:id/attendance`.
+4. **Criterion Pattern Detector** — deterministic function that checks every
+   confirmed `GradingScore`: same criterion, < 50% of maxPoints, 2
+   consecutive submissions → flag.
+5. **Three-Tier Report Generation** — LLM generates parent, teacher, and
+   management reports per flag in a single call.
+6. **Notification Service** — email delivery (nodemailer), push infra (FCM
+   model + token storage, channel stored but not wired in MVP).
 
 ### Modules involved
 | Module | Role |
 |---|---|
+| `auth/` | Supabase JWT guard, role guard, `@Roles()` decorator |
+| `guardians/` | Guardian-student linking, parent dashboard data |
+| `attendance/` | Import + view endpoints |
+| `analysis/` | Existing overall-grade Analysis Agent + `criterion-detector.ts` + `report-generator.ts` |
+| `notifications/` | NotificationService (email + push), Notification model |
+| `materials/` | Supabase Storage integration for original file preservation |
+| `admin/` | Admin dashboard endpoints (teacher performance, reports view) |
 | `rubrics/` | CRUD, PDF import (Prompt Factory), confirm + embed criteria |
-| `common/llm/` | Single `LlmService` wrapping OpenAI SDK — all agents call through this (PII redaction + Zod retry built in) |
+| `common/llm/` | Single `LlmService` — all agents call through this (PII + Zod retry) |
+| `common/storage/` | Supabase Storage service (upload, get URL) |
 | `common/pii/` | Redact student name/ID before any LLM call |
 | `common/validation/` | Shared Zod schemas, retry-once wrapper for LLM structured output |
 | `submissions/` | Student submit, chunking logic, embed chunks |
 | `grading/` | Grading Agent: similarity-search retrieval + LLM call + per-criterion scoring |
-| `analysis/` | (next sprint) Deterministic threshold rule + alert explanation |
 
-### Schema gaps identified
-- `RubricCriteria` needs `embedding Unsupported("vector(1536)")?` column
-- `Rubric` needs `isConfirmed Boolean @default(false)` field
-- `GradingScore` already has `pointsAwarded`, `aiFeedback`, `teacherNotes` — correct
-- HNSW index on `RubricCriteria`, `SubmissionChunk`, `MaterialChunk` needs raw SQL migration
-
-### Relevant issues
-| # | What | Status |
-|---|---|---|
-| #72 | POST /rubrics | ✅ Done |
-| #74 | PDF text extraction | ⬜ Not started |
-| #75 | Prompt Factory LLM call | ⬜ Not started |
-| #77 | Rubric confirm step | ⬜ Not started |
-| #79 | Embed criteria on confirm | ⬜ Not started |
-| #80 | HNSW index migration | ✅ Done |
-| #81–83 | PII redaction | ⬜ Not started |
-| #85 | Similarity-search retrieval for criteria | ⬜ Not started |
-| #86 | Grading Agent prompt + output schema | ⬜ Not started |
-| #88 | Zod validation + retry logic | ⬜ Not started |
-| #91 | POST /submissions | ✅ Done (no chunking yet) |
-| #97 | Status state machine | ⬜ Not started |
+### Architecture notes
+- **Embedding model:** `mixedbread-ai/mxbai-embed-large-v1` → 1024-dim vectors
+  via HuggingFace (`hfEmbed`). Not OpenAI.
+- **Chat model:** Custom provider at `CUSTOM_PROVIDER_BASE_URL` (ITI API
+  gateway), model `openai.gpt-oss-20b-1:0`.
+- **Chunker:** Shared in `src/common/chunker.ts`. MAX_CHARS=2000,
+  MIN_CHARS=1200, OVERLAP_CHARS=200.
+- **File storage:** Original PDFs for materials go to Supabase Storage.
+  Submissions are text-only. Rubric PDFs are discarded after text extraction.
+- **Auth:** Not yet wired. All endpoints use placeholder
+  `00000000-0000-0000-0000-000000000000` UUID. Feature branch `feat/auth`
+  should integrate Supabase Auth before any new feature goes to production.
 
 ## Commands
 - `docker compose up -d` — local Postgres+pgvector
 - `npx prisma migrate dev` — apply schema changes
+- `npx prisma db seed` — seed test data (teacher, student, 3 classes, etc.)
 - `npm run start:dev` — dev server
 - `npm run lint` / `npm run test` / `npm run build` — same checks CI runs
 
@@ -72,6 +84,8 @@ at stable checkpoints. Never push directly to `dev` or `main`.
 - A grade is real only when `isConfirmed = true` — nothing downstream may
   treat an unconfirmed suggestion as real data
 - Analysis Agent's trigger is plain code, never a prompt
+- Criterion Detector's trigger is plain code, never a prompt
+- Reports are auto-sent on generation — no manual approval gate in MVP
 - Controllers stay thin; no Prisma calls outside a service
 
 ## Working from a GitHub issue
