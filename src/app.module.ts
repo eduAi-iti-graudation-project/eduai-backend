@@ -1,8 +1,10 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './auth/auth.module';
+import { AuthGuard } from './auth/auth.guard';
 import { ClassesModule } from './classes/classes.module';
 import { AssignmentsModule } from './assignments/assignments.module';
 import { RubricsModule } from './rubrics/rubrics.module';
@@ -36,6 +38,6 @@ import { ValidationModule } from './common/validation/validation.module';
     ValidationModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [AppService, { provide: APP_GUARD, useClass: AuthGuard }],
 })
 export class AppModule {}
