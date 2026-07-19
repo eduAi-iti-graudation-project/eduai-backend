@@ -4,7 +4,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { chunkText } from './chunker';
+import { chunkText } from '../common/chunker';
 import pdfParse from 'pdf-parse';
 
 @Injectable()
@@ -13,7 +13,10 @@ export class SubmissionsService {
 
   async create(dto: { assignmentId: string; content: string }) {
     const submission = await this.prisma.submission.create({
-      data: { assignmentId: dto.assignmentId, studentId: '00000000-0000-0000-0000-000000000000' },
+      data: {
+        assignmentId: dto.assignmentId,
+        studentId: '00000000-0000-0000-0000-000000000000',
+      },
     });
     const chunks = chunkText(dto.content);
     if (chunks.length > 0) {

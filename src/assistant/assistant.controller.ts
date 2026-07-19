@@ -1,7 +1,7 @@
-import { Controller, Post } from '@nestjs/common';
+import { Controller, Post, Body } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiOkResponse } from '@nestjs/swagger';
 import { AssistantService } from './assistant.service';
-import { ChatResponseDto } from './dto';
+import { ChatDto, ChatResponseDto } from './dto';
 
 @ApiTags('assistant')
 @Controller('assistant')
@@ -11,7 +11,8 @@ export class AssistantController {
   @Post('chat')
   @ApiOperation({ summary: 'Send a message to the AI assistant' })
   @ApiOkResponse({ type: ChatResponseDto })
-  chat() {
-    return this.assistantService.chat();
+  async chat(@Body() dto: ChatDto): Promise<ChatResponseDto> {
+    const result = await this.assistantService.chat(dto);
+    return result;
   }
 }

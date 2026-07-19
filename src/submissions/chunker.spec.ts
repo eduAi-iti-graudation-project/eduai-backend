@@ -1,4 +1,4 @@
-import { chunkText } from './chunker';
+import { chunkText } from '../common/chunker';
 
 describe('chunkText', () => {
   it('returns empty array for empty text', () => {
