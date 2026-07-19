@@ -22,6 +22,13 @@ enum SubmissionStatus {
   CONFIRMED
 }
 
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+  EXCUSED
+}
+
 model User {
   id        String   @id @default(uuid()) @db.Uuid
   authId    String?  @unique
@@ -34,6 +41,7 @@ model User {
   // Relations
   taughtClasses Class[]      @relation("TeacherClasses")
   enrollments   Enrollment[]
+  attendance    Attendance[]
   submissions   Submission[]
   alerts        Alert[]
 
@@ -51,6 +59,7 @@ model Class {
   // Relations
   teacher     User         @relation("TeacherClasses", fields: [teacherId], references: [id])
   enrollments Enrollment[]
+  attendance  Attendance[]
   materials   Material[]
   assignments Assignment[]
 
@@ -69,6 +78,23 @@ model Enrollment {
 
   @@unique([classId, studentId])
   @@map("enrollments")
+}
+
+model Attendance {
+  id        String           @id @default(uuid()) @db.Uuid
+  studentId String           @db.Uuid
+  classId   String           @db.Uuid
+  date      DateTime         @db.Date
+  status    AttendanceStatus
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  // Relations
+  student User  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  class   Class @relation(fields: [classId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, classId, date])
+  @@map("attendance")
 }
 
 model Material {
