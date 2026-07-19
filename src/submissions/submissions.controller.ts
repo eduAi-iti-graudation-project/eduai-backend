@@ -33,7 +33,10 @@ export class SubmissionsController {
   @ApiOperation({ summary: 'Submit an assignment (student)' })
   @ApiBody({ type: CreateSubmissionDto })
   @ApiOkResponse({ type: SubmissionDto })
-  create(@Body() dto: CreateSubmissionDto, @CurrentUser('id') studentId: string) {
+  create(
+    @Body() dto: CreateSubmissionDto,
+    @CurrentUser('id') studentId: string,
+  ) {
     return this.submissionsService.create(dto, studentId);
   }
 
@@ -67,7 +70,11 @@ export class SubmissionsController {
     if (!assignmentId) {
       throw new BadRequestException('assignmentId is required');
     }
-    return this.submissionsService.createFromPdf(file.buffer, assignmentId, studentId);
+    return this.submissionsService.createFromPdf(
+      file.buffer,
+      assignmentId,
+      studentId,
+    );
   }
 
   @Roles('TEACHER')

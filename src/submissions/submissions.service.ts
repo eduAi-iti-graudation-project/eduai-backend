@@ -11,7 +11,10 @@ import pdfParse from 'pdf-parse';
 export class SubmissionsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(dto: { assignmentId: string; content: string }, studentId: string) {
+  async create(
+    dto: { assignmentId: string; content: string },
+    studentId: string,
+  ) {
     const submission = await this.prisma.submission.create({
       data: {
         assignmentId: dto.assignmentId,
