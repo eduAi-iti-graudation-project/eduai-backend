@@ -1,25 +1,29 @@
 import { Controller, Post, Get, Body } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiOkResponse, ApiBody } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
-import { SignupDto, LoginDto, UserDto } from './dto';
+import { SignupDto, LoginDto, UserDto, AuthResponseDto } from './dto';
+import { Public } from './public.decorator';
+import { CurrentUser } from './current-user.decorator';
 
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
+  @Public()
   @Post('signup')
   @ApiOperation({ summary: 'Register a new user' })
   @ApiBody({ type: SignupDto })
-  @ApiOkResponse({ type: UserDto })
+  @ApiOkResponse({ type: AuthResponseDto })
   signup(@Body() dto: SignupDto) {
     return this.authService.signup(dto);
   }
 
+  @Public()
   @Post('login')
   @ApiOperation({ summary: 'Log in with email and password' })
   @ApiBody({ type: LoginDto })
-  @ApiOkResponse({ type: UserDto })
+  @ApiOkResponse({ type: AuthResponseDto })
   login(@Body() dto: LoginDto) {
     return this.authService.login(dto);
   }
@@ -27,7 +31,7 @@ export class AuthController {
   @Get('me')
   @ApiOperation({ summary: 'Get current user profile' })
   @ApiOkResponse({ type: UserDto })
-  me() {
-    return this.authService.me();
+  me(@CurrentUser('id') userId: string) {
+    return this.authService.me(userId);
   }
 }
