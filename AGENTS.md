@@ -13,48 +13,80 @@
 EduAI backend. NestJS + Prisma + Postgres/pgvector (Supabase) + OpenAI SDK.
 Modular monolith — one module per feature (see `backend-specs.md`).
 
-## Current sprint — Rubric → Grading pipeline (RAG-based)
-We're building the end-to-end grading flow. The pipeline order:
+## Current sprint — End-to-end pipeline + notifications + reports + dashboard
 
-1. **Teacher creates assignment + rubric** — either via manual form or uploading a PDF in natural language → AI extracts structured criteria (Prompt Factory) → teacher reviews/edits → confirms
-2. **On confirm** → each rubric criterion's `description` is embedded (OpenAI 1536-dim) and stored in `RubricCriteria.embedding` (pgvector)
-3. **Student submits** → raw text gets chunked (~300–500 tokens, paragraph-aware, ~50 token overlap) → each chunk creates a `SubmissionChunk` row
-4. **Grading Agent triggers** → for each chunk, retrieve ALL rubric criteria for that assignment → send chunk + criteria to LLM with a structured prompt → LLM returns per-criterion score + feedback + citation of which criterion was violated
-5. **Result** → `GradingScore` records created per `(submission, criterion)`. Student sees per-criterion scores and why points were lost
-6. **Teacher reviews** → edits scores → confirms (`isConfirmed = true`) → grade becomes real
+### Pipeline (in execution order)
 
-### Modules involved
+1. **Teacher creates assignment + rubric** — manual form or PDF import → AI
+   extracts criteria (Prompt Factory) → teacher reviews/edits → confirms
+2. **On rubric confirm** → each criterion's `description` embedded (1024 dim)
+   via HuggingFace `mxbai-embed-large-v1` stored in `RubricCriteria.embedding`
+3. **Student submits** — text paste or PDF upload → raw text chunked
+   (~300-500 tokens, paragraph-aware, ~50 token overlap) → `SubmissionChunk`
+   rows created
+4. **Auto-grade fires** (fire-and-forget inside
+   `SubmissionsService.create()`) → `GradingService.gradeSubmission()` runs
+   synchronously in background, status `SUBMITTED → GRADING_IN_PROGRESS →
+   REVIEW_READY` → teacher notified via email
+5. **Teacher reviews** — opens submission, sees per-criterion AI scores +
+   feedback, edits any points/notes
+6. **Teacher confirms all** — `PATCH /grades/confirm-all/:submissionId`
+   atomically sets all `GradingScore.isConfirmed = true`, status →
+   `CONFIRMED`
+7. **On confirm** → `AnalysisService.evaluateStudent()` runs threshold check
+   → if flagged, `Alert` created → `ReportService.generate()` auto-creates
+   three-tier report (parent/teacher/management) via single LLM call →
+   `NotificationService` emails relevant parties
+
+### Modules
+
 | Module | Role |
 |---|---|
 | `rubrics/` | CRUD, PDF import (Prompt Factory), confirm + embed criteria |
-| `common/llm/` | Single `LlmService` wrapping OpenAI SDK — all agents call through this (PII redaction + Zod retry built in) |
+| `common/llm/` | Single `LlmService` wrapping OpenAI SDK — all agents call through this |
 | `common/pii/` | Redact student name/ID before any LLM call |
-| `common/validation/` | Shared Zod schemas, retry-once wrapper for LLM structured output |
-| `submissions/` | Student submit, chunking logic, embed chunks |
-| `grading/` | Grading Agent: similarity-search retrieval + LLM call + per-criterion scoring |
-| `analysis/` | (next sprint) Deterministic threshold rule + alert explanation |
+| `common/chunker/` | Shared `chunkText()` — paragraph-aware, configurable token window |
+| `submissions/` | Student submit, chunking, auto-trigger grading via fire-and-forget |
+| `grading/` | Grading Agent + `confirmAll()` bulk endpoint |
+| `analysis/` | Deterministic threshold rule + alert creation |
+| `reports/` | Three-tier report generation (triggered on alert creation) |
+| `notifications/` | Email delivery (nodemailer), `Notification` model, push infra stored |
+| `assistant/` | Tool-calling loop (search_curriculum, create_quiz) |
+| `alerts/` | CRUD including `PATCH /alerts/:id` (resolve/dismiss) |
+| `materials/` | `ClassMaterial`, `MaterialChunk`, curriculum chunking + search |
+| `dashboard/` | Unified `GET /dashboard/overview` — role-aware aggregation |
+| `common/validation/` | Shared Zod schemas + retry-once wrapper for LLM structured output |
 
-### Schema gaps identified
-- `RubricCriteria` needs `embedding Unsupported("vector(1536)")?` column
-- `Rubric` needs `isConfirmed Boolean @default(false)` field
-- `GradingScore` already has `pointsAwarded`, `aiFeedback`, `teacherNotes` — correct
-- HNSW index on `RubricCriteria`, `SubmissionChunk`, `MaterialChunk` needs raw SQL migration
+### Schema additions
 
-### Relevant issues
+- `UserRole` enum: `TEACHER`, `STUDENT`, `GUARDIAN`, `ADMIN`
+- `Notification { id, userId, type, channel (EMAIL\|PUSH), title, body, readAt?, createdAt }`
+- `StudentReport { id, studentId, alertId, parentSection, teacherSection, managementSection, createdAt }`
+- `DeviceToken { id, userId, token, platform, createdAt }`
+- `Attendance { id, studentId, classId, date, status (PRESENT\|ABSENT\|LATE\|EXCUSED), createdAt }`
+
+### Key decisions
+
+- Auto-grade is fire-and-forget: `SubmissionsService.create()` calls
+  `gradingService.gradeSubmission(id)` without `await`. Student gets instant
+  response, grading runs in background, teacher notified on completion.
+- Student never sees AI grades — only the teacher sees them during review.
+  Confirmed grades are visible to students via `GET /students/:id/grades`.
+- Reports auto-trigger on alert creation — no manual gate in MVP.
+- All 4 roles have separate dashboard views via `GET /dashboard/overview`.
+- Auth uses placeholder UUID; teammate wires Supabase Auth later.
+
+### Status
+
 | # | What | Status |
 |---|---|---|
-| #72 | POST /rubrics | ✅ Done |
-| #74 | PDF text extraction | ⬜ Not started |
-| #75 | Prompt Factory LLM call | ⬜ Not started |
-| #77 | Rubric confirm step | ⬜ Not started |
-| #79 | Embed criteria on confirm | ⬜ Not started |
-| #80 | HNSW index migration | ✅ Done |
-| #81–83 | PII redaction | ⬜ Not started |
-| #85 | Similarity-search retrieval for criteria | ⬜ Not started |
-| #86 | Grading Agent prompt + output schema | ⬜ Not started |
-| #88 | Zod validation + retry logic | ⬜ Not started |
-| #91 | POST /submissions | ✅ Done (no chunking yet) |
-| #97 | Status state machine | ⬜ Not started |
+| 1 | Auto-grade on Submit (fire-and-forget) | ⬜ Not started |
+| 2 | Notification Service (nodemailer + model) | ⬜ Not started |
+| 3 | Alert resolution endpoint PATCH /alerts/:id | ⬜ Not started |
+| 4 | Three-tier Report generation | ⬜ Not started |
+| 5 | Bulk confirm endpoint PATCH /grades/confirm-all/:submissionId | ⬜ Not started |
+| 6 | Prisma schema: GUARDIAN/ADMIN roles + new models | ⬜ Not started |
+| 7 | Role guards for GUARDIAN + ADMIN | ⬜ Not started |
 
 ## Commands
 - `docker compose up -d` — local Postgres+pgvector

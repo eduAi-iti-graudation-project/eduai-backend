@@ -16,7 +16,7 @@ word. Once enough grades are confirmed for a student, a deterministic rule
 (not an AI judgment call) flags them as needing attention, and an AI call
 writes a plain-language explanation of why.
 
-Two roles: **Teacher**, **Student**. No admin role in MVP scope.
+Four roles: **Teacher**, **Student**, **Guardian**, **Admin**.
 
 ## 2. Repos
 
@@ -62,6 +62,24 @@ Two roles: **Teacher**, **Student**. No admin role in MVP scope.
    must be deterministic and testable, never an AI "decision."
 7. **Vision/OCR submissions (stretch goal)** — photo of handwritten work,
    graded via a vision-capable LLM call. Build only after 1–6 are solid.
+8. **Auto-grade on Submission** — when a student submits, the grading agent
+   runs immediately (fire-and-forget in background). The student never sees
+   AI grades; only the teacher sees them during review. Teacher is notified
+   when grading finishes.
+9. **Bulk Grade Confirmation** — teacher edits AI-suggested scores, clicks
+   one "Confirm All" button. All scores for that submission atomically
+   set `isConfirmed = true`, submission status → `CONFIRMED`.
+10. **Three-Tier Reports** — when an Alert is created, a single LLM call
+    auto-generates three report sections (parent-friendly, teacher-detailed,
+    management-summary) stored in a `StudentReport` row.
+11. **Notification Delivery** — reports and grading-complete events are
+    auto-sent via email (nodemailer) to teachers, guardians, and admins.
+    Push notification infrastructure (FCM token storage) is built into the
+    `NotificationService` but only email is wired in MVP.
+12. **Unified Dashboard** — single `GET /dashboard/overview` endpoint returns
+    role-specific data (teacher: class summaries + pending confirmations;
+    student: upcoming assignments + confirmed grades; guardian: child overview;
+    admin: school-wide stats).
 
 ## 4. Non-negotiable rules (violating these is a bug, not a style choice)
 
@@ -83,13 +101,16 @@ Two roles: **Teacher**, **Student**. No admin role in MVP scope.
 ## 5. Data model
 
 Canonical schema is `schema.prisma` in the backend repo. Key entities:
-`User` (role: TEACHER/STUDENT), `Class`, `Enrollment`, `Rubric` →
-`RubricCriterion` (has `embedding vector(1536)`), `Assignment`, `Submission`
-(status: PENDING → GRADING → REVIEW_READY → CONFIRMED) → `SubmissionChunk`
-(has `embedding vector(1536)`), `CriterionFeedback` (suggested + confirmed
-score/feedback in one row, `isConfirmed` flag), `ClassMaterial` →
-`MaterialChunk` (curriculum RAG for the Assistant Agent), `Alert` (type,
-reason, status).
+`User` (role: TEACHER/STUDENT/GUARDIAN/ADMIN), `Class`, `Enrollment`,
+`Rubric` → `RubricCriterion` (has `embedding vector(1024)`), `Assignment`,
+`Submission` (status: SUBMITTED → GRADING_IN_PROGRESS → REVIEW_READY →
+CONFIRMED) → `SubmissionChunk` (has `embedding vector(1024)`),
+`GradingScore` (suggested + confirmed score/feedback in one row,
+`isConfirmed` flag), `Material` → `MaterialChunk` (curriculum RAG for
+Assistant Agent), `Alert` (type, reason, status), `Notification` (user,
+type, channel, read status), `StudentReport` (three-section LLM output per
+alert), `DeviceToken` (FCM push tokens), `Attendance` (student, class,
+date, status).
 
 Embeddings: **OpenAI, 1536 dimensions.** This is a locked decision — do not
 switch embedding providers without a schema migration.

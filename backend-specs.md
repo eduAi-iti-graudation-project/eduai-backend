@@ -14,11 +14,14 @@ src/
   classes/         # Class, Enrollment
   rubrics/         # Rubric, RubricCriterion, Prompt Factory (PDF import)
   assignments/
+  dashboard/       # Unified GET /dashboard/overview — role-aware aggregation
   submissions/     # Submission, SubmissionChunk, status state machine
   grading/         # Grading Agent: retrieval + LLM call + citation
   analysis/        # Analysis Agent: threshold rule + explanation LLM call
   assistant/       # Assistant Agent: tool-calling loop
-  alerts/
+  alerts/          # CRUD, resolve/dismiss endpoint PATCH /alerts/:id
+  notifications/   # Notification model, email (nodemailer), push infra stored
+  reports/         # Three-tier report generation (auto-triggered on alert)
   materials/       # ClassMaterial, MaterialChunk, curriculum chunking
   common/
     llm/           # Single LlmService wrapping the OpenAI SDK — all agents
