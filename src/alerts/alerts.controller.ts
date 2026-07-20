@@ -7,12 +7,14 @@ import {
 } from '@nestjs/swagger';
 import { AlertsService } from './alerts.service';
 import { AlertDto } from './dto';
+import { Roles } from '../auth/roles.decorator';
 
 @ApiTags('alerts')
 @Controller('alerts')
 export class AlertsController {
   constructor(private readonly alertsService: AlertsService) {}
 
+  @Roles('TEACHER')
   @Get()
   @ApiOperation({ summary: "List alerts for teacher's classes" })
   @ApiQuery({ name: 'status', required: false })

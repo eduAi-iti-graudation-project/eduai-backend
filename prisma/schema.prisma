@@ -11,6 +11,8 @@ generator client {
 enum UserRole {
   TEACHER
   STUDENT
+  GUARDIAN
+  ADMIN
 }
 
 enum SubmissionStatus {
@@ -20,17 +22,26 @@ enum SubmissionStatus {
   CONFIRMED
 }
 
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+  EXCUSED
+}
+
 model User {
-  id          String       @id @default(uuid()) @db.Uuid
-  email       String       @unique
-  name        String
-  role        UserRole
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
-  
+  id        String   @id @default(uuid()) @db.Uuid
+  authId    String?  @unique
+  email     String   @unique
+  name      String
+  role      UserRole
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
   // Relations
   taughtClasses Class[]      @relation("TeacherClasses")
   enrollments   Enrollment[]
+  attendance    Attendance[]
   submissions   Submission[]
   alerts        Alert[]
 
@@ -38,16 +49,17 @@ model User {
 }
 
 model Class {
-  id          String       @id @default(uuid()) @db.Uuid
+  id          String   @id @default(uuid()) @db.Uuid
   name        String
   description String?
-  teacherId   String       @db.Uuid
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  teacherId   String   @db.Uuid
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   // Relations
   teacher     User         @relation("TeacherClasses", fields: [teacherId], references: [id])
   enrollments Enrollment[]
+  attendance  Attendance[]
   materials   Material[]
   assignments Assignment[]
 
@@ -61,37 +73,54 @@ model Enrollment {
   createdAt DateTime @default(now())
 
   // Relations
-  class     Class    @relation(fields: [classId], references: [id], onDelete: Cascade)
-  student   User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  class   Class @relation(fields: [classId], references: [id], onDelete: Cascade)
+  student User  @relation(fields: [studentId], references: [id], onDelete: Cascade)
 
   @@unique([classId, studentId])
   @@map("enrollments")
 }
 
-model Material {
-  id        String          @id @default(uuid()) @db.Uuid
-  title     String
-  fileUrl   String?
-  classId   String          @db.Uuid
-  createdAt DateTime        @default(now())
-  updatedAt DateTime        @updatedAt
+model Attendance {
+  id        String           @id @default(uuid()) @db.Uuid
+  studentId String           @db.Uuid
+  classId   String           @db.Uuid
+  date      DateTime         @db.Date
+  status    AttendanceStatus
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
 
   // Relations
-  class     Class           @relation(fields: [classId], references: [id], onDelete: Cascade)
-  chunks    MaterialChunk[]
+  student User  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  class   Class @relation(fields: [classId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, classId, date])
+  @@map("attendance")
+}
+
+model Material {
+  id        String   @id @default(uuid()) @db.Uuid
+  title     String
+  fileUrl   String?
+  classId   String   @db.Uuid
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  class  Class           @relation(fields: [classId], references: [id], onDelete: Cascade)
+  chunks MaterialChunk[]
 
   @@map("materials")
 }
 
 model MaterialChunk {
-  id         String                      @id @default(uuid()) @db.Uuid
-  materialId String                      @db.Uuid
+  id         String                       @id @default(uuid()) @db.Uuid
+  materialId String                       @db.Uuid
   content    String
   embedding  Unsupported("vector(1024)")?
-  createdAt  DateTime                    @default(now())
+  createdAt  DateTime                     @default(now())
 
   // Relations
-  material   Material                    @relation(fields: [materialId], references: [id], onDelete: Cascade)
+  material Material @relation(fields: [materialId], references: [id], onDelete: Cascade)
 
   @@map("material_chunks")
 }
@@ -107,7 +136,7 @@ model Assignment {
   updatedAt   DateTime @updatedAt
 
   // Relations
-  class       Class    @relation(fields: [classId], references: [id], onDelete: Cascade)
+  class       Class        @relation(fields: [classId], references: [id], onDelete: Cascade)
   rubrics     Rubric[]
   submissions Submission[]
 
@@ -115,80 +144,80 @@ model Assignment {
 }
 
 model Rubric {
-  id           String           @id @default(uuid()) @db.Uuid
+  id           String   @id @default(uuid()) @db.Uuid
   title        String
-  assignmentId String           @db.Uuid
-  isConfirmed  Boolean          @default(false)
-  createdAt    DateTime         @default(now())
+  assignmentId String   @db.Uuid
+  isConfirmed  Boolean  @default(false)
+  createdAt    DateTime @default(now())
 
   // Relations
-  assignment   Assignment       @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
-  criteria     RubricCriteria[]
+  assignment Assignment       @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  criteria   RubricCriteria[]
 
   @@map("rubrics")
 }
 
 model RubricCriteria {
-  id            String                      @id @default(uuid()) @db.Uuid
-  rubricId      String                      @db.Uuid
-  description   String
-  maxPoints     Int
-  embedding     Unsupported("vector(1024)")?
-  createdAt     DateTime                    @default(now())
+  id          String                       @id @default(uuid()) @db.Uuid
+  rubricId    String                       @db.Uuid
+  description String
+  maxPoints   Int
+  embedding   Unsupported("vector(1024)")?
+  createdAt   DateTime                     @default(now())
 
   // Relations
-  rubric        Rubric          @relation(fields: [rubricId], references: [id], onDelete: Cascade)
+  rubric        Rubric         @relation(fields: [rubricId], references: [id], onDelete: Cascade)
   gradingScores GradingScore[]
 
   @@map("rubric_criteria")
 }
 
 model Submission {
-  id           String            @id @default(uuid()) @db.Uuid
-  assignmentId String            @db.Uuid
-  studentId    String            @db.Uuid
-  status       SubmissionStatus  @default(SUBMITTED)
+  id           String           @id @default(uuid()) @db.Uuid
+  assignmentId String           @db.Uuid
+  studentId    String           @db.Uuid
+  status       SubmissionStatus @default(SUBMITTED)
   teacherNotes String?
   finalScore   Int?
-  createdAt    DateTime          @default(now())
-  updatedAt    DateTime          @updatedAt
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
 
   // Relations
-  assignment   Assignment        @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
-  student      User              @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  chunks       SubmissionChunk[]
-  scores       GradingScore[]
+  assignment Assignment        @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  student    User              @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  chunks     SubmissionChunk[]
+  scores     GradingScore[]
 
   @@map("submissions")
 }
 
 model SubmissionChunk {
-  id           String                      @id @default(uuid()) @db.Uuid
-  submissionId String                      @db.Uuid
+  id           String                       @id @default(uuid()) @db.Uuid
+  submissionId String                       @db.Uuid
   content      String
   embedding    Unsupported("vector(1024)")?
-  createdAt    DateTime                    @default(now())
+  createdAt    DateTime                     @default(now())
 
   // Relations
-  submission   Submission                  @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  submission Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
 
   @@map("submission_chunks")
 }
 
 model GradingScore {
-  id           String         @id @default(uuid()) @db.Uuid
-  submissionId String         @db.Uuid
-  criteriaId   String         @db.Uuid
+  id            String   @id @default(uuid()) @db.Uuid
+  submissionId  String   @db.Uuid
+  criteriaId    String   @db.Uuid
   pointsAwarded Int
-  aiFeedback   String?
-  teacherNotes String?
-  isConfirmed  Boolean        @default(false)
-  createdAt    DateTime       @default(now())
-  updatedAt    DateTime       @updatedAt
+  aiFeedback    String?
+  teacherNotes  String?
+  isConfirmed   Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   // Relations
-  submission   Submission     @relation(fields: [submissionId], references: [id], onDelete: Cascade)
-  criteria     RubricCriteria @relation(fields: [criteriaId], references: [id], onDelete: Cascade)
+  submission Submission     @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  criteria   RubricCriteria @relation(fields: [criteriaId], references: [id], onDelete: Cascade)
 
   @@unique([submissionId, criteriaId])
   @@map("grading_scores")
@@ -203,7 +232,7 @@ model Alert {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  student   User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  student User @relation(fields: [studentId], references: [id], onDelete: Cascade)
 
   @@map("alerts")
 }

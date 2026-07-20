@@ -15,20 +15,24 @@ import {
   AddEnrollmentDto,
   ClassDto,
 } from './dto';
+import { Roles } from '../auth/roles.decorator';
+import { CurrentUser } from '../auth/current-user.decorator';
 
 @ApiTags('classes')
 @Controller('classes')
 export class ClassesController {
   constructor(private readonly classesService: ClassesService) {}
 
+  @Roles('TEACHER')
   @Post()
   @ApiOperation({ summary: 'Create a class' })
   @ApiBody({ type: CreateClassDto })
   @ApiOkResponse({ type: ClassDto })
-  create(@Body() dto: CreateClassDto) {
-    return this.classesService.create(dto);
+  create(@Body() dto: CreateClassDto, @CurrentUser('id') teacherId: string) {
+    return this.classesService.create(dto, teacherId);
   }
 
+  @Roles('TEACHER', 'STUDENT', 'GUARDIAN')
   @Get()
   @ApiOperation({ summary: 'List all classes' })
   @ApiOkResponse({ type: ClassDto, isArray: true })
@@ -36,6 +40,7 @@ export class ClassesController {
     return this.classesService.findAll();
   }
 
+  @Roles('TEACHER', 'STUDENT', 'GUARDIAN')
   @Get(':id')
   @ApiOperation({ summary: 'Get class by ID' })
   @ApiOkResponse({ type: ClassDto })
@@ -43,6 +48,7 @@ export class ClassesController {
     return this.classesService.findOne(id);
   }
 
+  @Roles('TEACHER')
   @Patch(':id')
   @ApiOperation({ summary: 'Update a class' })
   @ApiBody({ type: UpdateClassDto })
@@ -51,12 +57,14 @@ export class ClassesController {
     return this.classesService.update(id, dto);
   }
 
+  @Roles('TEACHER')
   @Delete(':id')
   @ApiOperation({ summary: 'Delete a class' })
   remove(@Param('id') id: string) {
     return this.classesService.remove(id);
   }
 
+  @Roles('TEACHER')
   @Post(':id/enrollments')
   @ApiOperation({ summary: 'Enroll a student' })
   @ApiBody({ type: AddEnrollmentDto })
@@ -64,6 +72,7 @@ export class ClassesController {
     return this.classesService.addEnrollment(id, dto.studentId);
   }
 
+  @Roles('TEACHER')
   @Delete(':classId/enrollments/:studentId')
   @ApiOperation({ summary: 'Remove a student enrollment' })
   removeEnrollment(

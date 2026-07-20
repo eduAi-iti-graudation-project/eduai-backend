@@ -17,12 +17,14 @@ import {
 } from '@nestjs/swagger';
 import { AssignmentsService } from './assignments.service';
 import { CreateAssignmentDto, UpdateAssignmentDto, AssignmentDto } from './dto';
+import { Roles } from '../auth/roles.decorator';
 
 @ApiTags('assignments')
 @Controller('assignments')
 export class AssignmentsController {
   constructor(private readonly assignmentsService: AssignmentsService) {}
 
+  @Roles('TEACHER')
   @Post()
   @ApiOperation({ summary: 'Create an assignment' })
   @ApiBody({ type: CreateAssignmentDto })
@@ -31,6 +33,7 @@ export class AssignmentsController {
     return this.assignmentsService.create(dto);
   }
 
+  @Roles('TEACHER', 'STUDENT')
   @Get()
   @ApiOperation({ summary: 'List assignments, optionally filtered by class' })
   @ApiQuery({ name: 'classId', required: false })
@@ -39,6 +42,7 @@ export class AssignmentsController {
     return this.assignmentsService.findAll(classId);
   }
 
+  @Roles('TEACHER', 'STUDENT')
   @Get(':id')
   @ApiOperation({ summary: 'Get assignment by ID' })
   @ApiOkResponse({ type: AssignmentDto })
@@ -46,6 +50,7 @@ export class AssignmentsController {
     return this.assignmentsService.findOne(id);
   }
 
+  @Roles('TEACHER')
   @Patch(':id')
   @ApiOperation({ summary: 'Update an assignment' })
   @ApiBody({ type: UpdateAssignmentDto })
@@ -54,6 +59,7 @@ export class AssignmentsController {
     return this.assignmentsService.update(id, dto);
   }
 
+  @Roles('TEACHER')
   @Delete(':id')
   @ApiOperation({ summary: 'Delete an assignment' })
   remove(@Param('id') id: string) {

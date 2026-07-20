@@ -11,11 +11,14 @@ import pdfParse from 'pdf-parse';
 export class SubmissionsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(dto: { assignmentId: string; content: string }) {
+  async create(
+    dto: { assignmentId: string; content: string },
+    studentId: string,
+  ) {
     const submission = await this.prisma.submission.create({
       data: {
         assignmentId: dto.assignmentId,
-        studentId: '00000000-0000-0000-0000-000000000000',
+        studentId,
       },
     });
     const chunks = chunkText(dto.content);
@@ -33,7 +36,7 @@ export class SubmissionsService {
     });
   }
 
-  async createFromPdf(buffer: Buffer, assignmentId: string) {
+  async createFromPdf(buffer: Buffer, assignmentId: string, studentId: string) {
     let rawText: string;
     try {
       const pdfData = await pdfParse(buffer);
@@ -48,7 +51,7 @@ export class SubmissionsService {
       throw new BadRequestException('PDF contained no extractable text');
     }
 
-    return this.create({ assignmentId, content: rawText });
+    return this.create({ assignmentId, content: rawText }, studentId);
   }
 
   findAll(status?: string, assignmentId?: string) {
