@@ -10,7 +10,9 @@
 2. `backend-specs.md` — this repo's structure and conventions
 
 ## Project
-EduAI backend. NestJS + Prisma + Postgres/pgvector (Supabase) + OpenAI SDK.
+EduAI backend. NestJS + Prisma + Postgres/pgvector (Supabase) + Custom LLM
+provider (ITI API gateway) + HuggingFace embeddings (1024-dim) + Supabase
+Auth (to be wired) + Supabase Storage (file uploads).
 Modular monolith — one module per feature (see `backend-specs.md`).
 
 ## Current sprint — End-to-end pipeline + notifications + reports + dashboard
@@ -42,6 +44,13 @@ Modular monolith — one module per feature (see `backend-specs.md`).
 
 | Module | Role |
 |---|---|
+| `auth/` | Supabase JWT guard, role guard, `@Roles()` decorator |
+| `guardians/` | Guardian-student linking, parent dashboard data |
+| `attendance/` | Import + view endpoints |
+| `analysis/` | Existing overall-grade Analysis Agent + `criterion-detector.ts` + `report-generator.ts` |
+| `notifications/` | NotificationService (email + push), Notification model |
+| `materials/` | Supabase Storage integration for original file preservation |
+| `dashboard/` | Unified `GET /dashboard/overview` — role-aware aggregation |
 | `rubrics/` | CRUD, PDF import (Prompt Factory), confirm + embed criteria |
 | `common/llm/` | Single `LlmService` wrapping OpenAI SDK — all agents call through this |
 | `common/pii/` | Redact student name/ID before any LLM call |
@@ -91,6 +100,7 @@ Modular monolith — one module per feature (see `backend-specs.md`).
 ## Commands
 - `docker compose up -d` — local Postgres+pgvector
 - `npx prisma migrate dev` — apply schema changes
+- `npx prisma db seed` — seed test data (teacher, student, 3 classes, etc.)
 - `npm run start:dev` — dev server
 - `npm run lint` / `npm run test` / `npm run build` — same checks CI runs
 
@@ -104,6 +114,8 @@ at stable checkpoints. Never push directly to `dev` or `main`.
 - A grade is real only when `isConfirmed = true` — nothing downstream may
   treat an unconfirmed suggestion as real data
 - Analysis Agent's trigger is plain code, never a prompt
+- Criterion Detector's trigger is plain code, never a prompt
+- Reports are auto-sent on generation — no manual approval gate in MVP
 - Controllers stay thin; no Prisma calls outside a service
 
 ## Working from a GitHub issue

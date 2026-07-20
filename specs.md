@@ -95,8 +95,15 @@ Four roles: **Teacher**, **Student**, **Guardian**, **Admin**.
   prompt.** If you find yourself writing a prompt that asks an LLM "is this
   student struggling," stop — that logic belongs in code, per §3.4.
 - **Every citation in a grading response must point to a real
-  `RubricCriterion.id`** the retrieval step actually returned — never a
-  criterion the LLM recalls from training or invents.
+   `RubricCriterion.id`** the retrieval step actually returned — never a
+   criterion the LLM recalls from training or invents.
+- **Criterion pattern detection trigger is plain code, not a prompt.**
+  The same rule as §3.4 applies: if you find yourself asking an LLM "is
+  this student struggling with grammar," that logic belongs in code.
+- **Reports are auto-sent on generation** — no manual approval gate in MVP.
+  Teacher and management may view all reports via dashboard endpoints.
+- **Attendance data from the mobile app is trusted as-is.** No teacher
+  verification step in MVP.
 
 ## 5. Data model
 
@@ -130,22 +137,25 @@ Two independent retrieval paths, both using pgvector cosine similarity:
    chunked and embedded at upload time into `MaterialChunk`; the Assistant's
    `search_curriculum` tool searches this when generating a quiz or summary.
 
-`Unsupported("vector(1536)")` fields need a raw SQL migration for a
-similarity index — Prisma does not generate this automatically:
+`Unsupported("vector(1024)")` fields need a raw SQL migration for a
+similarity index — Prisma does not generate this automatically (already
+applied in migration `add_hnsw_indexes`):
 ```sql
-CREATE INDEX ON "RubricCriterion" USING hnsw (embedding vector_cosine_ops);
-CREATE INDEX ON "SubmissionChunk" USING hnsw (embedding vector_cosine_ops);
-CREATE INDEX ON "MaterialChunk" USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX ON rubric_criteria USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX ON submission_chunks USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX ON material_chunks USING hnsw (embedding vector_cosine_ops);
 ```
 
 ## 7. Agent architecture — the honest version
 
 | Piece | What it actually is |
-|---|---|
+|---|---|---|
 | Grading Agent | One LLM call, retrieval feeds it, no tool use |
 | Analysis Agent | Plain code decides the flag; LLM only writes the explanation |
 | Assistant Agent | Real tool-calling loop (search_curriculum, create_quiz), max 5 iterations |
 | Orchestrator | Not an LLM at all — deterministic status-transition logic |
+| Criterion Detector | Plain code decides the flag (50% × 2 consecutive); LLM generates three role-specific reports |
+| Notification Dispatcher | Not AI — plain code that calls NotificationService after a report is created |
 
 Do not add tool-calling or autonomy to Grading or Analysis "to make it more
 agentic." Their determinism is a deliberate correctness choice, not a

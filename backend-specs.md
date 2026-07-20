@@ -4,7 +4,8 @@ Read `specs.md` first — this file only covers what's local to this repo.
 
 ## Stack
 NestJS · Prisma · Postgres+pgvector (via Supabase) · Zod (`nestjs-zod`) ·
-Supabase Auth · OpenAI SDK · Jest + Supertest.
+Supabase Auth · HuggingFace embeddings (1024-dim) · Custom LLM provider
+(ITI API gateway) · Supabase Storage · Jest + Supertest.
 
 ## Folder structure — one module per bounded concern, matching specs.md §3
 
@@ -18,15 +19,17 @@ src/
   submissions/     # Submission, SubmissionChunk, status state machine
   grading/         # Grading Agent: retrieval + LLM call + citation
   analysis/        # Analysis Agent: threshold rule + explanation LLM call
+                    # Criterion Detector + Report Generator
   assistant/       # Assistant Agent: tool-calling loop
   alerts/          # CRUD, resolve/dismiss endpoint PATCH /alerts/:id
   notifications/   # Notification model, email (nodemailer), push infra stored
   reports/         # Three-tier report generation (auto-triggered on alert)
   materials/       # ClassMaterial, MaterialChunk, curriculum chunking
   common/
-    llm/           # Single LlmService wrapping the OpenAI SDK — all agents
-                    # call through this, never the SDK directly
+    llm/           # Single LlmService — all agents call through this,
+                    # never the SDK directly
     pii/           # Redaction middleware
+    storage/       # Supabase Storage service (upload, get URL)
     validation/    # Shared Zod schemas + retry-once wrapper
   prisma/          # PrismaService (injectable wrapper), migrations/
 ```
@@ -56,14 +59,14 @@ No Prisma calls inside a controller, ever.
 - **DTOs for every request and response body**, validated with Zod via
   `nestjs-zod`. Never trust `req.body` shape without validation.
 - **All LLM calls go through `common/llm/LlmService`.** Never call the
-  OpenAI SDK directly from a feature module — this is what makes the
+  LLM provider directly from a feature module — this is what makes the
   Zod-validate-and-retry pattern (specs.md §4) and PII redaction
   consistent across every agent instead of reimplemented five times.
 
 ## Environment
 
 `.env` (gitignored): `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`,
-`OPENAI_API_KEY`. Real values live only in Render's dashboard for deployed
+`CUSTOM_PROVIDER_BASE_URL`, `HF_TOKEN`. Real values live only in deployed
 environments — never committed, never hardcoded, never logged.
 
 ## API contract — how the frontend knows what exists
@@ -95,7 +98,7 @@ type generation.
 ## Local dev
 
 `docker compose up -d` (Postgres+pgvector) → `npx prisma migrate dev` →
-`npm run start:dev`. If this sequence changes, update this section — an
-agent following a stale setup section will waste a session debugging an
-environment that no longer matches reality.
+`npx prisma db seed` → `npm run start:dev`. If this sequence changes,
+update this section — an agent following a stale setup section will waste
+a session debugging an environment that no longer matches reality.
 
