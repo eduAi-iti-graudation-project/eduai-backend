@@ -21,11 +21,10 @@ src/
   analysis/        # Analysis Agent: threshold rule + explanation LLM call
                     # Criterion Detector + Report Generator
   assistant/       # Assistant Agent: tool-calling loop
-  attendance/      # Mobile app batch import, view endpoints
-  guardians/       # Guardian-student linking, parent dashboard data
-  admin/           # Admin-specific endpoints (teacher performance, reports)
-  notifications/   # NotificationService (email + push), Notification model
-  materials/       # Material, MaterialChunk, curriculum chunking, file upload
+  alerts/          # CRUD, resolve/dismiss endpoint PATCH /alerts/:id
+  notifications/   # Notification model, email (nodemailer), push infra stored
+  reports/         # Three-tier report generation (auto-triggered on alert)
+  materials/       # ClassMaterial, MaterialChunk, curriculum chunking
   common/
     llm/           # Single LlmService — all agents call through this,
                     # never the SDK directly

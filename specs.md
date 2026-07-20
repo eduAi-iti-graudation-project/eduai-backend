@@ -16,13 +16,7 @@ word. Once enough grades are confirmed for a student, a deterministic rule
 (not an AI judgment call) flags them as needing attention, and an AI call
 writes a plain-language explanation of why.
 
-Four roles: **Teacher**, **Student**, **Guardian** (parent/guardian), **Admin** (school management/IT).
-
-Attendance is tracked via a mobile app (fingerprint-based) that sends daily
-batch data to the API. Parents can view their children's attendance and
-academic reports. When a student repeatedly scores low on the same rubric
-criterion, a deterministic rule triggers a three-tier report (parent /
-teacher / management) delivered automatically via email.
+Four roles: **Teacher**, **Student**, **Guardian**, **Admin**.
 
 ## 2. Repos
 
@@ -68,39 +62,24 @@ teacher / management) delivered automatically via email.
    must be deterministic and testable, never an AI "decision."
 7. **Vision/OCR submissions (stretch goal)** — photo of handwritten work,
    graded via a vision-capable LLM call. Build only after 1–6 are solid.
-8. **Attendance Tracking** — a mobile app (fingerprint-based) sends
-   attendance data to the API in batches per (class, date). Records are
-   upserted on `@@unique([studentId, classId, date])` for idempotency.
-   Teachers and parents view attendance records via dashboard endpoints.
-9. **Criterion-Specific Pattern Detection** — a deterministic function
-   checks every newly confirmed `GradingScore`: if the same rubric criterion
-   scored below 50% of `maxPoints` for 2 consecutive submissions, it flags
-   the student. This is plain code — same philosophy as §3.4. It is separate
-   from the Analysis Agent (§3.4), which checks overall grade averages.
-10. **Three-Tier Report Generation** — when a criterion pattern is detected,
-    an LLM generates three role-specific reports in a single call:
-    - **Parent report**: overall performance summary + at-home improvement
-      suggestions
-    - **Teacher report**: what went wrong + instructional recommendations
-      based on the assignment content and class curriculum
-    - **Management report**: honest evaluation of the teacher's performance
-      — what worked and what didn't — based on the teacher's assignments,
-      rubrics, and student outcomes across their classes
-11. **Notification Delivery** — reports are auto-sent via email (SMTP /
-     nodemailer) to the student's guardians, the teacher, and the school
-     admin. Push notification infrastructure (FCM token storage) is built
-     into the `NotificationService` but only email is wired in MVP.
-12. **Unified Dashboard** — a single `GET /dashboard/overview` endpoint
-     returns a role-specific dashboard payload. The authenticated user's
-     role (TEACHER / STUDENT / GUARDIAN / ADMIN) determines the shape:
-     - **Teacher**: class summaries, pending confirmations, recent alerts,
-       submissions needing review, pending reports
-     - **Student**: upcoming assignments, recent confirmed grades,
-       attendance rate, active alerts
-     - **Guardian**: each linked child's overall performance, attendance
-       rate, active reports and alerts
-     - **Admin**: teacher list with class averages, flagged student counts,
-       school-wide statistics, all management-tier reports
+8. **Auto-grade on Submission** — when a student submits, the grading agent
+   runs immediately (fire-and-forget in background). The student never sees
+   AI grades; only the teacher sees them during review. Teacher is notified
+   when grading finishes.
+9. **Bulk Grade Confirmation** — teacher edits AI-suggested scores, clicks
+   one "Confirm All" button. All scores for that submission atomically
+   set `isConfirmed = true`, submission status → `CONFIRMED`.
+10. **Three-Tier Reports** — when an Alert is created, a single LLM call
+    auto-generates three report sections (parent-friendly, teacher-detailed,
+    management-summary) stored in a `StudentReport` row.
+11. **Notification Delivery** — reports and grading-complete events are
+    auto-sent via email (nodemailer) to teachers, guardians, and admins.
+    Push notification infrastructure (FCM token storage) is built into the
+    `NotificationService` but only email is wired in MVP.
+12. **Unified Dashboard** — single `GET /dashboard/overview` endpoint returns
+    role-specific data (teacher: class summaries + pending confirmations;
+    student: upcoming assignments + confirmed grades; guardian: child overview;
+    admin: school-wide stats).
 
 ## 4. Non-negotiable rules (violating these is a bug, not a style choice)
 
@@ -129,44 +108,19 @@ teacher / management) delivered automatically via email.
 ## 5. Data model
 
 Canonical schema is `schema.prisma` in the backend repo. Key entities:
-`User` (role in `UserRole` enum: TEACHER, STUDENT, GUARDIAN, ADMIN),
-`Class`, `Enrollment`, `Rubric` → `RubricCriterion` (has
-`embedding vector(1024)`), `Assignment`, `Submission` (status:
-SUBMITTED → GRADING_IN_PROGRESS → REVIEW_READY → CONFIRMED) →
-`SubmissionChunk` (has `embedding vector(1024)`), `GradingScore`
-(pointsAwarded, aiFeedback, teacherNotes, `isConfirmed` flag,
-`@@unique([submissionId, criteriaId])`), `Material` →
-`MaterialChunk` (curriculum RAG for the Assistant Agent), `Alert`
-(type, reason, status), plus:
+`User` (role: TEACHER/STUDENT/GUARDIAN/ADMIN), `Class`, `Enrollment`,
+`Rubric` → `RubricCriterion` (has `embedding vector(1024)`), `Assignment`,
+`Submission` (status: SUBMITTED → GRADING_IN_PROGRESS → REVIEW_READY →
+CONFIRMED) → `SubmissionChunk` (has `embedding vector(1024)`),
+`GradingScore` (suggested + confirmed score/feedback in one row,
+`isConfirmed` flag), `Material` → `MaterialChunk` (curriculum RAG for
+Assistant Agent), `Alert` (type, reason, status), `Notification` (user,
+type, channel, read status), `StudentReport` (three-section LLM output per
+alert), `DeviceToken` (FCM push tokens), `Attendance` (student, class,
+date, status).
 
-- **`GuardianStudent`** — links a guardian (`User.role = GUARDIAN`) to
-  one or more students. Enables a parent dashboard with attendance +
-  report data for their children.
-- **`Attendance`** — per-student daily attendance record:
-  `(studentId, classId, date, status: PRESENT/ABSENT/LATE/EXCUSED)` with
-  `@@unique([studentId, classId, date])`.
-- **`StudentReport`** — generated when a criterion pattern is detected.
-  Stores type (`CRITERION_FLAG`), `details` JSON (the three role-specific
-  report texts), and status (`PENDING / SENT`).
-- **`Notification`** — audit log of sent reports. Stores `reportId`,
-  `recipientType` (PARENT / TEACHER / ADMIN), `recipientEmail`, `channel`
-  (EMAIL / PUSH), status (`SENT / FAILED`).
-- **`PushToken`** — device tokens for push notifications:
-  `(userId, token, platform)`.
-
-**File storage (Supabase Storage):**
-- `Material.fileUrl` stores the Supabase Storage URL of the uploaded PDF.
-  The extracted text goes into `MaterialChunk.content` for RAG; the
-  original PDF is preserved for download.
-- `Submission` and `Rubric` imported PDFs: text is extracted and stored
-  in DB; the original file is discarded. Students submit via text
-  (browser), not file upload.
-
-Embeddings: **HuggingFace `mixedbread-ai/mxbai-embed-large-v1`, 1024
-dimensions.** Stored via `Unsupported("vector(1024)")` in Prisma and raw
-SQL `$executeRawUnsafe` with `::vector` cast. Chat LLM is a custom
-provider at `CUSTOM_PROVIDER_BASE_URL` (ITI API gateway), model
-`openai.gpt-oss-20b-1:0`.
+Embeddings: **OpenAI, 1536 dimensions.** This is a locked decision — do not
+switch embedding providers without a schema migration.
 
 ## 6. RAG design
 

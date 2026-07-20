@@ -15,32 +15,33 @@ provider (ITI API gateway) + HuggingFace embeddings (1024-dim) + Supabase
 Auth (to be wired) + Supabase Storage (file uploads).
 Modular monolith — one module per feature (see `backend-specs.md`).
 
-## Current sprint — Criterion Pattern Detection + Reporting
+## Current sprint — End-to-end pipeline + notifications + reports + dashboard
 
-The core grading pipeline (rubrics → submit → grade → confirm → analysis) is
-complete in `dev`. We're now building three new features:
+### Pipeline (in execution order)
 
-1. **Supabase Auth integration** — auth guard, roles guard, `@Roles()`
-   decorator. Replaces placeholder UUIDs with the authenticated user's ID
-   everywhere. Blocks all new features below until done.
-2. **Schema additions** — `GuardianStudent`, `Attendance`, `StudentReport`,
-   `Notification`, `PushToken`, `ADMIN` and `GUARDIAN` roles in `UserRole`
-   enum, Supabase Storage integration for `Material.fileUrl`.
-3. **Attendance module** — `POST /attendance/import` (mobile app batch),
-   `GET /students/:id/attendance`, `GET /classes/:id/attendance`.
-4. **Criterion Pattern Detector** — deterministic function that checks every
-   confirmed `GradingScore`: same criterion, < 50% of maxPoints, 2
-   consecutive submissions → flag.
-5. **Three-Tier Report Generation** — LLM generates parent, teacher, and
-   management reports per flag in a single call.
-6. **Notification Service** — email delivery (nodemailer), push infra (FCM
-   model + token storage, channel stored but not wired in MVP).
-7. **Unified Dashboard** — single `GET /dashboard/overview` endpoint that
-   auto-detects the user's role (via auth guard) and returns role-specific
-   data (teacher class summaries, student grades + attendance, guardian
-   children overview, admin school stats).
+1. **Teacher creates assignment + rubric** — manual form or PDF import → AI
+   extracts criteria (Prompt Factory) → teacher reviews/edits → confirms
+2. **On rubric confirm** → each criterion's `description` embedded (1024 dim)
+   via HuggingFace `mxbai-embed-large-v1` stored in `RubricCriteria.embedding`
+3. **Student submits** — text paste or PDF upload → raw text chunked
+   (~300-500 tokens, paragraph-aware, ~50 token overlap) → `SubmissionChunk`
+   rows created
+4. **Auto-grade fires** (fire-and-forget inside
+   `SubmissionsService.create()`) → `GradingService.gradeSubmission()` runs
+   synchronously in background, status `SUBMITTED → GRADING_IN_PROGRESS →
+   REVIEW_READY` → teacher notified via email
+5. **Teacher reviews** — opens submission, sees per-criterion AI scores +
+   feedback, edits any points/notes
+6. **Teacher confirms all** — `PATCH /grades/confirm-all/:submissionId`
+   atomically sets all `GradingScore.isConfirmed = true`, status →
+   `CONFIRMED`
+7. **On confirm** → `AnalysisService.evaluateStudent()` runs threshold check
+   → if flagged, `Alert` created → `ReportService.generate()` auto-creates
+   three-tier report (parent/teacher/management) via single LLM call →
+   `NotificationService` emails relevant parties
 
-### Modules involved
+### Modules
+
 | Module | Role |
 |---|---|
 | `auth/` | Supabase JWT guard, role guard, `@Roles()` decorator |
@@ -51,25 +52,50 @@ complete in `dev`. We're now building three new features:
 | `materials/` | Supabase Storage integration for original file preservation |
 | `dashboard/` | Unified `GET /dashboard/overview` — role-aware aggregation |
 | `rubrics/` | CRUD, PDF import (Prompt Factory), confirm + embed criteria |
-| `common/llm/` | Single `LlmService` — all agents call through this (PII + Zod retry) |
-| `common/storage/` | Supabase Storage service (upload, get URL) |
+| `common/llm/` | Single `LlmService` wrapping OpenAI SDK — all agents call through this |
 | `common/pii/` | Redact student name/ID before any LLM call |
-| `common/validation/` | Shared Zod schemas, retry-once wrapper for LLM structured output |
-| `submissions/` | Student submit, chunking logic, embed chunks |
-| `grading/` | Grading Agent: similarity-search retrieval + LLM call + per-criterion scoring |
+| `common/chunker/` | Shared `chunkText()` — paragraph-aware, configurable token window |
+| `submissions/` | Student submit, chunking, auto-trigger grading via fire-and-forget |
+| `grading/` | Grading Agent + `confirmAll()` bulk endpoint |
+| `analysis/` | Deterministic threshold rule + alert creation |
+| `reports/` | Three-tier report generation (triggered on alert creation) |
+| `notifications/` | Email delivery (nodemailer), `Notification` model, push infra stored |
+| `assistant/` | Tool-calling loop (search_curriculum, create_quiz) |
+| `alerts/` | CRUD including `PATCH /alerts/:id` (resolve/dismiss) |
+| `materials/` | `ClassMaterial`, `MaterialChunk`, curriculum chunking + search |
+| `dashboard/` | Unified `GET /dashboard/overview` — role-aware aggregation |
+| `common/validation/` | Shared Zod schemas + retry-once wrapper for LLM structured output |
 
-### Architecture notes
-- **Embedding model:** `mixedbread-ai/mxbai-embed-large-v1` → 1024-dim vectors
-  via HuggingFace (`hfEmbed`). Not OpenAI.
-- **Chat model:** Custom provider at `CUSTOM_PROVIDER_BASE_URL` (ITI API
-  gateway), model `openai.gpt-oss-20b-1:0`.
-- **Chunker:** Shared in `src/common/chunker.ts`. MAX_CHARS=2000,
-  MIN_CHARS=1200, OVERLAP_CHARS=200.
-- **File storage:** Original PDFs for materials go to Supabase Storage.
-  Submissions are text-only. Rubric PDFs are discarded after text extraction.
-- **Auth:** Not yet wired. All endpoints use placeholder
-  `00000000-0000-0000-0000-000000000000` UUID. Feature branch `feat/auth`
-  should integrate Supabase Auth before any new feature goes to production.
+### Schema additions
+
+- `UserRole` enum: `TEACHER`, `STUDENT`, `GUARDIAN`, `ADMIN`
+- `Notification { id, userId, type, channel (EMAIL\|PUSH), title, body, readAt?, createdAt }`
+- `StudentReport { id, studentId, alertId, parentSection, teacherSection, managementSection, createdAt }`
+- `DeviceToken { id, userId, token, platform, createdAt }`
+- `Attendance { id, studentId, classId, date, status (PRESENT\|ABSENT\|LATE\|EXCUSED), createdAt }`
+
+### Key decisions
+
+- Auto-grade is fire-and-forget: `SubmissionsService.create()` calls
+  `gradingService.gradeSubmission(id)` without `await`. Student gets instant
+  response, grading runs in background, teacher notified on completion.
+- Student never sees AI grades — only the teacher sees them during review.
+  Confirmed grades are visible to students via `GET /students/:id/grades`.
+- Reports auto-trigger on alert creation — no manual gate in MVP.
+- All 4 roles have separate dashboard views via `GET /dashboard/overview`.
+- Auth uses placeholder UUID; teammate wires Supabase Auth later.
+
+### Status
+
+| # | What | Status |
+|---|---|---|
+| 1 | Auto-grade on Submit (fire-and-forget) | ⬜ Not started |
+| 2 | Notification Service (nodemailer + model) | ⬜ Not started |
+| 3 | Alert resolution endpoint PATCH /alerts/:id | ⬜ Not started |
+| 4 | Three-tier Report generation | ⬜ Not started |
+| 5 | Bulk confirm endpoint PATCH /grades/confirm-all/:submissionId | ⬜ Not started |
+| 6 | Prisma schema: GUARDIAN/ADMIN roles + new models | ⬜ Not started |
+| 7 | Role guards for GUARDIAN + ADMIN | ⬜ Not started |
 
 ## Commands
 - `docker compose up -d` — local Postgres+pgvector
