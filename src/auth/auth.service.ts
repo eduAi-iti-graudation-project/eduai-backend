@@ -9,7 +9,7 @@ export class AuthService {
     email: string;
     password: string;
     name: string;
-    role: 'TEACHER' | 'STUDENT';
+    role: 'TEACHER' | 'STUDENT' | 'GUARDIAN' | 'ADMIN';
   }) {
     return this.prisma.user.create({
       data: { email: dto.email, name: dto.name, role: dto.role },
