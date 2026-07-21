@@ -23,6 +23,7 @@ export class RubricsController {
 
   @Roles('TEACHER')
   @Post()
+  @Roles('TEACHER', 'ADMIN')
   @ApiOperation({ summary: 'Create a rubric with criteria' })
   @ApiBody({ type: CreateRubricDto })
   create(@Body() dto: CreateRubricDto) {
@@ -45,6 +46,7 @@ export class RubricsController {
 
   @Roles('TEACHER')
   @Patch(':id/confirm')
+  @Roles('TEACHER', 'ADMIN')
   @ApiOperation({ summary: 'Confirm a rubric (enables grading against it)' })
   confirm(@Param('id') id: string) {
     return this.rubricsService.confirm(id);
@@ -52,6 +54,7 @@ export class RubricsController {
 
   @Roles('TEACHER')
   @Post('import-pdf')
+  @Roles('ADMIN')
   @UseInterceptors(
     FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } }),
   )

@@ -1,81 +1,64 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { LlmService } from '../common/llm/llm.service';
-import { shouldFlagStudent } from './threshold';
-import { ExplanationSchema } from './dto';
+import { ReportsService } from '../reports/reports.service';
 
 @Injectable()
 export class AnalysisService {
+  private readonly logger = new Logger(AnalysisService.name);
+
   constructor(
     private readonly prisma: PrismaService,
-    private readonly llm: LlmService,
+    private readonly reportsService: ReportsService,
   ) {}
 
   async evaluateStudent(studentId: string): Promise<void> {
-    const scores = await this.prisma.gradingScore.findMany({
+    const lastThreeConfirmed = await this.prisma.gradingScore.findMany({
       where: {
         submission: { studentId },
         isConfirmed: true,
       },
-      include: {
-        criteria: true,
-        submission: { include: { assignment: true } },
-      },
+      include: { submission: true },
+      orderBy: { submission: { createdAt: 'desc' } },
+      take: 3,
     });
 
-    if (scores.length === 0) return;
+    if (lastThreeConfirmed.length < 2) return;
 
-    const grouped = this.groupBySubmission(scores);
-    const percentages = grouped.map(
-      (g) => (g.totalAwarded / g.totalPossible) * 100,
-    );
+    const scores = lastThreeConfirmed.map((s) => s.pointsAwarded);
+    const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
+    const maxPoints = 10;
+    const avgPct = (avg / maxPoints) * 100;
 
-    const result = shouldFlagStudent(percentages);
-    if (!result.flagged) return;
+    let alertType: string | null = null;
 
-    const existingAlerts = await this.prisma.alert.count({
-      where: { studentId, status: 'ACTIVE' },
-    });
-
-    const alertType = existingAlerts > 0 ? 'CONSISTENT_STRUGGLE' : result.type;
-
-    const explanation = await this.llm.generateStructured({
-      systemPrompt:
-        'You are an academic advisor. Given a student recent grade history, write exactly one paragraph explaining why the student was flagged. Be specific and constructive.',
-      userPrompt: `Student flagged as ${alertType}. Recent submission percentages: ${percentages.join(', ')}%`,
-      schema: ExplanationSchema,
-    });
-
-    await this.prisma.alert.create({
-      data: {
-        studentId,
-        type: alertType,
-        reason: explanation.reason,
-        status: 'ACTIVE',
-      },
-    });
-  }
-
-  private groupBySubmission(
-    scores: {
-      pointsAwarded: number;
-      criteria: { maxPoints: number };
-      submissionId: string;
-    }[],
-  ) {
-    const map = new Map<
-      string,
-      { totalAwarded: number; totalPossible: number }
-    >();
-    for (const s of scores) {
-      const entry = map.get(s.submissionId) ?? {
-        totalAwarded: 0,
-        totalPossible: 0,
-      };
-      entry.totalAwarded += s.pointsAwarded;
-      entry.totalPossible += s.criteria.maxPoints;
-      map.set(s.submissionId, entry);
+    if (avgPct < 60) {
+      alertType = 'FAILING';
+    } else if (
+      scores.length >= 2 &&
+      scores[scores.length - 1] < scores[scores.length - 2]
+    ) {
+      alertType = 'DOWNWARD_TREND';
     }
-    return Array.from(map.values());
+
+    if (alertType) {
+      const alert = await this.prisma.alert.create({
+        data: {
+          type: alertType,
+          reason: `Average of last ${scores.length} confirmed scores is ${avgPct.toFixed(1)}%`,
+          status: 'ACTIVE',
+          studentId,
+        },
+      });
+
+      this.reportsService
+        .generate(studentId, alert.id)
+        .then(() => this.logger.log(`Report generated for alert ${alert.id}`))
+        .catch((err) =>
+          this.logger.error(
+            `Failed to generate report for alert ${alert.id}`,
+            err,
+          ),
+        );
+    }
   }
 }

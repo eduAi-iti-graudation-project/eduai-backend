@@ -20,11 +20,6 @@ const UserSchema = z.object({
   role: z.enum(['TEACHER', 'STUDENT', 'GUARDIAN', 'ADMIN']),
 });
 
-const AuthResponseSchema = z.object({
-  accessToken: z.string(),
-  user: UserSchema,
-});
-
 export class SignupDto extends createZodDto(SignupSchema) {}
 export class LoginDto extends createZodDto(LoginSchema) {}
 export class UserDto extends createZodDto(UserSchema) {}

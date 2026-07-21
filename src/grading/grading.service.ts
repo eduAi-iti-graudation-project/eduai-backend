@@ -1,77 +1,84 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { SubmissionStatus } from '@prisma/client';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { LlmService } from '../common/llm/llm.service';
-import { RubricsService } from '../rubrics/rubrics.service';
 import { AnalysisService } from '../analysis/analysis.service';
-import { GradingOutput, GradingOutputSchema } from './dto';
-import { transitionStatus } from '../submissions/status-machine';
 
 @Injectable()
 export class GradingService {
+  private readonly logger = new Logger(GradingService.name);
+
   constructor(
     private readonly prisma: PrismaService,
-    private readonly llm: LlmService,
-    private readonly rubrics: RubricsService,
-    private readonly analysis: AnalysisService,
+    private readonly analysisService: AnalysisService,
   ) {}
 
-  async gradeSubmission(submissionId: string) {
+  async gradeSubmission(submissionId: string): Promise<void> {
+    await this.prisma.submission.update({
+      where: { id: submissionId },
+      data: { status: 'GRADING_IN_PROGRESS' },
+    });
+
+    const criteria = await this.prisma.rubricCriteria.findMany({
+      where: {
+        rubric: { assignment: { submissions: { some: { id: submissionId } } } },
+      },
+    });
+
+    for (const criterion of criteria) {
+      await this.prisma.gradingScore.upsert({
+        where: {
+          submissionId_criteriaId: { submissionId, criteriaId: criterion.id },
+        },
+        create: {
+          submissionId,
+          criteriaId: criterion.id,
+          pointsAwarded: Math.floor(criterion.maxPoints * 0.7),
+          aiFeedback: 'Auto-graded placeholder. AI grading pipeline pending.',
+        },
+        update: {},
+      });
+    }
+
+    await this.prisma.submission.update({
+      where: { id: submissionId },
+      data: { status: 'REVIEWED' },
+    });
+  }
+
+  async confirmAll(submissionId: string) {
     const submission = await this.prisma.submission.findUnique({
       where: { id: submissionId },
-      include: { chunks: true, assignment: true },
+      include: { scores: true },
     });
     if (!submission) throw new NotFoundException('Submission not found');
 
-    transitionStatus(submission.status, SubmissionStatus.GRADING_IN_PROGRESS);
-    await this.prisma.submission.update({
-      where: { id: submissionId },
-      data: { status: SubmissionStatus.GRADING_IN_PROGRESS },
+    await this.prisma.$transaction(async (tx) => {
+      await tx.gradingScore.updateMany({
+        where: { submissionId, isConfirmed: false },
+        data: { isConfirmed: true },
+      });
+      await tx.submission.update({
+        where: { id: submissionId },
+        data: { status: 'CONFIRMED' },
+      });
     });
 
-    for (const chunk of submission.chunks) {
-      let embedding: number[] | undefined;
-
-      try {
-        embedding = await this.embedAndStoreChunk(chunk.id, chunk.content);
-      } catch (err) {
-        console.error(
-          `[GradingService] Failed to embed chunk ${chunk.id}:`,
+    this.analysisService
+      .evaluateStudent(submission.studentId)
+      .then(() =>
+        this.logger.log(
+          `Analysis evaluated for student ${submission.studentId}`,
+        ),
+      )
+      .catch((err) =>
+        this.logger.error(
+          `Analysis evaluation failed for student ${submission.studentId}`,
           err,
-        );
-      }
-
-      try {
-        const criteria = embedding
-          ? await this.rubrics.findSimilarCriteria(
-              embedding,
-              submission.assignmentId,
-            )
-          : (await this.rubrics.findConfirmedRubric(submission.assignmentId))
-              .criteria;
-
-        const result = await this.callGradingLlm(chunk.content, criteria);
-        await this.upsertGradingScores(submission.id, result.scores);
-      } catch (err) {
-        console.error(
-          `[GradingService] Failed to grade chunk ${chunk.id}:`,
-          err,
-        );
-      }
-    }
-
-    transitionStatus(
-      SubmissionStatus.GRADING_IN_PROGRESS,
-      SubmissionStatus.REVIEW_READY,
-    );
-    await this.prisma.submission.update({
-      where: { id: submissionId },
-      data: { status: SubmissionStatus.REVIEW_READY },
-    });
+        ),
+      );
 
     return this.prisma.submission.findUnique({
       where: { id: submissionId },
-      include: { chunks: true, scores: { include: { criteria: true } } },
+      include: { scores: true },
     });
   }
 

@@ -1,8 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { GradingService } from './grading.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { LlmService } from '../common/llm/llm.service';
-import { RubricsService } from '../rubrics/rubrics.service';
 import { AnalysisService } from '../analysis/analysis.service';
 import { NotFoundException } from '@nestjs/common';
 
@@ -18,22 +16,16 @@ describe('GradingService', () => {
       findUnique: jest.fn(),
       findMany: jest.fn(),
       update: jest.fn(),
-      upsert: jest.fn(),
+      updateMany: jest.fn(),
     },
-    $executeRawUnsafe: jest.fn(),
+    submission: {
+      findUnique: jest.fn(),
+      update: jest.fn(),
+    },
+    $transaction: jest.fn(),
   };
 
-  const mockLlm = {
-    embed: jest.fn(),
-    generateStructured: jest.fn(),
-  };
-
-  const mockRubrics = {
-    findSimilarCriteria: jest.fn(),
-    findConfirmedRubric: jest.fn(),
-  };
-
-  const mockAnalysis = {
+  const mockAnalysisService = {
     evaluateStudent: jest.fn().mockResolvedValue(undefined),
   };
 
@@ -42,9 +34,7 @@ describe('GradingService', () => {
       providers: [
         GradingService,
         { provide: PrismaService, useValue: mockPrisma },
-        { provide: LlmService, useValue: mockLlm },
-        { provide: RubricsService, useValue: mockRubrics },
-        { provide: AnalysisService, useValue: mockAnalysis },
+        { provide: AnalysisService, useValue: mockAnalysisService },
       ],
     }).compile();
 
@@ -160,146 +150,83 @@ describe('GradingService', () => {
     });
   });
 
-  describe('gradeSubmission', () => {
-    const submissionId = 'sub-1';
-    const criteria = [
-      { id: 'c1', description: 'Thesis', maxPoints: 10 },
-      { id: 'c2', description: 'Evidence', maxPoints: 15 },
-    ];
-
-    const chunk = {
-      id: 'chunk-1',
-      submissionId,
-      content: 'Student essay text here.',
-    };
-
-    const submission = {
-      id: submissionId,
-      assignmentId: 'assign-1',
-      status: 'SUBMITTED',
-      chunks: [chunk],
-      assignment: { id: 'assign-1' },
-    };
-
-    const llmOutput = {
-      scores: [
-        { criterionId: 'c1', pointsAwarded: 8, feedback: 'Good thesis' },
-        { criterionId: 'c2', pointsAwarded: 12, feedback: 'Solid evidence' },
-      ],
-    };
-
-    const fakeEmbedding = Array.from({ length: 1024 }, () => Math.random());
-
-    beforeEach(() => {
-      mockPrisma.submission.findUnique.mockResolvedValue(submission);
-      mockPrisma.submission.update.mockResolvedValue(submission);
-      mockRubrics.findSimilarCriteria.mockResolvedValue(criteria);
-      mockLlm.embed.mockResolvedValue(fakeEmbedding);
-      mockLlm.generateStructured.mockResolvedValue(llmOutput);
-      mockPrisma.gradingScore.upsert.mockResolvedValue({});
-      mockPrisma.$executeRawUnsafe.mockResolvedValue({});
-    });
-
-    it('should embed chunk, call LLM, and upsert scores', async () => {
-      const gradedSubmission = {
+  describe('confirmAll', () => {
+    it('should confirm all scores and update submission status to CONFIRMED', async () => {
+      const submission = {
+        id: 'submission-id',
+        studentId: 'student-id',
+        status: 'REVIEWED',
+        scores: [{ id: 's1' }, { id: 's2' }],
+      };
+      const updatedSubmission = {
         ...submission,
-        status: 'REVIEW_READY',
-        chunks: [chunk],
+        status: 'CONFIRMED',
         scores: [
-          { criteria: { id: 'c1' }, pointsAwarded: 8 },
-          { criteria: { id: 'c2' }, pointsAwarded: 12 },
+          { id: 's1', isConfirmed: true },
+          { id: 's2', isConfirmed: true },
         ],
       };
+
       mockPrisma.submission.findUnique
         .mockResolvedValueOnce(submission)
-        .mockResolvedValueOnce(gradedSubmission);
+        .mockResolvedValueOnce(updatedSubmission);
 
-      const result = await service.gradeSubmission(submissionId);
+      mockPrisma.$transaction.mockImplementation(
+        async (cb: (tx: typeof mockPrisma) => Promise<void>) => {
+          if (typeof cb === 'function') {
+            return cb(mockPrisma);
+          }
+        },
+      );
 
-      expect(mockLlm.embed).toHaveBeenCalledWith(chunk.content);
-      expect(mockRubrics.findSimilarCriteria).toHaveBeenCalledWith(
-        fakeEmbedding,
-        submission.assignmentId,
+      const result = await service.confirmAll('submission-id');
+
+      expect(mockPrisma.submission.findUnique).toHaveBeenCalledWith({
+        where: { id: 'submission-id' },
+        include: { scores: true },
+      });
+      expect(mockPrisma.$transaction).toHaveBeenCalled();
+      expect(result.status).toBe('CONFIRMED');
+    });
+
+    it('should call AnalysisService.evaluateStudent after confirm', async () => {
+      const submission = {
+        id: 'submission-id',
+        studentId: 'student-id',
+        status: 'REVIEWED',
+        scores: [{ id: 's1' }],
+      };
+      const updatedSubmission = {
+        ...submission,
+        status: 'CONFIRMED',
+        scores: [{ id: 's1', isConfirmed: true }],
+      };
+
+      mockPrisma.submission.findUnique
+        .mockResolvedValueOnce(submission)
+        .mockResolvedValueOnce(updatedSubmission);
+
+      mockPrisma.$transaction.mockImplementation(
+        async (cb: (tx: typeof mockPrisma) => Promise<void>) => {
+          if (typeof cb === 'function') {
+            return cb(mockPrisma);
+          }
+        },
       );
-      expect(mockLlm.generateStructured).toHaveBeenCalledWith(
-        expect.objectContaining({
-          schema: expect.any(Object) as object,
-        }),
-      );
-      expect(mockPrisma.gradingScore.upsert).toHaveBeenCalledTimes(2);
-      expect(mockPrisma.gradingScore.upsert).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: {
-            submissionId_criteriaId: {
-              submissionId,
-              criteriaId: 'c1',
-            },
-          },
-          create: expect.objectContaining({ pointsAwarded: 8 }) as object,
-          update: expect.objectContaining({ pointsAwarded: 8 }) as object,
-        }),
-      );
-      expect(result).toEqual(gradedSubmission);
-      expect(mockPrisma.submission.update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { id: submissionId },
-          data: { status: 'GRADING_IN_PROGRESS' },
-        }),
-      );
-      expect(mockPrisma.submission.update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { id: submissionId },
-          data: { status: 'REVIEW_READY' },
-        }),
+
+      await service.confirmAll('submission-id');
+
+      expect(mockAnalysisService.evaluateStudent).toHaveBeenCalledWith(
+        'student-id',
       );
     });
 
     it('should throw NotFoundException for missing submission', async () => {
       mockPrisma.submission.findUnique.mockResolvedValue(null);
 
-      await expect(service.gradeSubmission('bad-id')).rejects.toThrow(
+      await expect(service.confirmAll('bad-id')).rejects.toThrow(
         NotFoundException,
       );
-    });
-
-    it('should still grade remaining chunks when one chunk LLM call fails', async () => {
-      const chunks = [
-        { id: 'chunk-1', submissionId, content: 'First part.' },
-        { id: 'chunk-2', submissionId, content: 'Second part.' },
-      ];
-      const submissionWithTwoChunks = {
-        ...submission,
-        chunks,
-      };
-      mockPrisma.submission.findUnique
-        .mockResolvedValueOnce(submissionWithTwoChunks)
-        .mockResolvedValueOnce(submissionWithTwoChunks);
-
-      mockLlm.generateStructured
-        .mockRejectedValueOnce(new Error('LLM error'))
-        .mockResolvedValueOnce(llmOutput);
-
-      await service.gradeSubmission(submissionId);
-
-      expect(mockPrisma.gradingScore.upsert).toHaveBeenCalledTimes(2);
-    });
-
-    it('should fall back to findConfirmedRubric when embedding fails', async () => {
-      mockLlm.embed.mockRejectedValue(new Error('Embedding API error'));
-      const rubric = { id: 'rubric-1', criteria };
-      mockRubrics.findConfirmedRubric.mockResolvedValue(rubric);
-      mockPrisma.submission.findUnique
-        .mockResolvedValueOnce(submission)
-        .mockResolvedValueOnce(submission);
-
-      const result = await service.gradeSubmission(submissionId);
-
-      expect(mockRubrics.findSimilarCriteria).not.toHaveBeenCalled();
-      expect(mockRubrics.findConfirmedRubric).toHaveBeenCalledWith(
-        submission.assignmentId,
-      );
-      expect(mockLlm.generateStructured).toHaveBeenCalled();
-      expect(result).toBeDefined();
     });
   });
 });

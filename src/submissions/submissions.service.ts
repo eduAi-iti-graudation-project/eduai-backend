@@ -1,15 +1,18 @@
-import {
-  Injectable,
-  NotFoundException,
-  BadRequestException,
-} from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { chunkText } from '../common/chunker';
-import pdfParse from 'pdf-parse';
+import { GradingService } from '../grading/grading.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { chunkText } from './chunker';
 
 @Injectable()
 export class SubmissionsService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(SubmissionsService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly gradingService: GradingService,
+    private readonly notificationService: NotificationsService,
+  ) {}
 
   async create(
     dto: { assignmentId: string; content: string },
@@ -30,10 +33,19 @@ export class SubmissionsService {
         })),
       });
     }
-    return this.prisma.submission.findUnique({
-      where: { id: submission.id },
-      include: { chunks: true, scores: true },
-    });
+
+    this.gradingService
+      .gradeSubmission(submission.id)
+      .then(() =>
+        this.notificationService.notifyTeacher(submission, 'GRADING_READY'),
+      )
+      .catch((err) => this.logger.error('Grading failed', err));
+
+    return {
+      id: submission.id,
+      status: submission.status,
+      assignmentId: submission.assignmentId,
+    };
   }
 
   async createFromPdf(buffer: Buffer, assignmentId: string, studentId: string) {

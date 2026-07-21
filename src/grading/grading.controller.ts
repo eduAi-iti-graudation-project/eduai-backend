@@ -18,9 +18,17 @@ export class GradingController {
 
   @Roles('TEACHER')
   @Patch(':id/confirm')
+  @Roles('TEACHER', 'ADMIN')
   @ApiOperation({ summary: 'Confirm a grade (teacher review)' })
   @ApiBody({ type: ConfirmGradeDto })
   confirm(@Param('id') id: string, @Body() dto: ConfirmGradeDto) {
     return this.gradingService.confirm(id, dto);
+  }
+
+  @Patch('confirm-all/:submissionId')
+  @Roles('TEACHER', 'ADMIN')
+  @ApiOperation({ summary: 'Confirm all grades in a submission' })
+  confirmAll(@Param('submissionId') submissionId: string) {
+    return this.gradingService.confirmAll(submissionId);
   }
 }

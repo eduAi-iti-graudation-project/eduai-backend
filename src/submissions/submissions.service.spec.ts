@@ -1,15 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { SubmissionsService } from './submissions.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { NotFoundException, BadRequestException } from '@nestjs/common';
-
-jest.mock('pdf-parse', () => ({
-  __esModule: true,
-  default: jest.fn(),
-}));
-
-import pdfParse from 'pdf-parse';
-const mockPdfParse = pdfParse as jest.Mock;
+import { GradingService } from '../grading/grading.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { NotFoundException } from '@nestjs/common';
 
 describe('SubmissionsService', () => {
   let service: SubmissionsService;
@@ -26,11 +20,25 @@ describe('SubmissionsService', () => {
     },
   };
 
+  const mockGradingService = {
+    gradeSubmission: jest
+      .fn<Promise<void>, [string]>()
+      .mockResolvedValue(undefined),
+  };
+
+  const mockNotificationService = {
+    notifyTeacher: jest
+      .fn<Promise<void>, [unknown, string]>()
+      .mockResolvedValue(undefined),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         SubmissionsService,
         { provide: PrismaService, useValue: mockPrisma },
+        { provide: GradingService, useValue: mockGradingService },
+        { provide: NotificationsService, useValue: mockNotificationService },
       ],
     }).compile();
 
@@ -39,8 +47,7 @@ describe('SubmissionsService', () => {
   });
 
   describe('create', () => {
-    it('should create a submission with chunked content', async () => {
-      const studentId = 'test-student-id';
+    it('should create a submission and fire grading in background', async () => {
       const dto = {
         assignmentId: 'assignment-id',
         content: 'Student submission text.',
@@ -50,23 +57,13 @@ describe('SubmissionsService', () => {
         id: 'submission-id',
         assignmentId: dto.assignmentId,
         studentId: '',
+        status: 'SUBMITTED',
       };
 
       mockPrisma.submission.create.mockResolvedValue(createdSubmission);
       mockPrisma.submissionChunk.createMany.mockResolvedValue({ count: 1 });
-      mockPrisma.submission.findUnique.mockResolvedValue({
-        ...createdSubmission,
-        chunks: [
-          {
-            id: 'chunk-id',
-            submissionId: 'submission-id',
-            content: dto.content,
-          },
-        ],
-        scores: [],
-      });
 
-      const result: unknown = await service.create(dto, studentId);
+      const result = await service.create(dto);
 
       expect(mockPrisma.submission.create).toHaveBeenCalledWith({
         data: {
@@ -82,7 +79,37 @@ describe('SubmissionsService', () => {
           },
         ],
       });
-      expect(result.chunks).toHaveLength(1);
+
+      expect(mockGradingService.gradeSubmission).toHaveBeenCalledWith(
+        'submission-id',
+      );
+      expect(result).toEqual({
+        id: 'submission-id',
+        status: 'SUBMITTED',
+        assignmentId: 'assignment-id',
+      });
+    });
+
+    it('should not await grading result - returns immediately', async () => {
+      const dto = {
+        assignmentId: 'assignment-id',
+        content: 'Student submission text.',
+      };
+
+      const createdSubmission = {
+        id: 'submission-id',
+        assignmentId: dto.assignmentId,
+        studentId: '',
+        status: 'SUBMITTED',
+      };
+
+      mockPrisma.submission.create.mockResolvedValue(createdSubmission);
+      mockPrisma.submissionChunk.createMany.mockResolvedValue({ count: 1 });
+
+      const result = await service.create(dto);
+
+      expect(mockGradingService.gradeSubmission).toHaveBeenCalled();
+      expect(result).not.toHaveProperty('scores');
     });
   });
 

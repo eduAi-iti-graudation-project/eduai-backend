@@ -15,18 +15,22 @@ enum UserRole {
   ADMIN
 }
 
+enum NotificationChannel {
+  EMAIL
+  PUSH
+}
+
+enum AlertStatus {
+  ACTIVE
+  RESOLVED
+  DISMISSED
+}
+
 enum SubmissionStatus {
   SUBMITTED
   GRADING_IN_PROGRESS
-  REVIEW_READY
+  REVIEWED
   CONFIRMED
-}
-
-enum AttendanceStatus {
-  PRESENT
-  ABSENT
-  LATE
-  EXCUSED
 }
 
 model User {
@@ -44,6 +48,10 @@ model User {
   attendance    Attendance[]
   submissions   Submission[]
   alerts        Alert[]
+  notifications Notification[]
+  reports       StudentReport[]
+  deviceTokens  DeviceToken[]
+  attendance    Attendance[]
 
   @@map("users")
 }
@@ -62,6 +70,7 @@ model Class {
   attendance  Attendance[]
   materials   Material[]
   assignments Assignment[]
+  attendance  Attendance[]
 
   @@map("classes")
 }
@@ -227,12 +236,71 @@ model Alert {
   id        String   @id @default(uuid()) @db.Uuid
   type      String
   reason    String
-  status    String   @default("ACTIVE")
+  status    AlertStatus @default(ACTIVE)
   studentId String   @db.Uuid
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  student User @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  student   User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  reports   StudentReport[]
 
   @@map("alerts")
+}
+
+model Notification {
+  id        String              @id @default(uuid()) @db.Uuid
+  userId    String              @db.Uuid
+  type      String
+  channel   NotificationChannel
+  title     String
+  body      String?
+  readAt    DateTime?
+  createdAt DateTime            @default(now())
+
+  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notifications")
+}
+
+model StudentReport {
+  id                 String   @id @default(uuid()) @db.Uuid
+  studentId          String   @db.Uuid
+  alertId            String   @db.Uuid
+  parentSection      String
+  teacherSection     String
+  managementSection  String
+  createdAt          DateTime @default(now())
+
+  student            User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  alert              Alert    @relation(fields: [alertId], references: [id], onDelete: Cascade)
+
+  @@map("student_reports")
+}
+
+model DeviceToken {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  token     String
+  platform  String   @default("unknown")
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, token])
+  @@map("device_tokens")
+}
+
+model Attendance {
+  id        String   @id @default(uuid()) @db.Uuid
+  studentId String   @db.Uuid
+  classId   String   @db.Uuid
+  date      DateTime
+  present   Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  student   User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  class     Class    @relation(fields: [classId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, classId, date])
+  @@map("attendance")
 }
