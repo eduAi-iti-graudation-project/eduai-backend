@@ -13,5 +13,6 @@ import { RolesGuard } from './roles.guard';
     },
   ],
   controllers: [AuthController],
+  exports: [SupabaseService],
 })
 export class AuthModule {}

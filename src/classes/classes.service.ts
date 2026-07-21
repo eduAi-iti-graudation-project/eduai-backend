@@ -5,9 +5,13 @@ import { PrismaService } from '../prisma/prisma.service';
 export class ClassesService {
   constructor(private readonly prisma: PrismaService) {}
 
-  create(dto: { name: string; description?: string }) {
+  create(dto: { name: string; description?: string }, teacherId: string) {
     return this.prisma.class.create({
-      data: { name: dto.name, description: dto.description, teacherId: '' },
+      data: {
+        name: dto.name,
+        description: dto.description,
+        teacherId,
+      },
     });
   }
 

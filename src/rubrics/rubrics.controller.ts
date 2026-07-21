@@ -21,6 +21,7 @@ import { Roles } from '../auth/roles.decorator';
 export class RubricsController {
   constructor(private readonly rubricsService: RubricsService) {}
 
+  @Roles('TEACHER')
   @Post()
   @Roles('TEACHER', 'ADMIN')
   @ApiOperation({ summary: 'Create a rubric with criteria' })
@@ -29,18 +30,21 @@ export class RubricsController {
     return this.rubricsService.create(dto);
   }
 
+  @Roles('TEACHER')
   @Get()
   @ApiOperation({ summary: 'List rubrics, optionally filtered by assignment' })
   findAll(@Query('assignmentId') assignmentId?: string) {
     return this.rubricsService.findAll(assignmentId);
   }
 
+  @Roles('TEACHER')
   @Get(':id')
   @ApiOperation({ summary: 'Get rubric with criteria' })
   findOne(@Param('id') id: string) {
     return this.rubricsService.findOne(id);
   }
 
+  @Roles('TEACHER')
   @Patch(':id/confirm')
   @Roles('TEACHER', 'ADMIN')
   @ApiOperation({ summary: 'Confirm a rubric (enables grading against it)' })
@@ -48,6 +52,7 @@ export class RubricsController {
     return this.rubricsService.confirm(id);
   }
 
+  @Roles('TEACHER')
   @Post('import-pdf')
   @Roles('ADMIN')
   @UseInterceptors(

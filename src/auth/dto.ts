@@ -23,3 +23,4 @@ const UserSchema = z.object({
 export class SignupDto extends createZodDto(SignupSchema) {}
 export class LoginDto extends createZodDto(LoginSchema) {}
 export class UserDto extends createZodDto(UserSchema) {}
+export class AuthResponseDto extends createZodDto(AuthResponseSchema) {}

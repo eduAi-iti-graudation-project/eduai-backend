@@ -10,7 +10,12 @@ const SubmissionSchema = z.object({
   id: z.string().uuid(),
   assignmentId: z.string().uuid(),
   studentId: z.string().uuid(),
-  status: z.enum(['SUBMITTED', 'GRADING_IN_PROGRESS', 'REVIEWED']),
+  status: z.enum([
+    'SUBMITTED',
+    'GRADING_IN_PROGRESS',
+    'REVIEW_READY',
+    'CONFIRMED',
+  ]),
   createdAt: z.string(),
   updatedAt: z.string(),
 });

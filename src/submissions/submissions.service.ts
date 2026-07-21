@@ -14,9 +14,15 @@ export class SubmissionsService {
     private readonly notificationService: NotificationsService,
   ) {}
 
-  async create(dto: { assignmentId: string; content: string }) {
+  async create(
+    dto: { assignmentId: string; content: string },
+    studentId: string,
+  ) {
     const submission = await this.prisma.submission.create({
-      data: { assignmentId: dto.assignmentId, studentId: '' },
+      data: {
+        assignmentId: dto.assignmentId,
+        studentId,
+      },
     });
     const chunks = chunkText(dto.content);
     if (chunks.length > 0) {
@@ -40,6 +46,24 @@ export class SubmissionsService {
       status: submission.status,
       assignmentId: submission.assignmentId,
     };
+  }
+
+  async createFromPdf(buffer: Buffer, assignmentId: string, studentId: string) {
+    let rawText: string;
+    try {
+      const pdfData = await pdfParse(buffer);
+      rawText = pdfData.text;
+    } catch (err) {
+      throw new BadRequestException(
+        `Failed to parse PDF: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    if (!rawText || rawText.trim().length === 0) {
+      throw new BadRequestException('PDF contained no extractable text');
+    }
+
+    return this.create({ assignmentId, content: rawText }, studentId);
   }
 
   findAll(status?: string, assignmentId?: string) {

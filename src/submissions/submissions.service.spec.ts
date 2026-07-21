@@ -66,7 +66,10 @@ describe('SubmissionsService', () => {
       const result = await service.create(dto);
 
       expect(mockPrisma.submission.create).toHaveBeenCalledWith({
-        data: { assignmentId: dto.assignmentId, studentId: '' },
+        data: {
+          assignmentId: dto.assignmentId,
+          studentId,
+        },
       });
       expect(mockPrisma.submissionChunk.createMany).toHaveBeenCalledWith({
         data: [
@@ -107,6 +110,61 @@ describe('SubmissionsService', () => {
 
       expect(mockGradingService.gradeSubmission).toHaveBeenCalled();
       expect(result).not.toHaveProperty('scores');
+    });
+  });
+
+  describe('createFromPdf', () => {
+    beforeEach(() => {
+      mockPdfParse.mockReset();
+    });
+
+    it('should parse PDF and create submission with extracted text', async () => {
+      const studentId = 'test-student-id';
+      const assignmentId = 'assign-1';
+      const pdfText = 'Extracted PDF content for grading.';
+      mockPdfParse.mockResolvedValue({ text: pdfText });
+
+      mockPrisma.submission.create.mockResolvedValue({
+        id: 'sub-id',
+        assignmentId,
+        studentId: '',
+      });
+      mockPrisma.submissionChunk.createMany.mockResolvedValue({ count: 1 });
+      mockPrisma.submission.findUnique.mockResolvedValue({
+        id: 'sub-id',
+        assignmentId,
+        studentId: '',
+        chunks: [{ id: 'chunk-id', submissionId: 'sub-id', content: pdfText }],
+        scores: [],
+      });
+
+      const result = await service.createFromPdf(
+        Buffer.from('fake pdf'),
+        assignmentId,
+        studentId,
+      );
+
+      expect(mockPdfParse).toHaveBeenCalledWith(Buffer.from('fake pdf'));
+      expect(result.chunks).toHaveLength(1);
+      expect(result.chunks[0].content).toBe(pdfText);
+    });
+
+    it('should throw BadRequestException when PDF has no text', async () => {
+      const studentId = 'test-student-id';
+      mockPdfParse.mockResolvedValue({ text: '' });
+
+      await expect(
+        service.createFromPdf(Buffer.from('empty'), 'assign-1', studentId),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('should throw BadRequestException when pdf-parse fails', async () => {
+      const studentId = 'test-student-id';
+      mockPdfParse.mockRejectedValue(new Error('Corrupt PDF'));
+
+      await expect(
+        service.createFromPdf(Buffer.from('bad'), 'assign-1', studentId),
+      ).rejects.toThrow(BadRequestException);
     });
   });
 

@@ -1,8 +1,11 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './auth/auth.module';
+import { AuthGuard } from './auth/auth.guard';
+import { RolesGuard } from './auth/roles.guard';
 import { ClassesModule } from './classes/classes.module';
 import { AssignmentsModule } from './assignments/assignments.module';
 import { RubricsModule } from './rubrics/rubrics.module';
@@ -13,6 +16,7 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { ReportsModule } from './reports/reports.module';
 import { AnalysisModule } from './analysis/analysis.module';
 import { AssistantModule } from './assistant/assistant.module';
+import { MaterialsModule } from './materials/materials.module';
 import { StudentsModule } from './students/students.module';
 import { LlmModule } from './common/llm/llm.module';
 import { PiiModule } from './common/pii/pii.module';
@@ -32,12 +36,17 @@ import { ValidationModule } from './common/validation/validation.module';
     ReportsModule,
     AnalysisModule,
     AssistantModule,
+    MaterialsModule,
     StudentsModule,
     LlmModule,
     PiiModule,
     ValidationModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    AppService,
+    { provide: APP_GUARD, useClass: AuthGuard },
+    { provide: APP_GUARD, useClass: RolesGuard },
+  ],
 })
 export class AppModule {}
