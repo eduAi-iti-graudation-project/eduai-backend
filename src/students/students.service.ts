@@ -7,7 +7,7 @@ export class StudentsService {
 
   getGrades(id: string) {
     return this.prisma.gradingScore.findMany({
-      where: { submission: { studentId: id } },
+      where: { submission: { studentId: id }, isConfirmed: true },
       include: { criteria: true, submission: true },
     });
   }

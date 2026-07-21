@@ -16,7 +16,7 @@ word. Once enough grades are confirmed for a student, a deterministic rule
 (not an AI judgment call) flags them as needing attention, and an AI call
 writes a plain-language explanation of why.
 
-Two roles: **Teacher**, **Student**. No admin role in MVP scope.
+Four roles: **Teacher**, **Student**, **Guardian**, **Admin**.
 
 ## 2. Repos
 
@@ -62,6 +62,24 @@ Two roles: **Teacher**, **Student**. No admin role in MVP scope.
    must be deterministic and testable, never an AI "decision."
 7. **Vision/OCR submissions (stretch goal)** — photo of handwritten work,
    graded via a vision-capable LLM call. Build only after 1–6 are solid.
+8. **Auto-grade on Submission** — when a student submits, the grading agent
+   runs immediately (fire-and-forget in background). The student never sees
+   AI grades; only the teacher sees them during review. Teacher is notified
+   when grading finishes.
+9. **Bulk Grade Confirmation** — teacher edits AI-suggested scores, clicks
+   one "Confirm All" button. All scores for that submission atomically
+   set `isConfirmed = true`, submission status → `CONFIRMED`.
+10. **Three-Tier Reports** — when an Alert is created, a single LLM call
+    auto-generates three report sections (parent-friendly, teacher-detailed,
+    management-summary) stored in a `StudentReport` row.
+11. **Notification Delivery** — reports and grading-complete events are
+    auto-sent via email (nodemailer) to teachers, guardians, and admins.
+    Push notification infrastructure (FCM token storage) is built into the
+    `NotificationService` but only email is wired in MVP.
+12. **Unified Dashboard** — single `GET /dashboard/overview` endpoint returns
+    role-specific data (teacher: class summaries + pending confirmations;
+    student: upcoming assignments + confirmed grades; guardian: child overview;
+    admin: school-wide stats).
 
 ## 4. Non-negotiable rules (violating these is a bug, not a style choice)
 
@@ -77,19 +95,29 @@ Two roles: **Teacher**, **Student**. No admin role in MVP scope.
   prompt.** If you find yourself writing a prompt that asks an LLM "is this
   student struggling," stop — that logic belongs in code, per §3.4.
 - **Every citation in a grading response must point to a real
-  `RubricCriterion.id`** the retrieval step actually returned — never a
-  criterion the LLM recalls from training or invents.
+   `RubricCriterion.id`** the retrieval step actually returned — never a
+   criterion the LLM recalls from training or invents.
+- **Criterion pattern detection trigger is plain code, not a prompt.**
+  The same rule as §3.4 applies: if you find yourself asking an LLM "is
+  this student struggling with grammar," that logic belongs in code.
+- **Reports are auto-sent on generation** — no manual approval gate in MVP.
+  Teacher and management may view all reports via dashboard endpoints.
+- **Attendance data from the mobile app is trusted as-is.** No teacher
+  verification step in MVP.
 
 ## 5. Data model
 
 Canonical schema is `schema.prisma` in the backend repo. Key entities:
-`User` (role: TEACHER/STUDENT), `Class`, `Enrollment`, `Rubric` →
-`RubricCriterion` (has `embedding vector(1536)`), `Assignment`, `Submission`
-(status: PENDING → GRADING → REVIEW_READY → CONFIRMED) → `SubmissionChunk`
-(has `embedding vector(1536)`), `CriterionFeedback` (suggested + confirmed
-score/feedback in one row, `isConfirmed` flag), `ClassMaterial` →
-`MaterialChunk` (curriculum RAG for the Assistant Agent), `Alert` (type,
-reason, status).
+`User` (role: TEACHER/STUDENT/GUARDIAN/ADMIN), `Class`, `Enrollment`,
+`Rubric` → `RubricCriterion` (has `embedding vector(1024)`), `Assignment`,
+`Submission` (status: SUBMITTED → GRADING_IN_PROGRESS → REVIEW_READY →
+CONFIRMED) → `SubmissionChunk` (has `embedding vector(1024)`),
+`GradingScore` (suggested + confirmed score/feedback in one row,
+`isConfirmed` flag), `Material` → `MaterialChunk` (curriculum RAG for
+Assistant Agent), `Alert` (type, reason, status), `Notification` (user,
+type, channel, read status), `StudentReport` (three-section LLM output per
+alert), `DeviceToken` (FCM push tokens), `Attendance` (student, class,
+date, status).
 
 Embeddings: **OpenAI, 1536 dimensions.** This is a locked decision — do not
 switch embedding providers without a schema migration.
@@ -109,22 +137,25 @@ Two independent retrieval paths, both using pgvector cosine similarity:
    chunked and embedded at upload time into `MaterialChunk`; the Assistant's
    `search_curriculum` tool searches this when generating a quiz or summary.
 
-`Unsupported("vector(1536)")` fields need a raw SQL migration for a
-similarity index — Prisma does not generate this automatically:
+`Unsupported("vector(1024)")` fields need a raw SQL migration for a
+similarity index — Prisma does not generate this automatically (already
+applied in migration `add_hnsw_indexes`):
 ```sql
-CREATE INDEX ON "RubricCriterion" USING hnsw (embedding vector_cosine_ops);
-CREATE INDEX ON "SubmissionChunk" USING hnsw (embedding vector_cosine_ops);
-CREATE INDEX ON "MaterialChunk" USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX ON rubric_criteria USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX ON submission_chunks USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX ON material_chunks USING hnsw (embedding vector_cosine_ops);
 ```
 
 ## 7. Agent architecture — the honest version
 
 | Piece | What it actually is |
-|---|---|
+|---|---|---|
 | Grading Agent | One LLM call, retrieval feeds it, no tool use |
 | Analysis Agent | Plain code decides the flag; LLM only writes the explanation |
 | Assistant Agent | Real tool-calling loop (search_curriculum, create_quiz), max 5 iterations |
 | Orchestrator | Not an LLM at all — deterministic status-transition logic |
+| Criterion Detector | Plain code decides the flag (50% × 2 consecutive); LLM generates three role-specific reports |
+| Notification Dispatcher | Not AI — plain code that calls NotificationService after a report is created |
 
 Do not add tool-calling or autonomy to Grading or Analysis "to make it more
 agentic." Their determinism is a deliberate correctness choice, not a

@@ -10,4 +10,9 @@ const AlertSchema = z.object({
   createdAt: z.string(),
 });
 
+export const ResolveAlertSchema = z.object({
+  status: z.enum(['RESOLVED', 'DISMISSED']),
+});
+
 export class AlertDto extends createZodDto(AlertSchema) {}
+export class ResolveAlertDto extends createZodDto(ResolveAlertSchema) {}
