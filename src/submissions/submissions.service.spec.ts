@@ -3,7 +3,11 @@ import { SubmissionsService } from './submissions.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { GradingService } from '../grading/grading.service';
 import { NotificationsService } from '../notifications/notifications.service';
-import { NotFoundException } from '@nestjs/common';
+import { NotFoundException, BadRequestException } from '@nestjs/common';
+import pdfParse from 'pdf-parse';
+
+jest.mock('pdf-parse');
+const mockPdfParse = pdfParse as jest.Mock;
 
 describe('SubmissionsService', () => {
   let service: SubmissionsService;
@@ -47,6 +51,8 @@ describe('SubmissionsService', () => {
   });
 
   describe('create', () => {
+    const studentId = 'test-student-id';
+
     it('should create a submission and fire grading in background', async () => {
       const dto = {
         assignmentId: 'assignment-id',
@@ -56,14 +62,14 @@ describe('SubmissionsService', () => {
       const createdSubmission = {
         id: 'submission-id',
         assignmentId: dto.assignmentId,
-        studentId: '',
+        studentId,
         status: 'SUBMITTED',
       };
 
       mockPrisma.submission.create.mockResolvedValue(createdSubmission);
       mockPrisma.submissionChunk.createMany.mockResolvedValue({ count: 1 });
 
-      const result = await service.create(dto);
+      const result = await service.create(dto, studentId);
 
       expect(mockPrisma.submission.create).toHaveBeenCalledWith({
         data: {
@@ -99,14 +105,14 @@ describe('SubmissionsService', () => {
       const createdSubmission = {
         id: 'submission-id',
         assignmentId: dto.assignmentId,
-        studentId: '',
+        studentId,
         status: 'SUBMITTED',
       };
 
       mockPrisma.submission.create.mockResolvedValue(createdSubmission);
       mockPrisma.submissionChunk.createMany.mockResolvedValue({ count: 1 });
 
-      const result = await service.create(dto);
+      const result = await service.create(dto, studentId);
 
       expect(mockGradingService.gradeSubmission).toHaveBeenCalled();
       expect(result).not.toHaveProperty('scores');
@@ -128,15 +134,9 @@ describe('SubmissionsService', () => {
         id: 'sub-id',
         assignmentId,
         studentId: '',
+        status: 'SUBMITTED',
       });
       mockPrisma.submissionChunk.createMany.mockResolvedValue({ count: 1 });
-      mockPrisma.submission.findUnique.mockResolvedValue({
-        id: 'sub-id',
-        assignmentId,
-        studentId: '',
-        chunks: [{ id: 'chunk-id', submissionId: 'sub-id', content: pdfText }],
-        scores: [],
-      });
 
       const result = await service.createFromPdf(
         Buffer.from('fake pdf'),
@@ -145,8 +145,11 @@ describe('SubmissionsService', () => {
       );
 
       expect(mockPdfParse).toHaveBeenCalledWith(Buffer.from('fake pdf'));
-      expect(result.chunks).toHaveLength(1);
-      expect(result.chunks[0].content).toBe(pdfText);
+      expect(result).toEqual({
+        id: 'sub-id',
+        status: 'SUBMITTED',
+        assignmentId,
+      });
     });
 
     it('should throw BadRequestException when PDF has no text', async () => {

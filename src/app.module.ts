@@ -21,6 +21,7 @@ import { StudentsModule } from './students/students.module';
 import { LlmModule } from './common/llm/llm.module';
 import { PiiModule } from './common/pii/pii.module';
 import { ValidationModule } from './common/validation/validation.module';
+import { AttendanceModule } from './attendance/attendance.module';
 
 @Module({
   imports: [
@@ -41,6 +42,7 @@ import { ValidationModule } from './common/validation/validation.module';
     LlmModule,
     PiiModule,
     ValidationModule,
+    AttendanceModule,
   ],
   controllers: [AppController],
   providers: [

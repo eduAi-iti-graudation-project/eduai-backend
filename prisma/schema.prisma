@@ -26,6 +26,13 @@ enum AlertStatus {
   DISMISSED
 }
 
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+  EXCUSED
+}
+
 enum SubmissionStatus {
   SUBMITTED
   GRADING_IN_PROGRESS
@@ -45,7 +52,6 @@ model User {
   // Relations
   taughtClasses Class[]      @relation("TeacherClasses")
   enrollments   Enrollment[]
-  attendance    Attendance[]
   submissions   Submission[]
   alerts        Alert[]
   notifications Notification[]
@@ -67,7 +73,6 @@ model Class {
   // Relations
   teacher     User         @relation("TeacherClasses", fields: [teacherId], references: [id])
   enrollments Enrollment[]
-  attendance  Attendance[]
   materials   Material[]
   assignments Assignment[]
   attendance  Attendance[]
@@ -290,17 +295,4 @@ model DeviceToken {
   @@map("device_tokens")
 }
 
-model Attendance {
-  id        String   @id @default(uuid()) @db.Uuid
-  studentId String   @db.Uuid
-  classId   String   @db.Uuid
-  date      DateTime
-  present   Boolean  @default(true)
-  createdAt DateTime @default(now())
 
-  student   User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  class     Class    @relation(fields: [classId], references: [id], onDelete: Cascade)
-
-  @@unique([studentId, classId, date])
-  @@map("attendance")
-}

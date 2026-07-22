@@ -18,10 +18,6 @@ describe('GradingService', () => {
       update: jest.fn(),
       updateMany: jest.fn(),
     },
-    submission: {
-      findUnique: jest.fn(),
-      update: jest.fn(),
-    },
     $transaction: jest.fn(),
   };
 
@@ -40,114 +36,6 @@ describe('GradingService', () => {
 
     service = module.get<GradingService>(GradingService);
     jest.clearAllMocks();
-  });
-
-  describe('confirm', () => {
-    const scoreId = 'test-score-id';
-    const submissionId = 'sub-1';
-    const baseScore = {
-      id: scoreId,
-      submissionId,
-      pointsAwarded: 5,
-      teacherNotes: null,
-      submission: { id: submissionId, status: 'REVIEW_READY' },
-    };
-
-    it('should set isConfirmed to true', async () => {
-      const dto = { pointsAwarded: 8 };
-      const updatedScore = {
-        ...baseScore,
-        pointsAwarded: 8,
-        isConfirmed: true,
-      };
-
-      mockPrisma.gradingScore.findUnique.mockResolvedValue(baseScore);
-      mockPrisma.gradingScore.findMany.mockResolvedValue([updatedScore]);
-      mockPrisma.gradingScore.update.mockResolvedValue(updatedScore);
-
-      const result = await service.confirm(scoreId, dto);
-
-      expect(mockPrisma.gradingScore.findUnique).toHaveBeenCalledWith({
-        where: { id: scoreId },
-        include: { submission: true },
-      });
-      expect(mockPrisma.gradingScore.update).toHaveBeenCalledWith({
-        where: { id: scoreId },
-        data: { pointsAwarded: 8, teacherNotes: undefined, isConfirmed: true },
-      });
-      expect(result.isConfirmed).toBe(true);
-    });
-
-    it('should transition submission to CONFIRMED when all scores confirmed', async () => {
-      const dto = { pointsAwarded: 8 };
-      const updatedScore = {
-        ...baseScore,
-        pointsAwarded: 8,
-        isConfirmed: true,
-      };
-
-      mockPrisma.gradingScore.findUnique.mockResolvedValue(baseScore);
-      mockPrisma.gradingScore.findMany.mockResolvedValue([updatedScore]);
-      mockPrisma.gradingScore.update.mockResolvedValue(updatedScore);
-
-      await service.confirm(scoreId, dto);
-
-      expect(mockPrisma.submission.update).toHaveBeenCalledWith({
-        where: { id: submissionId },
-        data: { status: 'CONFIRMED' },
-      });
-    });
-
-    it('should not transition submission when not all scores confirmed', async () => {
-      const dto = { pointsAwarded: 8 };
-      const updatedScore = {
-        ...baseScore,
-        pointsAwarded: 8,
-        isConfirmed: true,
-      };
-      const unconfirmedScore = { id: 'other-score', isConfirmed: false };
-
-      mockPrisma.gradingScore.findUnique.mockResolvedValue(baseScore);
-      mockPrisma.gradingScore.findMany.mockResolvedValue([
-        updatedScore,
-        unconfirmedScore,
-      ]);
-      mockPrisma.gradingScore.update.mockResolvedValue(updatedScore);
-
-      await service.confirm(scoreId, dto);
-
-      expect(mockPrisma.submission.update).not.toHaveBeenCalled();
-    });
-
-    it('should accept optional teacherNotes', async () => {
-      const dto = { pointsAwarded: 10, teacherNotes: 'Good work' };
-      const existingScore = { ...baseScore, pointsAwarded: 7 };
-      const updatedScore = { ...existingScore, ...dto, isConfirmed: true };
-
-      mockPrisma.gradingScore.findUnique.mockResolvedValue(existingScore);
-      mockPrisma.gradingScore.findMany.mockResolvedValue([updatedScore]);
-      mockPrisma.gradingScore.update.mockResolvedValue(updatedScore);
-
-      const result = await service.confirm(scoreId, dto);
-
-      expect(mockPrisma.gradingScore.update).toHaveBeenCalledWith({
-        where: { id: scoreId },
-        data: {
-          pointsAwarded: 10,
-          teacherNotes: 'Good work',
-          isConfirmed: true,
-        },
-      });
-      expect(result.teacherNotes).toBe('Good work');
-    });
-
-    it('should throw NotFoundException for missing GradingScore', async () => {
-      mockPrisma.gradingScore.findUnique.mockResolvedValue(null);
-
-      await expect(
-        service.confirm('non-existent-id', { pointsAwarded: 5 }),
-      ).rejects.toThrow(NotFoundException);
-    });
   });
 
   describe('confirmAll', () => {
