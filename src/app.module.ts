@@ -22,6 +22,7 @@ import { LlmModule } from './common/llm/llm.module';
 import { PiiModule } from './common/pii/pii.module';
 import { ValidationModule } from './common/validation/validation.module';
 import { AttendanceModule } from './attendance/attendance.module';
+import { DashboardModule } from './dashboard/dashboard.module';
 
 @Module({
   imports: [
@@ -43,6 +44,7 @@ import { AttendanceModule } from './attendance/attendance.module';
     PiiModule,
     ValidationModule,
     AttendanceModule,
+    DashboardModule,
   ],
   controllers: [AppController],
   providers: [
