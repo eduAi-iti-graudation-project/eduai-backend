@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { AnalysisService } from './analysis.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ReportsService } from '../reports/reports.service';
+import { NotificationsService } from '../notifications/notifications.service';
 
 describe('AnalysisService', () => {
   let service: AnalysisService;
@@ -9,10 +10,15 @@ describe('AnalysisService', () => {
   const mockPrisma = {
     gradingScore: { findMany: jest.fn() },
     alert: { count: jest.fn(), create: jest.fn() },
+    user: { findUnique: jest.fn() },
   };
 
   const mockReportsService = {
     generate: jest.fn().mockResolvedValue(undefined),
+  };
+
+  const mockNotificationsService = {
+    notifyUser: jest.fn().mockResolvedValue(undefined),
   };
 
   beforeEach(async () => {
@@ -21,6 +27,7 @@ describe('AnalysisService', () => {
         AnalysisService,
         { provide: PrismaService, useValue: mockPrisma },
         { provide: ReportsService, useValue: mockReportsService },
+        { provide: NotificationsService, useValue: mockNotificationsService },
       ],
     }).compile();
 
@@ -67,8 +74,18 @@ describe('AnalysisService', () => {
         { pointsAwarded: 5, submission: { id: 's2' } },
         { pointsAwarded: 3, submission: { id: 's3' } },
       ];
-      const createdAlert = { id: 'alert-1', type: 'FAILING' };
+      const createdAlert = {
+        id: 'alert-1',
+        type: 'FAILING',
+        reason: 'Average...',
+      };
       mockPrisma.gradingScore.findMany.mockResolvedValue(scores);
+      mockPrisma.user.findUnique.mockResolvedValue({
+        id: studentId,
+        name: 'Test Student',
+        enrollments: [],
+        guardianId: null,
+      });
       mockPrisma.alert.create.mockResolvedValue(createdAlert);
 
       await service.evaluateStudent(studentId);
@@ -92,8 +109,18 @@ describe('AnalysisService', () => {
         { pointsAwarded: 8, submission: { id: 's2' } },
         { pointsAwarded: 7, submission: { id: 's3' } },
       ];
-      const createdAlert = { id: 'alert-2', type: 'DOWNWARD_TREND' };
+      const createdAlert = {
+        id: 'alert-2',
+        type: 'DOWNWARD_TREND',
+        reason: 'Average...',
+      };
       mockPrisma.gradingScore.findMany.mockResolvedValue(scores);
+      mockPrisma.user.findUnique.mockResolvedValue({
+        id: studentId,
+        name: 'Test Student',
+        enrollments: [],
+        guardianId: null,
+      });
       mockPrisma.alert.create.mockResolvedValue(createdAlert);
 
       await service.evaluateStudent(studentId);

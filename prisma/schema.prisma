@@ -33,6 +33,12 @@ enum AttendanceStatus {
   EXCUSED
 }
 
+enum ReportStatus {
+  NEW
+  SENT
+  VIEWED
+}
+
 enum SubmissionStatus {
   SUBMITTED
   GRADING_IN_PROGRESS
@@ -46,6 +52,7 @@ model User {
   email     String   @unique
   name      String
   role      UserRole
+  guardianId String? @db.Uuid
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -58,6 +65,8 @@ model User {
   reports       StudentReport[]
   deviceTokens  DeviceToken[]
   attendance    Attendance[]
+  guardian      User?        @relation("GuardianWards", fields: [guardianId], references: [id])
+  wards         User[]       @relation("GuardianWards")
 
   @@map("users")
 }
@@ -268,16 +277,17 @@ model Notification {
 }
 
 model StudentReport {
-  id                 String   @id @default(uuid()) @db.Uuid
-  studentId          String   @db.Uuid
-  alertId            String   @db.Uuid
+  id                 String       @id @default(uuid()) @db.Uuid
+  studentId          String       @db.Uuid
+  alertId            String       @db.Uuid
   parentSection      String
   teacherSection     String
   managementSection  String
-  createdAt          DateTime @default(now())
+  status             ReportStatus @default(NEW)
+  createdAt          DateTime     @default(now())
 
-  student            User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  alert              Alert    @relation(fields: [alertId], references: [id], onDelete: Cascade)
+  student            User         @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  alert              Alert        @relation(fields: [alertId], references: [id], onDelete: Cascade)
 
   @@map("student_reports")
 }
