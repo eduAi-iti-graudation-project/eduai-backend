@@ -53,7 +53,7 @@ export class DashboardService {
 
       this.prisma.submission.findMany({
         where: {
-          status: 'REVIEWED',
+          status: 'REVIEW_READY',
           assignment: { class: { teacherId } },
         },
         include: {
@@ -79,7 +79,7 @@ export class DashboardService {
         reason: a.reason,
         createdAt: a.createdAt.toISOString(),
       })),
-      submissionsNeedingReview: submissionsNeedingReview.map((s) => ({
+      submissionsNeedingReview: (submissionsNeedingReview as { student: { name: string }; assignment: { title: string }; createdAt: Date; id: string }[]).map((s) => ({
         id: s.id,
         studentName: s.student.name,
         assignmentTitle: s.assignment.title,

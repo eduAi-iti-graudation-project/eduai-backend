@@ -42,7 +42,7 @@ enum ReportStatus {
 enum SubmissionStatus {
   SUBMITTED
   GRADING_IN_PROGRESS
-  REVIEWED
+  REVIEW_READY
   CONFIRMED
 }
 
