@@ -25,13 +25,22 @@ export class NotificationsService {
     }
   }
 
-  notifyTeacher(
+  async notifyTeacher(
     submission: { id: string; assignmentId: string; studentId: string },
     event: string,
-  ): void {
-    this.logger.log(
-      `Notification event ${event} for submission ${submission.id}`,
-    );
+  ): Promise<void> {
+    const assignment = await this.prisma.assignment.findUnique({
+      where: { id: submission.assignmentId },
+      include: { class: true },
+    });
+    if (assignment?.class) {
+      await this.notifyUser(
+        assignment.class.teacherId,
+        event,
+        'Grading complete',
+        `Submission ${submission.id} has been graded and is ready for review.`,
+      );
+    }
   }
 
   async notifyUser(
@@ -48,6 +57,7 @@ export class NotificationsService {
     if (this.transporter && user?.email) {
       this.transporter
         .sendMail({
+          from: process.env.SMTP_FROM || 'noreply@eduai.app',
           to: user.email,
           subject: title,
           text: body ?? title,
