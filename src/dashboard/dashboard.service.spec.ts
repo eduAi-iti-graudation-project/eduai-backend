@@ -31,7 +31,17 @@ describe('DashboardService', () => {
   });
 
   function mockUser(overrides: Partial<User>): User {
-    return { id: '', email: '', name: '', role: 'TEACHER', authId: null, guardianId: null, createdAt: new Date(), updatedAt: new Date(), ...overrides } as User;
+    return {
+      id: '',
+      email: '',
+      name: '',
+      role: 'TEACHER',
+      authId: null,
+      guardianId: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      ...overrides,
+    } as User;
   }
 
   describe('teacherDashboard', () => {
