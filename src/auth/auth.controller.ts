@@ -34,4 +34,13 @@ export class AuthController {
   me(@CurrentUser('id') userId: string) {
     return this.authService.me(userId);
   }
+
+  @Post('logout')
+  @ApiOperation({ summary: 'Log out and revoke current session' })
+  async logout(
+    @CurrentUser('authId') authId: string,
+  ): Promise<{ message: string }> {
+    await this.authService.logout(authId);
+    return { message: 'Logged out successfully' };
+  }
 }
