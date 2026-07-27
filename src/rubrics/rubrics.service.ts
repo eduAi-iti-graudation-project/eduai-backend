@@ -186,4 +186,16 @@ Return valid JSON matching this schema:
       throw err;
     }
   }
+
+  async fromPdf(buffer: Buffer, assignmentId: string) {
+    const extracted = await this.importPdf(buffer);
+    return this.prisma.rubric.create({
+      data: {
+        title: extracted.title || 'Imported Rubric',
+        assignmentId,
+        criteria: { create: extracted.criteria },
+      },
+      include: { criteria: true },
+    });
+  }
 }

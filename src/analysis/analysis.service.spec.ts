@@ -1,7 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { AnalysisService } from './analysis.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { LlmService } from '../common/llm/llm.service';
+import { ReportsService } from '../reports/reports.service';
+import { NotificationsService } from '../notifications/notifications.service';
 
 describe('AnalysisService', () => {
   let service: AnalysisService;
@@ -9,10 +10,15 @@ describe('AnalysisService', () => {
   const mockPrisma = {
     gradingScore: { findMany: jest.fn() },
     alert: { count: jest.fn(), create: jest.fn() },
+    user: { findUnique: jest.fn() },
   };
 
-  const mockLlm = {
-    generateStructured: jest.fn(),
+  const mockReportsService = {
+    generate: jest.fn().mockResolvedValue(undefined),
+  };
+
+  const mockNotificationsService = {
+    notifyUser: jest.fn().mockResolvedValue(undefined),
   };
 
   beforeEach(async () => {
@@ -20,7 +26,8 @@ describe('AnalysisService', () => {
       providers: [
         AnalysisService,
         { provide: PrismaService, useValue: mockPrisma },
-        { provide: LlmService, useValue: mockLlm },
+        { provide: ReportsService, useValue: mockReportsService },
+        { provide: NotificationsService, useValue: mockNotificationsService },
       ],
     }).compile();
 
@@ -39,26 +46,21 @@ describe('AnalysisService', () => {
       expect(mockPrisma.alert.create).not.toHaveBeenCalled();
     });
 
+    it('should not create alert when fewer than 2 grades', async () => {
+      mockPrisma.gradingScore.findMany.mockResolvedValue([
+        { pointsAwarded: 8, submission: { id: 's1' } },
+      ]);
+
+      await service.evaluateStudent(studentId);
+
+      expect(mockPrisma.alert.create).not.toHaveBeenCalled();
+    });
+
     it('should not create alert when grades are above threshold', async () => {
       mockPrisma.gradingScore.findMany.mockResolvedValue([
-        {
-          pointsAwarded: 8,
-          criteria: { maxPoints: 10 },
-          submissionId: 's1',
-          submission: { id: 's1', assignment: { totalPoints: 10 } },
-        },
-        {
-          pointsAwarded: 9,
-          criteria: { maxPoints: 10 },
-          submissionId: 's2',
-          submission: { id: 's2', assignment: { totalPoints: 10 } },
-        },
-        {
-          pointsAwarded: 8,
-          criteria: { maxPoints: 10 },
-          submissionId: 's3',
-          submission: { id: 's3', assignment: { totalPoints: 10 } },
-        },
+        { pointsAwarded: 8, submission: { id: 's1' } },
+        { pointsAwarded: 8, submission: { id: 's2' } },
+        { pointsAwarded: 9, submission: { id: 's3' } },
       ]);
 
       await service.evaluateStudent(studentId);
@@ -68,120 +70,72 @@ describe('AnalysisService', () => {
 
     it('should create FAILING alert when average is below 60%', async () => {
       const scores = [
-        {
-          pointsAwarded: 4,
-          criteria: { maxPoints: 10 },
-          submissionId: 's1',
-          submission: { id: 's1', assignment: { totalPoints: 10 } },
-        },
-        {
-          pointsAwarded: 5,
-          criteria: { maxPoints: 10 },
-          submissionId: 's2',
-          submission: { id: 's2', assignment: { totalPoints: 10 } },
-        },
-        {
-          pointsAwarded: 3,
-          criteria: { maxPoints: 10 },
-          submissionId: 's3',
-          submission: { id: 's3', assignment: { totalPoints: 10 } },
-        },
+        { pointsAwarded: 4, submission: { id: 's1' } },
+        { pointsAwarded: 5, submission: { id: 's2' } },
+        { pointsAwarded: 3, submission: { id: 's3' } },
       ];
+      const createdAlert = {
+        id: 'alert-1',
+        type: 'FAILING',
+        reason: 'Average...',
+      };
       mockPrisma.gradingScore.findMany.mockResolvedValue(scores);
-      mockPrisma.alert.count.mockResolvedValue(0);
-      mockLlm.generateStructured.mockResolvedValue({
-        reason: 'Student is struggling with the material.',
+      mockPrisma.user.findUnique.mockResolvedValue({
+        id: studentId,
+        name: 'Test Student',
+        enrollments: [],
+        guardianId: null,
       });
-      mockPrisma.alert.create.mockResolvedValue({});
+      mockPrisma.alert.create.mockResolvedValue(createdAlert);
 
       await service.evaluateStudent(studentId);
 
       expect(mockPrisma.alert.create).toHaveBeenCalledWith({
-        data: {
+        data: expect.objectContaining({
           studentId,
           type: 'FAILING',
-          reason: 'Student is struggling with the material.',
           status: 'ACTIVE',
-        },
+        }),
       });
+      expect(mockReportsService.generate).toHaveBeenCalledWith(
+        studentId,
+        'alert-1',
+      );
     });
 
     it('should create DOWNWARD_TREND alert when last 2 grades drop', async () => {
       const scores = [
-        {
-          pointsAwarded: 9,
-          criteria: { maxPoints: 10 },
-          submissionId: 's1',
-          submission: { id: 's1', assignment: { totalPoints: 10 } },
-        },
-        {
-          pointsAwarded: 8,
-          criteria: { maxPoints: 10 },
-          submissionId: 's2',
-          submission: { id: 's2', assignment: { totalPoints: 10 } },
-        },
-        {
-          pointsAwarded: 7,
-          criteria: { maxPoints: 10 },
-          submissionId: 's3',
-          submission: { id: 's3', assignment: { totalPoints: 10 } },
-        },
+        { pointsAwarded: 9, submission: { id: 's1' } },
+        { pointsAwarded: 8, submission: { id: 's2' } },
+        { pointsAwarded: 7, submission: { id: 's3' } },
       ];
+      const createdAlert = {
+        id: 'alert-2',
+        type: 'DOWNWARD_TREND',
+        reason: 'Average...',
+      };
       mockPrisma.gradingScore.findMany.mockResolvedValue(scores);
-      mockPrisma.alert.count.mockResolvedValue(0);
-      mockLlm.generateStructured.mockResolvedValue({
-        reason: 'Grades have been declining.',
+      mockPrisma.user.findUnique.mockResolvedValue({
+        id: studentId,
+        name: 'Test Student',
+        enrollments: [],
+        guardianId: null,
       });
+      mockPrisma.alert.create.mockResolvedValue(createdAlert);
 
       await service.evaluateStudent(studentId);
 
       expect(mockPrisma.alert.create).toHaveBeenCalledWith({
-        data: {
+        data: expect.objectContaining({
           studentId,
           type: 'DOWNWARD_TREND',
-          reason: 'Grades have been declining.',
           status: 'ACTIVE',
-        },
+        }),
       });
-    });
-
-    it('should create CONSISTENT_STRUGGLE when student already has alerts', async () => {
-      const scores = [
-        {
-          pointsAwarded: 4,
-          criteria: { maxPoints: 10 },
-          submissionId: 's1',
-          submission: { id: 's1', assignment: { totalPoints: 10 } },
-        },
-        {
-          pointsAwarded: 5,
-          criteria: { maxPoints: 10 },
-          submissionId: 's2',
-          submission: { id: 's2', assignment: { totalPoints: 10 } },
-        },
-        {
-          pointsAwarded: 3,
-          criteria: { maxPoints: 10 },
-          submissionId: 's3',
-          submission: { id: 's3', assignment: { totalPoints: 10 } },
-        },
-      ];
-      mockPrisma.gradingScore.findMany.mockResolvedValue(scores);
-      mockPrisma.alert.count.mockResolvedValue(1);
-      mockLlm.generateStructured.mockResolvedValue({
-        reason: 'Persistent struggles.',
-      });
-
-      await service.evaluateStudent(studentId);
-
-      expect(mockPrisma.alert.create).toHaveBeenCalledWith({
-        data: {
-          studentId,
-          type: 'CONSISTENT_STRUGGLE',
-          reason: 'Persistent struggles.',
-          status: 'ACTIVE',
-        },
-      });
+      expect(mockReportsService.generate).toHaveBeenCalledWith(
+        studentId,
+        'alert-2',
+      );
     });
   });
 });

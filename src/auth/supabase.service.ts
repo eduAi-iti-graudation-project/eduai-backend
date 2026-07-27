@@ -31,4 +31,11 @@ export class SupabaseService {
 
     return data.user;
   }
+
+  async signOut(authId: string): Promise<void> {
+    const { error } = await this.client.auth.admin.signOut(authId);
+    if (error) {
+      throw new UnauthorizedException('Logout failed');
+    }
+  }
 }

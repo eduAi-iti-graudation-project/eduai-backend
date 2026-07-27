@@ -26,11 +26,68 @@ enum AlertStatus {
   DISMISSED
 }
 
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+  EXCUSED
+}
+
+enum ReportStatus {
+  NEW
+  SENT
+  VIEWED
+}
+
 enum SubmissionStatus {
   SUBMITTED
   GRADING_IN_PROGRESS
-  REVIEWED
+  REVIEW_READY
   CONFIRMED
+}
+
+enum EnrollmentStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model Grade {
+  id        String   @id @default(uuid()) @db.Uuid
+  level     Int      @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  students User[]
+  teachers TeacherGrade[]
+  classes  GradeClass[]
+
+  @@map("grades")
+}
+
+model TeacherGrade {
+  id        String   @id @default(uuid()) @db.Uuid
+  teacherId String   @db.Uuid
+  gradeId   String   @db.Uuid
+  createdAt DateTime @default(now())
+
+  teacher User  @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  grade   Grade @relation(fields: [gradeId], references: [id], onDelete: Cascade)
+
+  @@unique([teacherId, gradeId])
+  @@map("teacher_grades")
+}
+
+model GradeClass {
+  id      String @id @default(uuid()) @db.Uuid
+  gradeId String @db.Uuid
+  classId String @db.Uuid
+
+  grade Grade @relation(fields: [gradeId], references: [id], onDelete: Cascade)
+  class Class @relation(fields: [classId], references: [id], onDelete: Cascade)
+
+  @@unique([gradeId, classId])
+  @@map("grade_classes")
 }
 
 model User {
@@ -39,19 +96,23 @@ model User {
   email     String   @unique
   name      String
   role      UserRole
+  gradeId    String?  @db.Uuid
+  guardianId String?  @db.Uuid
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  // Relations
-  taughtClasses Class[]      @relation("TeacherClasses")
+  grade         Grade?         @relation(fields: [gradeId], references: [id])
+  teacherGrades TeacherGrade[]
+  taughtClasses Class[]        @relation("TeacherClasses")
   enrollments   Enrollment[]
-  attendance    Attendance[]
   submissions   Submission[]
   alerts        Alert[]
   notifications Notification[]
   reports       StudentReport[]
   deviceTokens  DeviceToken[]
   attendance    Attendance[]
+  guardian      User?        @relation("GuardianWards", fields: [guardianId], references: [id])
+  wards         User[]       @relation("GuardianWards")
 
   @@map("users")
 }
@@ -66,8 +127,8 @@ model Class {
 
   // Relations
   teacher     User         @relation("TeacherClasses", fields: [teacherId], references: [id])
+  gradeLinks  GradeClass[]
   enrollments Enrollment[]
-  attendance  Attendance[]
   materials   Material[]
   assignments Assignment[]
   attendance  Attendance[]
@@ -76,10 +137,11 @@ model Class {
 }
 
 model Enrollment {
-  id        String   @id @default(uuid()) @db.Uuid
-  classId   String   @db.Uuid
-  studentId String   @db.Uuid
-  createdAt DateTime @default(now())
+  id        String           @id @default(uuid()) @db.Uuid
+  classId   String           @db.Uuid
+  studentId String           @db.Uuid
+  status    EnrollmentStatus @default(PENDING)
+  createdAt DateTime         @default(now())
 
   // Relations
   class   Class @relation(fields: [classId], references: [id], onDelete: Cascade)
@@ -263,16 +325,17 @@ model Notification {
 }
 
 model StudentReport {
-  id                 String   @id @default(uuid()) @db.Uuid
-  studentId          String   @db.Uuid
-  alertId            String   @db.Uuid
+  id                 String       @id @default(uuid()) @db.Uuid
+  studentId          String       @db.Uuid
+  alertId            String       @db.Uuid
   parentSection      String
   teacherSection     String
   managementSection  String
-  createdAt          DateTime @default(now())
+  status             ReportStatus @default(NEW)
+  createdAt          DateTime     @default(now())
 
-  student            User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  alert              Alert    @relation(fields: [alertId], references: [id], onDelete: Cascade)
+  student            User         @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  alert              Alert        @relation(fields: [alertId], references: [id], onDelete: Cascade)
 
   @@map("student_reports")
 }
@@ -290,17 +353,4 @@ model DeviceToken {
   @@map("device_tokens")
 }
 
-model Attendance {
-  id        String   @id @default(uuid()) @db.Uuid
-  studentId String   @db.Uuid
-  classId   String   @db.Uuid
-  date      DateTime
-  present   Boolean  @default(true)
-  createdAt DateTime @default(now())
 
-  student   User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  class     Class    @relation(fields: [classId], references: [id], onDelete: Cascade)
-
-  @@unique([studentId, classId, date])
-  @@map("attendance")
-}

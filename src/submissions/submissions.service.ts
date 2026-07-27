@@ -1,4 +1,10 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  BadRequestException,
+} from '@nestjs/common';
+import pdfParse from 'pdf-parse';
 import { PrismaService } from '../prisma/prisma.service';
 import { GradingService } from '../grading/grading.service';
 import { NotificationsService } from '../notifications/notifications.service';

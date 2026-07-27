@@ -23,16 +23,16 @@ import { CurrentUser } from '../auth/current-user.decorator';
 export class ClassesController {
   constructor(private readonly classesService: ClassesService) {}
 
-  @Roles('TEACHER')
+  @Roles('ADMIN')
   @Post()
-  @ApiOperation({ summary: 'Create a class' })
+  @ApiOperation({ summary: 'Create a class (admin only, specify teacherId)' })
   @ApiBody({ type: CreateClassDto })
   @ApiOkResponse({ type: ClassDto })
-  create(@Body() dto: CreateClassDto, @CurrentUser('id') teacherId: string) {
-    return this.classesService.create(dto, teacherId);
+  create(@Body() dto: CreateClassDto) {
+    return this.classesService.create(dto, dto.teacherId);
   }
 
-  @Roles('TEACHER', 'STUDENT', 'GUARDIAN')
+  @Roles('TEACHER', 'STUDENT', 'GUARDIAN', 'ADMIN')
   @Get()
   @ApiOperation({ summary: 'List all classes' })
   @ApiOkResponse({ type: ClassDto, isArray: true })
@@ -40,7 +40,14 @@ export class ClassesController {
     return this.classesService.findAll();
   }
 
-  @Roles('TEACHER', 'STUDENT', 'GUARDIAN')
+  @Roles('STUDENT')
+  @Get('available')
+  @ApiOperation({ summary: 'List available classes for self-enrollment' })
+  findAvailable(@CurrentUser('id') studentId: string) {
+    return this.classesService.findAvailable(studentId);
+  }
+
+  @Roles('TEACHER', 'STUDENT', 'GUARDIAN', 'ADMIN')
   @Get(':id')
   @ApiOperation({ summary: 'Get class by ID' })
   @ApiOkResponse({ type: ClassDto })
@@ -48,7 +55,7 @@ export class ClassesController {
     return this.classesService.findOne(id);
   }
 
-  @Roles('TEACHER')
+  @Roles('TEACHER', 'ADMIN')
   @Patch(':id')
   @ApiOperation({ summary: 'Update a class' })
   @ApiBody({ type: UpdateClassDto })
@@ -57,7 +64,7 @@ export class ClassesController {
     return this.classesService.update(id, dto);
   }
 
-  @Roles('TEACHER')
+  @Roles('TEACHER', 'ADMIN')
   @Delete(':id')
   @ApiOperation({ summary: 'Delete a class' })
   remove(@Param('id') id: string) {
@@ -70,6 +77,20 @@ export class ClassesController {
   @ApiBody({ type: AddEnrollmentDto })
   addEnrollment(@Param('id') id: string, @Body() dto: AddEnrollmentDto) {
     return this.classesService.addEnrollment(id, dto.studentId);
+  }
+
+  @Roles('STUDENT')
+  @Post(':id/join')
+  @ApiOperation({ summary: 'Student self-join class' })
+  join(@Param('id') id: string, @CurrentUser('id') studentId: string) {
+    return this.classesService.joinClass(id, studentId);
+  }
+
+  @Roles('TEACHER')
+  @Get(':id/requests')
+  @ApiOperation({ summary: 'List pending enrollment requests' })
+  getRequests(@Param('id') id: string) {
+    return this.classesService.getRequests(id);
   }
 
   @Roles('TEACHER')

@@ -7,7 +7,7 @@ describe('GradingController', () => {
 
   const mockGradingService = {
     gradeSubmission: jest.fn(),
-    confirm: jest.fn(),
+    confirmAll: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -35,16 +35,15 @@ describe('GradingController', () => {
     });
   });
 
-  describe('confirm', () => {
-    it('should call gradingService.confirm', async () => {
-      const id = 'score-1';
-      const dto = { pointsAwarded: 8, teacherNotes: 'Good' };
-      const expected = { id, isConfirmed: true };
-      mockGradingService.confirm.mockResolvedValue(expected);
+  describe('confirmAll', () => {
+    it('should call gradingService.confirmAll', async () => {
+      const submissionId = 'sub-1';
+      const expected = { id: submissionId, scores: [], status: 'CONFIRMED' };
+      mockGradingService.confirmAll.mockResolvedValue(expected);
 
-      const result = await controller.confirm(id, dto);
+      const result = await controller.confirmAll(submissionId);
 
-      expect(mockGradingService.confirm).toHaveBeenCalledWith(id, dto);
+      expect(mockGradingService.confirmAll).toHaveBeenCalledWith(submissionId);
       expect(result).toEqual(expected);
     });
   });

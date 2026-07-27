@@ -3,6 +3,7 @@ import { Pool } from 'pg';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '@prisma/client';
 import { chunkText } from '../src/common/chunker';
+import { createClient } from '@supabase/supabase-js';
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
@@ -23,8 +24,49 @@ Another concern is the potential for reduced human interaction. Education is not
 
 In conclusion, while AI offers tremendous potential to enhance education through personalization and efficiency, it must be implemented thoughtfully. Schools should adopt AI tools that augment rather than replace human teachers, and they must address privacy and equity concerns proactively. The goal should be to use AI as a tool that empowers both teachers and students, not as a replacement for the human elements that make education meaningful.`;
 
+async function createAuthUser(email: string, password: string, name: string) {
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
+  if (!supabaseUrl || !supabaseKey) return;
+
+  const supabase = createClient(supabaseUrl, supabaseKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+
+  const { error } = await supabase.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+    user_metadata: { name },
+  });
+
+  if (error) console.warn(`  ⚠ Auth user creation skipped for ${email}: ${error.message}`);
+}
+
 async function main() {
   console.log('Seeding database...');
+
+  const adminUser = await prisma.user.upsert({
+    where: { email: 'admin@eduai.test' },
+    update: {},
+    create: {
+      email: 'admin@eduai.test',
+      name: 'Admin User',
+      role: 'ADMIN',
+    },
+  });
+  console.log(`  Admin: ${adminUser.name} (${adminUser.id})`);
+
+  for (let level = 1; level <= 12; level++) {
+    await prisma.grade.upsert({
+      where: { level },
+      update: {},
+      create: { level },
+    });
+  }
+  console.log('  Grades 1–12 created');
+
+  const grade10 = await prisma.grade.findUniqueOrThrow({ where: { level: 10 } });
 
   const teacher = await prisma.user.upsert({
     where: { email: 'teacher@eduai.test' },
@@ -44,9 +86,27 @@ async function main() {
       email: 'student@eduai.test',
       name: 'Sam Learner',
       role: 'STUDENT',
+      gradeId: grade10.id,
     },
   });
   console.log(`  Student: ${student.name} (${student.id})`);
+
+  const guardian = await prisma.user.upsert({
+    where: { email: 'guardian@eduai.test' },
+    update: {},
+    create: {
+      email: 'guardian@eduai.test',
+      name: 'Guardian User',
+      role: 'GUARDIAN',
+    },
+  });
+  console.log(`  Guardian: ${guardian.name} (${guardian.id})`);
+
+  await prisma.user.update({
+    where: { id: student.id },
+    data: { guardianId: guardian.id },
+  });
+  console.log('  Guardian linked to student');
 
   const placeholder = await prisma.user.upsert({
     where: { id: '00000000-0000-0000-0000-000000000000' },
@@ -101,6 +161,7 @@ async function main() {
     create: {
       classId: englishClass.id,
       studentId: student.id,
+      status: 'APPROVED',
     },
   });
   console.log(`  Enrollment: ${student.name} → ${englishClass.name}`);
@@ -227,8 +288,50 @@ async function main() {
 
   console.log(`  Submission created for "${essayAssignment.title}" (${chunks.length} chunks)`);
 
+  const grade6 = await prisma.grade.findUniqueOrThrow({ where: { level: 6 } });
+  const grade8 = await prisma.grade.findUniqueOrThrow({ where: { level: 8 } });
+
+  await prisma.teacherGrade.upsert({
+    where: { teacherId_gradeId: { teacherId: teacher.id, gradeId: grade6.id } },
+    update: {},
+    create: { teacherId: teacher.id, gradeId: grade6.id },
+  });
+  await prisma.teacherGrade.upsert({
+    where: { teacherId_gradeId: { teacherId: teacher.id, gradeId: grade8.id } },
+    update: {},
+    create: { teacherId: teacher.id, gradeId: grade8.id },
+  });
+  await prisma.teacherGrade.upsert({
+    where: { teacherId_gradeId: { teacherId: teacher.id, gradeId: grade10.id } },
+    update: {},
+    create: { teacherId: teacher.id, gradeId: grade10.id },
+  });
+  console.log('  Teacher assigned to grades 6, 8, 10');
+
+  await prisma.gradeClass.upsert({
+    where: { gradeId_classId: { gradeId: grade10.id, classId: englishClass.id } },
+    update: {},
+    create: { gradeId: grade10.id, classId: englishClass.id },
+  });
+  await prisma.gradeClass.upsert({
+    where: { gradeId_classId: { gradeId: grade10.id, classId: historyClass.id } },
+    update: {},
+    create: { gradeId: grade10.id, classId: historyClass.id },
+  });
+  await prisma.gradeClass.upsert({
+    where: { gradeId_classId: { gradeId: grade10.id, classId: scienceClass.id } },
+    update: {},
+    create: { gradeId: grade10.id, classId: scienceClass.id },
+  });
+  console.log('  Classes linked to Grade 10');
+
+  await createAuthUser('admin@eduai.test', 'password123', 'Admin User');
+  await createAuthUser('teacher@eduai.test', 'password123', 'Alex Mentor');
+  await createAuthUser('student@eduai.test', 'password123', 'Sam Learner');
+  await createAuthUser('guardian@eduai.test', 'password123', 'Guardian User');
+
   console.log('\n✅ Seed complete! IDs for Swagger testing:');
-  console.log(`  Teacher ID:       ${teacher.id}`);
+  console.log(`  Admin ID:         ${adminUser.id}`);
   console.log(`  Student ID:       ${student.id}`);
   console.log(`  Class (English):  ${englishClass.id}`);
   console.log(`  Class (History):  ${historyClass.id}`);

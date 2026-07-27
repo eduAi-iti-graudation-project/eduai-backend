@@ -15,7 +15,6 @@ import { Roles } from '../auth/roles.decorator';
 export class AlertsController {
   constructor(private readonly alertsService: AlertsService) {}
 
-  @Roles('TEACHER')
   @Get()
   @Roles('TEACHER', 'ADMIN')
   @ApiOperation({ summary: "List alerts for teacher's classes" })
