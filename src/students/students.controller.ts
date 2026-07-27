@@ -35,8 +35,16 @@ export class StudentsController {
   @Roles('ADMIN')
   @Post(':id/guardian')
   @ApiOperation({ summary: 'Link a guardian to a student' })
-  @ApiBody({ schema: { type: 'object', properties: { guardianId: { type: 'string', format: 'uuid' } } } })
-  linkGuardian(@Param('id') id: string, @Body('guardianId') guardianId: string) {
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: { guardianId: { type: 'string', format: 'uuid' } },
+    },
+  })
+  linkGuardian(
+    @Param('id') id: string,
+    @Body('guardianId') guardianId: string,
+  ) {
     return this.studentsService.linkGuardian(id, guardianId);
   }
 }
