@@ -75,15 +75,25 @@ export class ClassesService {
     });
   }
 
-  addEnrollment(classId: string, studentId: string) {
+  async addEnrollment(classId: string, studentId: string) {
+    const cls = await this.prisma.class.findUnique({ where: { id: classId } });
+    if (!cls) throw new NotFoundException('Class not found');
+    const student = await this.prisma.user.findUnique({
+      where: { id: studentId },
+    });
+    if (!student) throw new NotFoundException('Student not found');
     return this.prisma.enrollment.create({
       data: { classId, studentId, status: 'APPROVED' },
     });
   }
 
-  removeEnrollment(classId: string, studentId: string) {
-    return this.prisma.enrollment.delete({
+  async removeEnrollment(classId: string, studentId: string) {
+    const enrollment = await this.prisma.enrollment.findUnique({
       where: { classId_studentId: { classId, studentId } },
+    });
+    if (!enrollment) throw new NotFoundException('Enrollment not found');
+    return this.prisma.enrollment.delete({
+      where: { id: enrollment.id },
     });
   }
 
