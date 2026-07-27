@@ -42,8 +42,52 @@ enum ReportStatus {
 enum SubmissionStatus {
   SUBMITTED
   GRADING_IN_PROGRESS
-  REVIEWED
+  REVIEW_READY
   CONFIRMED
+}
+
+enum EnrollmentStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model Grade {
+  id        String   @id @default(uuid()) @db.Uuid
+  level     Int      @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  students User[]
+  teachers TeacherGrade[]
+  classes  GradeClass[]
+
+  @@map("grades")
+}
+
+model TeacherGrade {
+  id        String   @id @default(uuid()) @db.Uuid
+  teacherId String   @db.Uuid
+  gradeId   String   @db.Uuid
+  createdAt DateTime @default(now())
+
+  teacher User  @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  grade   Grade @relation(fields: [gradeId], references: [id], onDelete: Cascade)
+
+  @@unique([teacherId, gradeId])
+  @@map("teacher_grades")
+}
+
+model GradeClass {
+  id      String @id @default(uuid()) @db.Uuid
+  gradeId String @db.Uuid
+  classId String @db.Uuid
+
+  grade Grade @relation(fields: [gradeId], references: [id], onDelete: Cascade)
+  class Class @relation(fields: [classId], references: [id], onDelete: Cascade)
+
+  @@unique([gradeId, classId])
+  @@map("grade_classes")
 }
 
 model User {
@@ -52,12 +96,14 @@ model User {
   email     String   @unique
   name      String
   role      UserRole
-  guardianId String? @db.Uuid
+  gradeId    String?  @db.Uuid
+  guardianId String?  @db.Uuid
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  // Relations
-  taughtClasses Class[]      @relation("TeacherClasses")
+  grade         Grade?         @relation(fields: [gradeId], references: [id])
+  teacherGrades TeacherGrade[]
+  taughtClasses Class[]        @relation("TeacherClasses")
   enrollments   Enrollment[]
   submissions   Submission[]
   alerts        Alert[]
@@ -81,6 +127,7 @@ model Class {
 
   // Relations
   teacher     User         @relation("TeacherClasses", fields: [teacherId], references: [id])
+  gradeLinks  GradeClass[]
   enrollments Enrollment[]
   materials   Material[]
   assignments Assignment[]
@@ -90,10 +137,11 @@ model Class {
 }
 
 model Enrollment {
-  id        String   @id @default(uuid()) @db.Uuid
-  classId   String   @db.Uuid
-  studentId String   @db.Uuid
-  createdAt DateTime @default(now())
+  id        String           @id @default(uuid()) @db.Uuid
+  classId   String           @db.Uuid
+  studentId String           @db.Uuid
+  status    EnrollmentStatus @default(PENDING)
+  createdAt DateTime         @default(now())
 
   // Relations
   class   Class @relation(fields: [classId], references: [id], onDelete: Cascade)

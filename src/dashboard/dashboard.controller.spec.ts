@@ -23,7 +23,12 @@ describe('DashboardController', () => {
   });
 
   it('should call service with current user', async () => {
-    const mockUser = { id: 'user-1', email: 'a@b.com', name: 'T', role: 'TEACHER' } as User;
+    const mockUser = {
+      id: 'user-1',
+      email: 'a@b.com',
+      name: 'T',
+      role: 'TEACHER',
+    } as User;
     const expected = { classCount: 3 };
 
     mockDashboardService.getOverview.mockResolvedValue(expected);

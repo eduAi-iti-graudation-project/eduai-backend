@@ -40,7 +40,7 @@ export class GradingService {
 
     await this.prisma.submission.update({
       where: { id: submissionId },
-      data: { status: 'REVIEWED' },
+      data: { status: 'REVIEW_READY' },
     });
   }
 

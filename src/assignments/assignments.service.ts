@@ -5,13 +5,17 @@ import { PrismaService } from '../prisma/prisma.service';
 export class AssignmentsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  create(dto: {
+  async create(dto: {
     title: string;
     description?: string;
     dueDate: string;
     totalPoints: number;
     classId: string;
   }) {
+    const cls = await this.prisma.class.findUnique({
+      where: { id: dto.classId },
+    });
+    if (!cls) throw new NotFoundException('Class not found');
     return this.prisma.assignment.create({
       data: { ...dto, dueDate: new Date(dto.dueDate) },
     });
@@ -32,7 +36,7 @@ export class AssignmentsService {
     return assignment;
   }
 
-  update(
+  async update(
     id: string,
     dto: {
       title?: string;
@@ -41,6 +45,8 @@ export class AssignmentsService {
       totalPoints?: number;
     },
   ) {
+    const existing = await this.prisma.assignment.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException('Assignment not found');
     return this.prisma.assignment.update({
       where: { id },
       data: {
@@ -52,7 +58,9 @@ export class AssignmentsService {
     });
   }
 
-  remove(id: string) {
+  async remove(id: string) {
+    const existing = await this.prisma.assignment.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException('Assignment not found');
     return this.prisma.assignment.delete({ where: { id } });
   }
 }

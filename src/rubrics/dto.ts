@@ -24,4 +24,10 @@ export const ExtractedRubricSchema = z.object({
   criteria: z.array(ExtractedCriterionSchema).min(1),
 });
 
+export const ImportPdfRubricSchema = z.object({
+  assignmentId: z.string().uuid(),
+});
+
 export type ExtractedRubric = z.infer<typeof ExtractedRubricSchema>;
+
+export class ImportPdfRubricDto extends createZodDto(ImportPdfRubricSchema) {}
