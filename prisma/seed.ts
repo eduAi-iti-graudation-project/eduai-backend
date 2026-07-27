@@ -86,9 +86,27 @@ async function main() {
       email: 'student@eduai.test',
       name: 'Sam Learner',
       role: 'STUDENT',
+      gradeId: grade10.id,
     },
   });
   console.log(`  Student: ${student.name} (${student.id})`);
+
+  const guardian = await prisma.user.upsert({
+    where: { email: 'guardian@eduai.test' },
+    update: {},
+    create: {
+      email: 'guardian@eduai.test',
+      name: 'Guardian User',
+      role: 'GUARDIAN',
+    },
+  });
+  console.log(`  Guardian: ${guardian.name} (${guardian.id})`);
+
+  await prisma.user.update({
+    where: { id: student.id },
+    data: { guardianId: guardian.id },
+  });
+  console.log('  Guardian linked to student');
 
   const placeholder = await prisma.user.upsert({
     where: { id: '00000000-0000-0000-0000-000000000000' },
@@ -143,6 +161,7 @@ async function main() {
     create: {
       classId: englishClass.id,
       studentId: student.id,
+      status: 'APPROVED',
     },
   });
   console.log(`  Enrollment: ${student.name} → ${englishClass.name}`);
@@ -269,8 +288,50 @@ async function main() {
 
   console.log(`  Submission created for "${essayAssignment.title}" (${chunks.length} chunks)`);
 
+  const grade6 = await prisma.grade.findUniqueOrThrow({ where: { level: 6 } });
+  const grade8 = await prisma.grade.findUniqueOrThrow({ where: { level: 8 } });
+
+  await prisma.teacherGrade.upsert({
+    where: { teacherId_gradeId: { teacherId: teacher.id, gradeId: grade6.id } },
+    update: {},
+    create: { teacherId: teacher.id, gradeId: grade6.id },
+  });
+  await prisma.teacherGrade.upsert({
+    where: { teacherId_gradeId: { teacherId: teacher.id, gradeId: grade8.id } },
+    update: {},
+    create: { teacherId: teacher.id, gradeId: grade8.id },
+  });
+  await prisma.teacherGrade.upsert({
+    where: { teacherId_gradeId: { teacherId: teacher.id, gradeId: grade10.id } },
+    update: {},
+    create: { teacherId: teacher.id, gradeId: grade10.id },
+  });
+  console.log('  Teacher assigned to grades 6, 8, 10');
+
+  await prisma.gradeClass.upsert({
+    where: { gradeId_classId: { gradeId: grade10.id, classId: englishClass.id } },
+    update: {},
+    create: { gradeId: grade10.id, classId: englishClass.id },
+  });
+  await prisma.gradeClass.upsert({
+    where: { gradeId_classId: { gradeId: grade10.id, classId: historyClass.id } },
+    update: {},
+    create: { gradeId: grade10.id, classId: historyClass.id },
+  });
+  await prisma.gradeClass.upsert({
+    where: { gradeId_classId: { gradeId: grade10.id, classId: scienceClass.id } },
+    update: {},
+    create: { gradeId: grade10.id, classId: scienceClass.id },
+  });
+  console.log('  Classes linked to Grade 10');
+
+  await createAuthUser('admin@eduai.test', 'password123', 'Admin User');
+  await createAuthUser('teacher@eduai.test', 'password123', 'Alex Mentor');
+  await createAuthUser('student@eduai.test', 'password123', 'Sam Learner');
+  await createAuthUser('guardian@eduai.test', 'password123', 'Guardian User');
+
   console.log('\n✅ Seed complete! IDs for Swagger testing:');
-  console.log(`  Teacher ID:       ${teacher.id}`);
+  console.log(`  Admin ID:         ${adminUser.id}`);
   console.log(`  Student ID:       ${student.id}`);
   console.log(`  Class (English):  ${englishClass.id}`);
   console.log(`  Class (History):  ${historyClass.id}`);
