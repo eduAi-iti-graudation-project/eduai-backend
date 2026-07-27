@@ -46,6 +46,12 @@ enum SubmissionStatus {
   CONFIRMED
 }
 
+enum EnrollmentStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 model Grade {
   id        String   @id @default(uuid()) @db.Uuid
   level     Int      @unique
