@@ -5,13 +5,17 @@ import { PrismaService } from '../prisma/prisma.service';
 export class AssignmentsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  create(dto: {
+  async create(dto: {
     title: string;
     description?: string;
     dueDate: string;
     totalPoints: number;
     classId: string;
   }) {
+    const cls = await this.prisma.class.findUnique({
+      where: { id: dto.classId },
+    });
+    if (!cls) throw new NotFoundException('Class not found');
     return this.prisma.assignment.create({
       data: { ...dto, dueDate: new Date(dto.dueDate) },
     });
