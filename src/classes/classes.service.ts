@@ -54,6 +54,12 @@ export class ClassesService {
     });
   }
 
+  async joinClass(classId: string, studentId: string) {
+    return this.prisma.enrollment.create({
+      data: { classId, studentId, status: 'PENDING' },
+    });
+  }
+
   addEnrollment(classId: string, studentId: string) {
     return this.prisma.enrollment.create({ data: { classId, studentId } });
   }
