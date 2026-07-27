@@ -46,6 +46,19 @@ enum SubmissionStatus {
   CONFIRMED
 }
 
+model Grade {
+  id        String   @id @default(uuid()) @db.Uuid
+  level     Int      @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  students User[]
+  teachers TeacherGrade[]
+  classes  GradeClass[]
+
+  @@map("grades")
+}
+
 model User {
   id        String   @id @default(uuid()) @db.Uuid
   authId    String?  @unique
