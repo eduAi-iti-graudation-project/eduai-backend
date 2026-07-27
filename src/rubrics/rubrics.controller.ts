@@ -13,7 +13,7 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiOperation, ApiBody, ApiConsumes } from '@nestjs/swagger';
 import { RubricsService } from './rubrics.service';
-import { CreateRubricDto } from './dto';
+import { CreateRubricDto, ImportPdfRubricDto } from './dto';
 import { Roles } from '../auth/roles.decorator';
 
 @ApiTags('rubrics')
@@ -21,9 +21,8 @@ import { Roles } from '../auth/roles.decorator';
 export class RubricsController {
   constructor(private readonly rubricsService: RubricsService) {}
 
-  @Roles('TEACHER')
-  @Post()
   @Roles('TEACHER', 'ADMIN')
+  @Post()
   @ApiOperation({ summary: 'Create a rubric with criteria' })
   @ApiBody({ type: CreateRubricDto })
   create(@Body() dto: CreateRubricDto) {
@@ -44,17 +43,15 @@ export class RubricsController {
     return this.rubricsService.findOne(id);
   }
 
-  @Roles('TEACHER')
-  @Patch(':id/confirm')
   @Roles('TEACHER', 'ADMIN')
+  @Patch(':id/confirm')
   @ApiOperation({ summary: 'Confirm a rubric (enables grading against it)' })
   confirm(@Param('id') id: string) {
     return this.rubricsService.confirm(id);
   }
 
-  @Roles('TEACHER')
-  @Post('import-pdf')
   @Roles('ADMIN')
+  @Post('import-pdf')
   @UseInterceptors(
     FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } }),
   )
@@ -75,5 +72,36 @@ export class RubricsController {
       );
     }
     return this.rubricsService.importPdf(file.buffer);
+  }
+
+  @Roles('TEACHER', 'ADMIN')
+  @Post('from-pdf')
+  @UseInterceptors(
+    FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } }),
+  )
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: 'Upload a PDF rubric and create the rubric in one call' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', format: 'binary' },
+        assignmentId: { type: 'string', format: 'uuid' },
+      },
+    },
+  })
+  fromPdf(
+    @UploadedFile() file: Express.Multer.File,
+    @Body('assignmentId') assignmentId: string,
+  ) {
+    if (!file) {
+      throw new BadRequestException(
+        'File is required. Upload a PDF using the "file" field.',
+      );
+    }
+    if (!assignmentId) {
+      throw new BadRequestException('assignmentId is required');
+    }
+    return this.rubricsService.fromPdf(file.buffer, assignmentId);
   }
 }
