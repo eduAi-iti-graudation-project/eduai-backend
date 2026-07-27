@@ -9,73 +9,78 @@
 1. `specs.md` — product, architecture, data model, non-negotiable rules
 2. `backend-specs.md` — this repo's structure and conventions
 
+## Exploring the codebase
+When asked about an endpoint:
+1. Try `curl http://localhost:3000/api` or
+   `curl http://localhost:3000/api-json` first to check the OpenAPI docs.
+2. If the server isn't running, try `npm run start:dev` and retry. If you
+   can't start it, say so.
+3. If the endpoint isn't in the OpenAPI docs, read the relevant module's
+   controller and service code.
+
 ## Project
 EduAI backend. NestJS + Prisma + Postgres/pgvector (Supabase) + Custom LLM
 provider (ITI API gateway) + HuggingFace embeddings (1024-dim) + Supabase
-Auth (to be wired) + Supabase Storage (file uploads).
+Auth + Supabase Storage.
 Modular monolith — one module per feature (see `backend-specs.md`).
 
-## Current sprint — End-to-end pipeline + notifications + reports + dashboard
+## Phases — Mastra agent buildout
 
-### Pipeline (in execution order)
+### Phase 1: Feedback Writer Agent
+Replace the placeholder `aiFeedback` (`"Auto-graded placeholder..."`) in
+`GradingService.gradeSubmission()` with real per-criterion natural-language
+feedback written by a Mastra agent.
 
-1. **Teacher creates assignment + rubric** — manual form or PDF import → AI
-   extracts criteria (Prompt Factory) → teacher reviews/edits → confirms
-2. **On rubric confirm** → each criterion's `description` embedded (1024 dim)
-   via HuggingFace `mxbai-embed-large-v1` stored in `RubricCriteria.embedding`
-3. **Student submits** — text paste or PDF upload → raw text chunked
-   (~300-500 tokens, paragraph-aware, ~50 token overlap) → `SubmissionChunk`
-   rows created
-4. **Auto-grade fires** (fire-and-forget inside
-   `SubmissionsService.create()`) → `GradingService.gradeSubmission()` runs
-   synchronously in background, status `SUBMITTED → GRADING_IN_PROGRESS →
-   REVIEW_READY` → teacher notified via email
-5. **Teacher reviews** — opens submission, sees per-criterion AI scores +
-   feedback, edits any points/notes
-6. **Teacher confirms all** — `PATCH /grades/confirm-all/:submissionId`
-   atomically sets all `GradingScore.isConfirmed = true`, status →
-   `CONFIRMED`
-7. **On confirm** → `AnalysisService.evaluateStudent()` runs threshold check
-   → if flagged, `Alert` created → `ReportService.generate()` auto-creates
-   three-tier report (parent/teacher/management) via single LLM call →
-   `NotificationService` emails relevant parties
+**Trigger:** Fires after `gradeSubmission()` upserts scores — calls
+`FeedbackWriterService.write(submissionId)`.
 
-### Modules
+**Flow:**
+1. Reads submission chunks + rubric criteria + per-criterion scores
+2. For each criterion, calls `LlmService` via a Mastra agent tool to
+   generate specific, actionable feedback (e.g. *"Your thesis was clear
+   but needs textual evidence — try citing line 12."*)
+3. Saves feedback to `GradingScore.aiFeedback`
 
-| Module | Role |
-|---|---|
-| `auth/` | Supabase JWT guard, role guard, `@Roles()` decorator |
-| `guardians/` | Guardian-student linking, parent dashboard data |
-| `attendance/` | Import + view endpoints |
-| `analysis/` | Existing overall-grade Analysis Agent + `criterion-detector.ts` + `report-generator.ts` |
-| `notifications/` | NotificationService (email + push), Notification model |
-| `materials/` | Supabase Storage integration for original file preservation |
-| `dashboard/` | Unified `GET /dashboard/overview` — role-aware aggregation |
-| `rubrics/` | CRUD, PDF import (Prompt Factory), confirm + embed criteria |
-| `common/llm/` | Single `LlmService` wrapping OpenAI SDK — all agents call through this |
-| `common/pii/` | Redact student name/ID before any LLM call |
-| `common/chunker/` | Shared `chunkText()` — paragraph-aware, configurable token window |
-| `submissions/` | Student submit, chunking, auto-trigger grading via fire-and-forget |
-| `grading/` | Grading Agent + `confirmAll()` bulk endpoint |
-| `analysis/` | Deterministic threshold rule + alert creation |
-| `reports/` | Three-tier report generation (triggered on alert creation) |
-| `notifications/` | Email delivery (nodemailer), `Notification` model, push infra stored |
-| `assistant/` | Tool-calling loop (search_curriculum, create_quiz) |
-| `alerts/` | CRUD including `PATCH /alerts/:id` (resolve/dismiss) |
-| `materials/` | `ClassMaterial`, `MaterialChunk`, curriculum chunking + search |
-| `dashboard/` | Unified `GET /dashboard/overview` — role-aware aggregation |
-| `common/validation/` | Shared Zod schemas + retry-once wrapper for LLM structured output |
+**Files to create:**
+```
+src/feedback-writer/
+  feedback-writer.module.ts
+  feedback-writer.service.ts
+  feedback-writer.agent.ts     ← Mastra Agent definition
+  tools/write-feedback.tool.ts ← createTool calling LlmService
+```
+**Depends on:** `@mastra/core` + `@mastra/nestjs` wired into the project.
 
-### Schema additions
+### Phase 2: Homework Helper Agent
+A student-facing agent that answers homework questions by searching the
+curriculum, looking up assignments, and giving hints.
 
-- `UserRole` enum: `TEACHER`, `STUDENT`, `GUARDIAN`, `ADMIN`
-- `Notification { id, userId, type, channel (EMAIL\|PUSH), title, body, readAt?, createdAt }`
-- `StudentReport { id, studentId, alertId, parentSection, teacherSection, managementSection, createdAt }`
-- `DeviceToken { id, userId, token, platform, createdAt }`
-- `Attendance { id, studentId, classId, date, status (PRESENT\|ABSENT\|LATE\|EXCUSED), createdAt }`
+**Endpoint:** `POST /assistant/homework-help`
+
+**Flow:**
+1. Student sends "I don't get question 3 on the math assignment"
+2. Agent searches curriculum (tool 1 — via `MaterialsService`)
+3. Agent looks up assignment + rubric context (tool 2)
+4. Agent decides: give a hint, explain a concept, or redirect to teacher
+5. Responds to student + logs the interaction (tool 3)
+
+**Files to create:**
+```
+src/homework-helper/
+  homework-helper.module.ts
+  homework-helper.controller.ts
+  homework-helper.service.ts
+  homework-helper.agent.ts
+  tools/search-curriculum.tool.ts
+  tools/lookup-assignment.tool.ts
+  tools/log-interaction.tool.ts
+```
+**Depends on:** Phase 1 complete (Mastra already wired), frontend team
+for the student-side UI.
+
+## Remaining architecture
 
 ### Key decisions
-
 - Auto-grade is fire-and-forget: `SubmissionsService.create()` calls
   `gradingService.gradeSubmission(id)` without `await`. Student gets instant
   response, grading runs in background, teacher notified on completion.
@@ -85,17 +90,36 @@ Modular monolith — one module per feature (see `backend-specs.md`).
 - All 4 roles have separate dashboard views via `GET /dashboard/overview`.
 - Auth uses placeholder UUID; teammate wires Supabase Auth later.
 
-### Status
+### Modules
 
-| # | What | Status |
-|---|---|---|
-| 1 | Auto-grade on Submit (fire-and-forget) | ⬜ Not started |
-| 2 | Notification Service (nodemailer + model) | ⬜ Not started |
-| 3 | Alert resolution endpoint PATCH /alerts/:id | ⬜ Not started |
-| 4 | Three-tier Report generation | ⬜ Not started |
-| 5 | Bulk confirm endpoint PATCH /grades/confirm-all/:submissionId | ⬜ Not started |
-| 6 | Prisma schema: GUARDIAN/ADMIN roles + new models | ⬜ Not started |
-| 7 | Role guards for GUARDIAN + ADMIN | ⬜ Not started |
+| Module | Role |
+|---|---|
+| `auth/` | Supabase JWT guard, role guard, `@Roles()` decorator |
+| `guardians/` | Guardian-student linking, parent dashboard data |
+| `attendance/` | Import + view endpoints |
+| `analysis/` | Threshold rule + alert creation + report generation |
+| `notifications/` | NotificationService (email via nodemailer) |
+| `materials/` | ClassMaterial, MaterialChunk, curriculum chunking + search |
+| `dashboard/` | Unified `GET /dashboard/overview` — role-aware aggregation |
+| `rubrics/` | CRUD, PDF import (Prompt Factory), confirm + embed criteria |
+| `submissions/` | Student submit, chunking, auto-trigger grading |
+| `grading/` | Grading Agent + `confirmAll()` bulk endpoint |
+| `reports/` | Three-tier report generation |
+| `assistant/` | Tool-calling loop (search_curriculum, create_quiz) |
+| `alerts/` | CRUD including `PATCH /alerts/:id` (resolve/dismiss) |
+| `classes/` | Class + Enrollment (self-serve + teacher approve/reject) |
+| `enrollments/` | `PATCH /enrollments/:id/approve|reject` |
+| `grades/` | Grade CRUD, class linking |
+| `teachers/` | Teacher-grade assignment |
+| `users/` | Admin `GET /users?role=&q=` |
+| `students/` | Student classes, update, link guardian |
+| `feedback-writer/` | **Phase 1** — Mastra agent for per-criterion feedback |
+| `homework-helper/` | **Phase 2** — Mastra agent for student homework help |
+| `common/llm/` | `LlmService` — all LLM calls go through this |
+| `common/pii/` | Redact student name/ID before any LLM call |
+| `common/chunker/` | Shared `chunkText()` — paragraph-aware, token window |
+| `common/validation/` | Shared Zod schemas + retry-once wrapper |
+| `common/ai/` | ProviderService wrapping the ITI API gateway |
 
 ## Commands
 - `docker compose up -d` — local Postgres+pgvector
