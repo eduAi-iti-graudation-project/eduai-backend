@@ -58,7 +58,9 @@ export class AssignmentsService {
     });
   }
 
-  remove(id: string) {
+  async remove(id: string) {
+    const existing = await this.prisma.assignment.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException('Assignment not found');
     return this.prisma.assignment.delete({ where: { id } });
   }
 
