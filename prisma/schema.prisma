@@ -137,10 +137,11 @@ model Class {
 }
 
 model Enrollment {
-  id        String   @id @default(uuid()) @db.Uuid
-  classId   String   @db.Uuid
-  studentId String   @db.Uuid
-  createdAt DateTime @default(now())
+  id        String           @id @default(uuid()) @db.Uuid
+  classId   String           @db.Uuid
+  studentId String           @db.Uuid
+  status    EnrollmentStatus @default(PENDING)
+  createdAt DateTime         @default(now())
 
   // Relations
   class   Class @relation(fields: [classId], references: [id], onDelete: Cascade)
