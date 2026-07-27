@@ -72,6 +72,18 @@ model TeacherGrade {
   @@map("teacher_grades")
 }
 
+model GradeClass {
+  id      String @id @default(uuid()) @db.Uuid
+  gradeId String @db.Uuid
+  classId String @db.Uuid
+
+  grade Grade @relation(fields: [gradeId], references: [id], onDelete: Cascade)
+  class Class @relation(fields: [classId], references: [id], onDelete: Cascade)
+
+  @@unique([gradeId, classId])
+  @@map("grade_classes")
+}
+
 model User {
   id        String   @id @default(uuid()) @db.Uuid
   authId    String?  @unique
@@ -109,6 +121,7 @@ model Class {
 
   // Relations
   teacher     User         @relation("TeacherClasses", fields: [teacherId], references: [id])
+  gradeLinks  GradeClass[]
   enrollments Enrollment[]
   materials   Material[]
   assignments Assignment[]
