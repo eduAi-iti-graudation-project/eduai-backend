@@ -38,6 +38,22 @@ export class ClassesService {
     return this.prisma.class.delete({ where: { id } });
   }
 
+  async findAvailable(studentId: string) {
+    const student = await this.prisma.user.findUnique({
+      where: { id: studentId },
+      include: { grade: true },
+    });
+    if (!student?.grade) return [];
+
+    return this.prisma.class.findMany({
+      where: {
+        gradeLinks: { some: { gradeId: student.grade.id } },
+        enrollments: { none: { studentId } },
+      },
+      include: { teacher: true },
+    });
+  }
+
   addEnrollment(classId: string, studentId: string) {
     return this.prisma.enrollment.create({ data: { classId, studentId } });
   }
