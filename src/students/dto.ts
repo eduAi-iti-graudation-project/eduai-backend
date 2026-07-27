@@ -12,4 +12,12 @@ const GradeSchema = z.object({
   createdAt: z.string(),
 });
 
+export const UpdateStudentSchema = z.object({
+  name: z.string().min(1).optional(),
+  email: z.string().email().optional(),
+  gradeId: z.string().uuid().optional(),
+  guardianId: z.string().uuid().optional(),
+});
+
 export class GradeDto extends createZodDto(GradeSchema) {}
+export class UpdateStudentDto extends createZodDto(UpdateStudentSchema) {}
