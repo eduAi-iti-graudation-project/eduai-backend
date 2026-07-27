@@ -60,6 +60,13 @@ export class ClassesService {
     });
   }
 
+  async getRequests(classId: string) {
+    return this.prisma.enrollment.findMany({
+      where: { classId, status: 'PENDING' },
+      include: { student: true },
+    });
+  }
+
   addEnrollment(classId: string, studentId: string) {
     return this.prisma.enrollment.create({ data: { classId, studentId } });
   }
