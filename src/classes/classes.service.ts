@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -59,6 +59,10 @@ export class ClassesService {
   }
 
   async joinClass(classId: string, studentId: string) {
+    const existing = await this.prisma.enrollment.findUnique({
+      where: { classId_studentId: { classId, studentId } },
+    });
+    if (existing) throw new ConflictException('Already enrolled or pending');
     return this.prisma.enrollment.create({
       data: { classId, studentId, status: 'PENDING' },
     });
