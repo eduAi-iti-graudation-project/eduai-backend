@@ -1,4 +1,8 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  Injectable,
+  UnauthorizedException,
+  BadRequestException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { SupabaseService } from './supabase.service';
 
@@ -14,7 +18,18 @@ export class AuthService {
     password: string;
     name: string;
     role: 'TEACHER' | 'STUDENT' | 'GUARDIAN' | 'ADMIN';
+    gradeLevel?: number;
   }) {
+    let gradeId: string | undefined;
+    if (dto.gradeLevel) {
+      const grade = await this.prisma.grade.findUnique({
+        where: { level: dto.gradeLevel },
+      });
+      if (!grade)
+        throw new BadRequestException(`Grade ${dto.gradeLevel} not found`);
+      gradeId = grade.id;
+    }
+
     const { data, error } = await this.supabaseService
       .getClient()
       .auth.admin.createUser({
@@ -33,6 +48,7 @@ export class AuthService {
         email: dto.email,
         name: dto.name,
         role: dto.role,
+        gradeId,
       },
     });
 
@@ -84,5 +100,9 @@ export class AuthService {
     }
 
     return user;
+  }
+
+  async logout(authId: string): Promise<void> {
+    await this.supabaseService.signOut(authId);
   }
 }
