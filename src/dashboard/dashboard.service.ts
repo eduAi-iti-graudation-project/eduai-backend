@@ -79,7 +79,14 @@ export class DashboardService {
         reason: a.reason,
         createdAt: a.createdAt.toISOString(),
       })),
-      submissionsNeedingReview: (submissionsNeedingReview as { student: { name: string }; assignment: { title: string }; createdAt: Date; id: string }[]).map((s) => ({
+      submissionsNeedingReview: (
+        submissionsNeedingReview as {
+          student: { name: string };
+          assignment: { title: string };
+          createdAt: Date;
+          id: string;
+        }[]
+      ).map((s) => ({
         id: s.id,
         studentName: s.student.name,
         assignmentTitle: s.assignment.title,
