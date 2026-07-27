@@ -65,12 +65,14 @@ model User {
   email     String   @unique
   name      String
   role      UserRole
-  guardianId String? @db.Uuid
+  gradeId    String?  @db.Uuid
+  guardianId String?  @db.Uuid
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  // Relations
-  taughtClasses Class[]      @relation("TeacherClasses")
+  grade         Grade?         @relation(fields: [gradeId], references: [id])
+  teacherGrades TeacherGrade[]
+  taughtClasses Class[]        @relation("TeacherClasses")
   enrollments   Enrollment[]
   submissions   Submission[]
   alerts        Alert[]
