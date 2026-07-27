@@ -3,6 +3,7 @@ import { Pool } from 'pg';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '@prisma/client';
 import { chunkText } from '../src/common/chunker';
+import { createClient } from '@supabase/supabase-js';
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
@@ -23,8 +24,49 @@ Another concern is the potential for reduced human interaction. Education is not
 
 In conclusion, while AI offers tremendous potential to enhance education through personalization and efficiency, it must be implemented thoughtfully. Schools should adopt AI tools that augment rather than replace human teachers, and they must address privacy and equity concerns proactively. The goal should be to use AI as a tool that empowers both teachers and students, not as a replacement for the human elements that make education meaningful.`;
 
+async function createAuthUser(email: string, password: string, name: string) {
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
+  if (!supabaseUrl || !supabaseKey) return;
+
+  const supabase = createClient(supabaseUrl, supabaseKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+
+  const { error } = await supabase.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+    user_metadata: { name },
+  });
+
+  if (error) console.warn(`  ⚠ Auth user creation skipped for ${email}: ${error.message}`);
+}
+
 async function main() {
   console.log('Seeding database...');
+
+  const adminUser = await prisma.user.upsert({
+    where: { email: 'admin@eduai.test' },
+    update: {},
+    create: {
+      email: 'admin@eduai.test',
+      name: 'Admin User',
+      role: 'ADMIN',
+    },
+  });
+  console.log(`  Admin: ${adminUser.name} (${adminUser.id})`);
+
+  for (let level = 1; level <= 12; level++) {
+    await prisma.grade.upsert({
+      where: { level },
+      update: {},
+      create: { level },
+    });
+  }
+  console.log('  Grades 1–12 created');
+
+  const grade10 = await prisma.grade.findUniqueOrThrow({ where: { level: 10 } });
 
   const teacher = await prisma.user.upsert({
     where: { email: 'teacher@eduai.test' },
