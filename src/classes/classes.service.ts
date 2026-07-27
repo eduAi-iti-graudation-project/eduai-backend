@@ -5,7 +5,11 @@ import { PrismaService } from '../prisma/prisma.service';
 export class ClassesService {
   constructor(private readonly prisma: PrismaService) {}
 
-  create(dto: { name: string; description?: string }, teacherId: string) {
+  async create(dto: { name: string; description?: string }, teacherId: string) {
+    const teacher = await this.prisma.user.findUnique({
+      where: { id: teacherId },
+    });
+    if (!teacher) throw new NotFoundException('Teacher not found');
     return this.prisma.class.create({
       data: {
         name: dto.name,
