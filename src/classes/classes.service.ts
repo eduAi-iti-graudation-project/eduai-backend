@@ -68,7 +68,9 @@ export class ClassesService {
   }
 
   addEnrollment(classId: string, studentId: string) {
-    return this.prisma.enrollment.create({ data: { classId, studentId } });
+    return this.prisma.enrollment.create({
+      data: { classId, studentId, status: 'APPROVED' },
+    });
   }
 
   removeEnrollment(classId: string, studentId: string) {
