@@ -36,7 +36,7 @@ export class AssignmentsService {
     return assignment;
   }
 
-  update(
+  async update(
     id: string,
     dto: {
       title?: string;
@@ -45,6 +45,8 @@ export class AssignmentsService {
       totalPoints?: number;
     },
   ) {
+    const existing = await this.prisma.assignment.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException('Assignment not found');
     return this.prisma.assignment.update({
       where: { id },
       data: {
@@ -57,6 +59,14 @@ export class AssignmentsService {
   }
 
   remove(id: string) {
+    return this.prisma.assignment.delete({ where: { id } });
+  }
+
+  async remove(id: string) {
+    const assignment = await this.prisma.assignment.findUnique({
+      where: { id },
+    });
+    if (!assignment) throw new NotFoundException('Assignment not found');
     return this.prisma.assignment.delete({ where: { id } });
   }
 }
