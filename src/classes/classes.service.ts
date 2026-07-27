@@ -78,4 +78,26 @@ export class ClassesService {
       where: { classId_studentId: { classId, studentId } },
     });
   }
+
+  async approveEnrollment(enrollmentId: string) {
+    const enrollment = await this.prisma.enrollment.findUnique({
+      where: { id: enrollmentId },
+    });
+    if (!enrollment) throw new NotFoundException('Enrollment not found');
+    return this.prisma.enrollment.update({
+      where: { id: enrollmentId },
+      data: { status: 'APPROVED' },
+    });
+  }
+
+  async rejectEnrollment(enrollmentId: string) {
+    const enrollment = await this.prisma.enrollment.findUnique({
+      where: { id: enrollmentId },
+    });
+    if (!enrollment) throw new NotFoundException('Enrollment not found');
+    return this.prisma.enrollment.update({
+      where: { id: enrollmentId },
+      data: { status: 'REJECTED' },
+    });
+  }
 }
