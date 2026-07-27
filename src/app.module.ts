@@ -23,6 +23,10 @@ import { PiiModule } from './common/pii/pii.module';
 import { ValidationModule } from './common/validation/validation.module';
 import { AttendanceModule } from './attendance/attendance.module';
 import { DashboardModule } from './dashboard/dashboard.module';
+import { GradesModule } from './grades/grades.module';
+import { EnrollmentsModule } from './enrollments/enrollments.module';
+import { TeachersModule } from './teachers/teachers.module';
+import { UsersModule } from './users/users.module';
 
 @Module({
   imports: [
@@ -45,6 +49,10 @@ import { DashboardModule } from './dashboard/dashboard.module';
     ValidationModule,
     AttendanceModule,
     DashboardModule,
+    GradesModule,
+    EnrollmentsModule,
+    TeachersModule,
+    UsersModule,
   ],
   controllers: [AppController],
   providers: [
