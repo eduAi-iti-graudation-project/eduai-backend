@@ -4,6 +4,7 @@ import { z } from 'zod';
 export const CreateClassSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
+  teacherId: z.string().uuid(),
 });
 
 export const UpdateClassSchema = z.object({
