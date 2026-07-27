@@ -13,7 +13,7 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiOperation, ApiBody, ApiConsumes } from '@nestjs/swagger';
 import { RubricsService } from './rubrics.service';
-import { CreateRubricDto, ImportPdfRubricDto } from './dto';
+import { CreateRubricDto } from './dto';
 import { Roles } from '../auth/roles.decorator';
 
 @ApiTags('rubrics')
@@ -80,7 +80,9 @@ export class RubricsController {
     FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } }),
   )
   @ApiConsumes('multipart/form-data')
-  @ApiOperation({ summary: 'Upload a PDF rubric and create the rubric in one call' })
+  @ApiOperation({
+    summary: 'Upload a PDF rubric and create the rubric in one call',
+  })
   @ApiBody({
     schema: {
       type: 'object',
