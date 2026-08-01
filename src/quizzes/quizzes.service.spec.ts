@@ -9,8 +9,6 @@ import { QuizzesService } from './quizzes.service';
 import { QuizzesGradingService } from './quizzes-grading.service';
 import { QuizGenerationAgent } from './agents/quiz-generation.agent';
 import { PrismaService } from '../prisma/prisma.service';
-import { LlmService } from '../common/llm/llm.service';
-import { MaterialsService } from '../materials/materials.service';
 
 const mockPrisma = {
   quiz: {
@@ -427,7 +425,7 @@ describe('QuizzesService', () => {
       answers: [],
     });
 
-    const result = await service.submitAttempt('quiz-1', 'student-1', [
+    await service.submitAttempt('quiz-1', 'student-1', [
       { questionId: 'q-2', answer: 'Plants use sunlight...' },
     ]);
 
