@@ -60,4 +60,33 @@ describe('validateWithRetry', () => {
       expect((e as ValidationError).attempts).toBe(2);
     }
   });
+
+  it('should retry twice when attempts is 3 then succeed', async () => {
+    const invalid = { name: 123, score: 'bad' };
+    const retryFn = jest
+      .fn()
+      .mockResolvedValueOnce({ name: 'bad', score: 'bad' })
+      .mockResolvedValueOnce({ name: 'retried', score: 75 });
+
+    const result = await validateWithRetry(schema, invalid, retryFn, 3);
+
+    expect(retryFn).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({ name: 'retried', score: 75 });
+  });
+
+  it('should report 3 attempts when attempts is 3 and all fail', async () => {
+    const invalid = { name: 123, score: 'bad' };
+    const retryFn = jest
+      .fn()
+      .mockResolvedValue({ name: 456, score: 'also bad' });
+
+    try {
+      await validateWithRetry(schema, invalid, retryFn, 3);
+      fail('Should have thrown');
+    } catch (e) {
+      expect(e).toBeInstanceOf(ValidationError);
+      expect((e as ValidationError).attempts).toBe(3);
+      expect(retryFn).toHaveBeenCalledTimes(2);
+    }
+  });
 });
