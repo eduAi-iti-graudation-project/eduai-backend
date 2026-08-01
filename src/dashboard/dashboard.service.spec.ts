@@ -67,6 +67,9 @@ describe('DashboardService', () => {
           assignment: { title: 'Essay 1' },
         },
       ]);
+      mockPrisma.alert.count
+        .mockResolvedValueOnce(2) // activeAlertCount
+        .mockResolvedValueOnce(5); // resolvedAlertCount
       mockPrisma.notification.count.mockResolvedValue(2);
 
       const result = await service.getOverview(teacherUser);
@@ -74,18 +77,18 @@ describe('DashboardService', () => {
       expect(result).toMatchObject({
         classCount: 3,
         pendingConfirmations: 5,
+        activeAlertCount: 2,
+        resolvedAlertCount: 5,
         unreadNotifications: 2,
       });
       expect(result.recentAlerts).toHaveLength(1);
-      expect(result.recentAlerts[0]).toMatchObject({
-        studentName: 'Student A',
-        type: 'FAILING',
-      });
+      expect(result.recentAlerts).toMatchObject([
+        { studentName: 'Student A', type: 'FAILING' },
+      ]);
       expect(result.submissionsNeedingReview).toHaveLength(1);
-      expect(result.submissionsNeedingReview[0]).toMatchObject({
-        studentName: 'Student B',
-        assignmentTitle: 'Essay 1',
-      });
+      expect(result.submissionsNeedingReview).toMatchObject([
+        { studentName: 'Student B', assignmentTitle: 'Essay 1' },
+      ]);
     });
   });
 
@@ -204,7 +207,8 @@ describe('DashboardService', () => {
         ],
         unreadNotifications: 2,
       });
-      expect(result.children[0].attendanceRate).toBeCloseTo(0.67, 1);
+      const children = result.children as Array<{ attendanceRate: number }>;
+      expect(children[0].attendanceRate).toBeCloseTo(0.67, 1);
     });
 
     it('should handle guardian with no wards', async () => {

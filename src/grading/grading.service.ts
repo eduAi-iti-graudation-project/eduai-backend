@@ -1,6 +1,6 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { AnalysisService } from '../analysis/analysis.service';
+import { CommunicationAgentService } from '../communication-agent/communication-agent.service';
 
 @Injectable()
 export class GradingService {
@@ -8,7 +8,7 @@ export class GradingService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly analysisService: AnalysisService,
+    private readonly communicationAgentService: CommunicationAgentService,
   ) {}
 
   async gradeSubmission(submissionId: string): Promise<void> {
@@ -62,16 +62,16 @@ export class GradingService {
       });
     });
 
-    this.analysisService
-      .evaluateStudent(submission.studentId)
+    this.communicationAgentService
+      .analyze(submissionId)
       .then(() =>
         this.logger.log(
-          `Analysis evaluated for student ${submission.studentId}`,
+          `Communication agent analysis complete for submission ${submissionId}`,
         ),
       )
       .catch((err) =>
         this.logger.error(
-          `Analysis evaluation failed for student ${submission.studentId}`,
+          `Communication agent analysis failed for submission ${submissionId}`,
           err,
         ),
       );
