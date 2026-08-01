@@ -25,6 +25,8 @@ export class DashboardService {
     const [
       classCount,
       pendingConfirmations,
+      activeAlertCount,
+      resolvedAlertCount,
       recentAlerts,
       submissionsNeedingReview,
       unreadNotifications,
@@ -37,6 +39,20 @@ export class DashboardService {
           submission: {
             assignment: { class: { teacherId } },
           },
+        },
+      }),
+
+      this.prisma.alert.count({
+        where: {
+          status: 'ACTIVE',
+          student: { enrollments: { some: { class: { teacherId } } } },
+        },
+      }),
+
+      this.prisma.alert.count({
+        where: {
+          status: { in: ['RESOLVED', 'DISMISSED'] },
+          student: { enrollments: { some: { class: { teacherId } } } },
         },
       }),
 
@@ -72,6 +88,8 @@ export class DashboardService {
     return {
       classCount,
       pendingConfirmations,
+      activeAlertCount,
+      resolvedAlertCount,
       recentAlerts: recentAlerts.map((a) => ({
         id: a.id,
         studentName: a.student.name,
