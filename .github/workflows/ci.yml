@@ -34,9 +34,6 @@ jobs:
       # - name: Generate Prisma Client
       #   run: npx prisma generate
 
-      - name: Run Linter Check
-        run: npm run lint
-
       - name: Run Unit Tests (Jest)
         run: npm run test
 

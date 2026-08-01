@@ -132,6 +132,40 @@ describe('MaterialsService', () => {
       expect(result).toHaveLength(1);
       expect(mockLlm.embed).toHaveBeenCalledWith('query');
     });
+
+    it('should use cosine distance with the default threshold', async () => {
+      mockLlm.embed.mockResolvedValue([0.1, 0.2, 0.3]);
+      mockPrisma.$queryRaw.mockResolvedValue([]);
+
+      await service.searchChunks('c1', 'query', 3);
+
+      const call = mockPrisma.$queryRaw.mock.calls[0] as unknown as [
+        string[],
+        unknown,
+      ];
+      expect(call[0].join('')).toContain('mc.embedding <=>');
+      expect(call).toContain(0.45);
+    });
+
+    it('should use the configured threshold from env', async () => {
+      process.env.SEARCH_MAX_COSINE_DISTANCE = '0.6';
+      mockLlm.embed.mockResolvedValue([0.1, 0.2, 0.3]);
+      mockPrisma.$queryRaw.mockResolvedValue([]);
+      const service = new MaterialsService(
+        mockPrisma as never,
+        mockLlm as never,
+      );
+
+      await service.searchChunks('c1', 'query', 3);
+
+      const call = mockPrisma.$queryRaw.mock.calls[0] as unknown as [
+        string[],
+        unknown,
+      ];
+      expect(call[0].join('')).toContain('mc.embedding <=>');
+      expect(call).toContain(0.6);
+      delete process.env.SEARCH_MAX_COSINE_DISTANCE;
+    });
   });
 
   describe('delete', () => {

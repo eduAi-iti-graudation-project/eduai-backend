@@ -10,10 +10,15 @@ import pdfParse from 'pdf-parse';
 
 @Injectable()
 export class MaterialsService {
+  private readonly maxSearchDistance: number;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly llm: LlmService,
-  ) {}
+  ) {
+    const configured = Number(process.env.SEARCH_MAX_COSINE_DISTANCE);
+    this.maxSearchDistance = Number.isFinite(configured) ? configured : 0.45;
+  }
 
   async upload(
     title: string,
@@ -111,12 +116,13 @@ export class MaterialsService {
         materialTitle: string;
       }[]
     >`
-      SELECT mc.id, mc.content, mc.embedding <-> ${vectorStr}::vector AS distance,
+      SELECT mc.id, mc.content, mc.embedding <=> ${vectorStr}::vector AS distance,
              m.id AS "materialId", m.title AS "materialTitle"
       FROM material_chunks mc
       JOIN materials m ON m.id = mc."materialId"
       WHERE m."classId" = ${classId}::uuid
         AND mc.embedding IS NOT NULL
+        AND mc.embedding <=> ${vectorStr}::vector < ${this.maxSearchDistance}
       ORDER BY distance ASC
       LIMIT ${topK}
     `;

@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { GradingService } from './grading.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { FeedbackWriterService } from '../feedback-writer/feedback-writer.service';
+import { CommunicationAgentService } from '../communication-agent/communication-agent.service';
 import { NotFoundException } from '@nestjs/common';
 
 describe('GradingService', () => {
@@ -27,6 +28,8 @@ describe('GradingService', () => {
 
   const mockFeedbackWriterService = {
     write: jest.fn().mockResolvedValue(undefined),
+  const mockCommunicationAgentService = {
+    analyze: jest.fn().mockResolvedValue(undefined),
   };
 
   beforeEach(async () => {
@@ -37,6 +40,8 @@ describe('GradingService', () => {
         {
           provide: FeedbackWriterService,
           useValue: mockFeedbackWriterService,
+          provide: CommunicationAgentService,
+          useValue: mockCommunicationAgentService,
         },
       ],
     }).compile();
@@ -110,6 +115,7 @@ describe('GradingService', () => {
     });
 
     it('should call FeedbackWriterService.write after confirm', async () => {
+    it('should call CommunicationAgentService.analyze after confirm', async () => {
       const submission = {
         id: 'submission-id',
         studentId: 'student-id',
@@ -137,6 +143,7 @@ describe('GradingService', () => {
       await service.confirmAll('submission-id');
 
       expect(mockFeedbackWriterService.write).toHaveBeenCalledWith(
+      expect(mockCommunicationAgentService.analyze).toHaveBeenCalledWith(
         'submission-id',
       );
     });

@@ -8,6 +8,10 @@ const AlertSchema = z.object({
   status: z.string(),
   studentId: z.string().uuid(),
   createdAt: z.string(),
+  studentName: z.string(),
+  className: z.string().nullable(),
+  severity: z.string().nullable(),
+  skillGapCount: z.number(),
 });
 
 export const ResolveAlertSchema = z.object({
