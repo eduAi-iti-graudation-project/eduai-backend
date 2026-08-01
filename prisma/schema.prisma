@@ -112,6 +112,7 @@ model User {
   reports       StudentReport[]
   deviceTokens  DeviceToken[]
   attendance    Attendance[]
+  homeworkHelpInteractions HomeworkHelpInteraction[]
   guardian      User?        @relation("GuardianWards", fields: [guardianId], references: [id])
   wards         User[]       @relation("GuardianWards")
 
@@ -372,6 +373,22 @@ model DeviceToken {
 
   @@unique([userId, token])
   @@map("device_tokens")
+}
+
+model HomeworkHelpInteraction {
+  id         String   @id @default(uuid()) @db.Uuid
+  studentId  String   @db.Uuid
+  classId    String   @db.Uuid
+  question   String
+  answer     String
+  action     String
+  sources    Json     @default("[]")
+  feedback   String?
+  createdAt  DateTime @default(now())
+
+  student User @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@map("homework_help_interactions")
 }
 
 

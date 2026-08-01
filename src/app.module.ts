@@ -27,8 +27,7 @@ import { GradesModule } from './grades/grades.module';
 import { EnrollmentsModule } from './enrollments/enrollments.module';
 import { TeachersModule } from './teachers/teachers.module';
 import { UsersModule } from './users/users.module';
-import { MastraModule } from '@mastra/nestjs';
-import { mastra } from './mastra';
+import { HomeworkHelperModule } from './homework-helper/homework-helper.module';
 
 @Module({
   imports: [
@@ -55,7 +54,7 @@ import { mastra } from './mastra';
     EnrollmentsModule,
     TeachersModule,
     UsersModule,
-    MastraModule.register({ mastra }),
+    HomeworkHelperModule,
   ],
   controllers: [AppController],
   providers: [
