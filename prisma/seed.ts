@@ -24,23 +24,42 @@ Another concern is the potential for reduced human interaction. Education is not
 
 In conclusion, while AI offers tremendous potential to enhance education through personalization and efficiency, it must be implemented thoughtfully. Schools should adopt AI tools that augment rather than replace human teachers, and they must address privacy and equity concerns proactively. The goal should be to use AI as a tool that empowers both teachers and students, not as a replacement for the human elements that make education meaningful.`;
 
-async function createAuthUser(email: string, password: string, name: string) {
+async function createAuthUser(
+  email: string,
+  password: string,
+  name: string,
+): Promise<string | null> {
   const supabaseUrl = process.env.SUPABASE_URL;
   const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
-  if (!supabaseUrl || !supabaseKey) return;
+  if (!supabaseUrl || !supabaseKey) {
+    console.warn(`  ⚠ SUPABASE_URL or SUPABASE_SERVICE_KEY not set, skipping auth for ${email}`);
+    return null;
+  }
 
   const supabase = createClient(supabaseUrl, supabaseKey, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
 
-  const { error } = await supabase.auth.admin.createUser({
+  const { data, error } = await supabase.auth.admin.createUser({
     email,
     password,
     email_confirm: true,
     user_metadata: { name },
   });
 
-  if (error) console.warn(`  ⚠ Auth user creation skipped for ${email}: ${error.message}`);
+  if (data?.user?.id) return data.user.id;
+
+  // If already exists (409 or specific message), sign in to get their auth ID
+  if (error?.status === 409 || error?.message?.includes('already been registered')) {
+    const { data: signIn } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+    if (signIn?.user?.id) return signIn.user.id;
+  }
+
+  console.warn(`  ⚠ Auth user creation skipped for ${email}: ${error?.message ?? 'unknown error'}`);
+  return null;
 }
 
 async function main() {
