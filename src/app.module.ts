@@ -27,6 +27,7 @@ import { GradesModule } from './grades/grades.module';
 import { EnrollmentsModule } from './enrollments/enrollments.module';
 import { TeachersModule } from './teachers/teachers.module';
 import { UsersModule } from './users/users.module';
+import { QuizzesModule } from './quizzes/quizzes.module';
 
 @Module({
   imports: [
@@ -53,6 +54,7 @@ import { UsersModule } from './users/users.module';
     EnrollmentsModule,
     TeachersModule,
     UsersModule,
+    QuizzesModule,
   ],
   controllers: [AppController],
   providers: [
