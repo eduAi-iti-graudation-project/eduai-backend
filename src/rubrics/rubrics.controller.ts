@@ -51,7 +51,7 @@ export class RubricsController {
     return this.rubricsService.confirm(id);
   }
 
-  @Roles('ADMIN')
+  @Roles('TEACHER', 'ADMIN')
   @Post('import-pdf')
   @UseInterceptors(
     FileInterceptor('file', {
