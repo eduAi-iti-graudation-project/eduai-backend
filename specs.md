@@ -80,6 +80,14 @@ Four roles: **Teacher**, **Student**, **Guardian**, **Admin**.
     role-specific data (teacher: class summaries + pending confirmations;
     student: upcoming assignments + confirmed grades; guardian: child overview;
     admin: school-wide stats).
+13. **Feedback Writer Agent** — after grading suggests scores, a Mastra agent
+    writes per-criterion natural-language feedback explaining why the student
+    got that score and how to improve. Replaces the current placeholder string
+    in `GradingScore.aiFeedback`.
+14. **Homework Helper Agent** — students ask assignment questions in plain
+    language; the agent searches curriculum, looks up assignment context, and
+    returns hints or explanations without giving away the answer. Logs
+    interactions so the teacher knows who's struggling. Mastra multi-tool agent.
 
 ## 4. Non-negotiable rules (violating these is a bug, not a style choice)
 
@@ -156,6 +164,8 @@ CREATE INDEX ON material_chunks USING hnsw (embedding vector_cosine_ops);
 | Orchestrator | Not an LLM at all — deterministic status-transition logic |
 | Criterion Detector | Plain code decides the flag (50% × 2 consecutive); LLM generates three role-specific reports |
 | Notification Dispatcher | Not AI — plain code that calls NotificationService after a report is created |
+| Feedback Writer | Mastra agent with one tool per criterion; calls LlmService, saves to GradingScore.aiFeedback |
+| Homework Helper | Mastra multi-tool agent (search_curriculum, lookup_assignment, log_interaction); student-facing POST endpoint |
 
 Do not add tool-calling or autonomy to Grading or Analysis "to make it more
 agentic." Their determinism is a deliberate correctness choice, not a
