@@ -344,10 +344,37 @@ async function main() {
   });
   console.log('  Classes linked to Grade 10');
 
-  await createAuthUser('admin@eduai.test', 'password123', 'Admin User');
-  await createAuthUser('teacher@eduai.test', 'password123', 'Alex Mentor');
-  await createAuthUser('student@eduai.test', 'password123', 'Sam Learner');
-  await createAuthUser('guardian@eduai.test', 'password123', 'Guardian User');
+  const adminAuthId = await createAuthUser('admin@eduai.test', 'password123', 'Admin User');
+  if (adminAuthId) {
+    await prisma.user.update({
+      where: { email: 'admin@eduai.test' },
+      data: { authId: adminAuthId },
+    });
+  }
+
+  const teacherAuthId = await createAuthUser('teacher@eduai.test', 'password123', 'Alex Mentor');
+  if (teacherAuthId) {
+    await prisma.user.update({
+      where: { email: 'teacher@eduai.test' },
+      data: { authId: teacherAuthId },
+    });
+  }
+
+  const studentAuthId = await createAuthUser('student@eduai.test', 'password123', 'Sam Learner');
+  if (studentAuthId) {
+    await prisma.user.update({
+      where: { email: 'student@eduai.test' },
+      data: { authId: studentAuthId },
+    });
+  }
+
+  const guardianAuthId = await createAuthUser('guardian@eduai.test', 'password123', 'Guardian User');
+  if (guardianAuthId) {
+    await prisma.user.update({
+      where: { email: 'guardian@eduai.test' },
+      data: { authId: guardianAuthId },
+    });
+  }
 
   console.log('\n✅ Seed complete! IDs for Swagger testing:');
   console.log(`  Admin ID:         ${adminUser.id}`);
