@@ -66,11 +66,16 @@ describe('StudentsService', () => {
       expect(result).toEqual([]);
     });
 
-    it('should include criteria and submission relations', async () => {
+    it('should flatten criteria and submission into the grade object', async () => {
       const grade = {
         id: 's1',
+        submissionId: 'sub-1',
+        criteriaId: 'c1',
         pointsAwarded: 8,
+        aiFeedback: null,
+        teacherNotes: null,
         isConfirmed: true,
+        createdAt: new Date(),
         criteria: { id: 'c1', description: 'Thesis', maxPoints: 10 },
         submission: { id: 'sub-1', assignmentId: 'a-1' },
       };
