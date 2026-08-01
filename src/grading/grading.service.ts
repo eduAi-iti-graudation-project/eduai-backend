@@ -1,6 +1,6 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { AnalysisService } from '../analysis/analysis.service';
+import { FeedbackWriterService } from '../feedback-writer/feedback-writer.service';
 
 @Injectable()
 export class GradingService {
@@ -8,7 +8,7 @@ export class GradingService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly analysisService: AnalysisService,
+    private readonly feedbackWriterService: FeedbackWriterService,
   ) {}
 
   async gradeSubmission(submissionId: string): Promise<void> {
@@ -32,7 +32,7 @@ export class GradingService {
           submissionId,
           criteriaId: criterion.id,
           pointsAwarded: Math.floor(criterion.maxPoints * 0.7),
-          aiFeedback: 'Auto-graded placeholder. AI grading pipeline pending.',
+          aiFeedback: null,
         },
         update: {},
       });
@@ -62,23 +62,79 @@ export class GradingService {
       });
     });
 
-    this.analysisService
-      .evaluateStudent(submission.studentId)
+    this.feedbackWriterService
+      .write(submissionId)
       .then(() =>
-        this.logger.log(
-          `Analysis evaluated for student ${submission.studentId}`,
-        ),
+        this.logger.log(`Feedback written for submission ${submissionId}`),
       )
       .catch((err) =>
-        this.logger.error(
-          `Analysis evaluation failed for student ${submission.studentId}`,
-          err,
-        ),
+        this.logger.error(`Feedback writing failed for ${submissionId}`, err),
       );
 
     return this.prisma.submission.findUnique({
       where: { id: submissionId },
       include: { scores: true },
+    });
+  }
+
+  async getScores(submissionId: string) {
+    const submission = await this.prisma.submission.findUnique({
+      where: { id: submissionId },
+    });
+    if (!submission) throw new NotFoundException('Submission not found');
+
+    return this.prisma.gradingScore.findMany({
+      where: { submissionId },
+      include: { criteria: true },
+    });
+  }
+
+  async backfillFeedback() {
+    const scores = await this.prisma.gradingScore.findMany({
+      where: { isConfirmed: true, aiFeedback: null },
+      select: { submissionId: true },
+    });
+
+    const submissionIds = [...new Set(scores.map((s) => s.submissionId))];
+
+    if (submissionIds.length === 0) {
+      return { submissionsProcessed: 0, scoresBackfilled: 0 };
+    }
+
+    let totalScores = 0;
+    await Promise.allSettled(
+      submissionIds.map((id) =>
+        this.feedbackWriterService
+          .write(id)
+          .then(() => {
+            totalScores += scores.filter((s) => s.submissionId === id).length;
+            this.logger.log(`Backfill feedback written for submission ${id}`);
+          })
+          .catch((err) =>
+            this.logger.error(`Backfill feedback failed for ${id}`, err),
+          ),
+      ),
+    );
+
+    return {
+      submissionsProcessed: submissionIds.length,
+      scoresBackfilled: totalScores,
+    };
+  }
+
+  async updateScore(scoreId: string, pointsAwarded: number) {
+    const score = await this.prisma.gradingScore.findUnique({
+      where: { id: scoreId },
+    });
+    if (!score) throw new NotFoundException('Score not found');
+    if (score.isConfirmed) {
+      throw new Error('Cannot edit a confirmed score');
+    }
+
+    return this.prisma.gradingScore.update({
+      where: { id: scoreId },
+      data: { pointsAwarded },
+      include: { criteria: true },
     });
   }
 }
