@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { GradingService } from './grading.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { AnalysisService } from '../analysis/analysis.service';
+import { CommunicationAgentService } from '../communication-agent/communication-agent.service';
 import { NotFoundException } from '@nestjs/common';
 
 describe('GradingService', () => {
@@ -21,8 +21,8 @@ describe('GradingService', () => {
     $transaction: jest.fn(),
   };
 
-  const mockAnalysisService = {
-    evaluateStudent: jest.fn().mockResolvedValue(undefined),
+  const mockCommunicationAgentService = {
+    analyze: jest.fn().mockResolvedValue(undefined),
   };
 
   beforeEach(async () => {
@@ -30,7 +30,10 @@ describe('GradingService', () => {
       providers: [
         GradingService,
         { provide: PrismaService, useValue: mockPrisma },
-        { provide: AnalysisService, useValue: mockAnalysisService },
+        {
+          provide: CommunicationAgentService,
+          useValue: mockCommunicationAgentService,
+        },
       ],
     }).compile();
 
@@ -77,7 +80,7 @@ describe('GradingService', () => {
       expect(result.status).toBe('CONFIRMED');
     });
 
-    it('should call AnalysisService.evaluateStudent after confirm', async () => {
+    it('should call CommunicationAgentService.analyze after confirm', async () => {
       const submission = {
         id: 'submission-id',
         studentId: 'student-id',
@@ -104,8 +107,8 @@ describe('GradingService', () => {
 
       await service.confirmAll('submission-id');
 
-      expect(mockAnalysisService.evaluateStudent).toHaveBeenCalledWith(
-        'student-id',
+      expect(mockCommunicationAgentService.analyze).toHaveBeenCalledWith(
+        'submission-id',
       );
     });
 
