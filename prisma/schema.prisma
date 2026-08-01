@@ -107,6 +107,7 @@ model User {
   enrollments   Enrollment[]
   submissions   Submission[]
   alerts        Alert[]
+  analyses      StudentAnalysis[]
   notifications Notification[]
   reports       StudentReport[]
   deviceTokens  DeviceToken[]
@@ -304,10 +305,30 @@ model Alert {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  student   User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  student   User              @relation(fields: [studentId], references: [id], onDelete: Cascade)
   reports   StudentReport[]
+  analyses  StudentAnalysis[]
 
   @@map("alerts")
+}
+
+model StudentAnalysis {
+  id                 String   @id @default(uuid()) @db.Uuid
+  submissionId       String?  @db.Uuid
+  studentId          String   @db.Uuid
+  alertId            String?  @db.Uuid
+  classId            String?  @db.Uuid
+  diagnosis          Json
+  teacherContent     Json?
+  guardianContent    Json?
+  teacherFeedback    Json?
+  managementSummary  Json?
+  createdAt          DateTime @default(now())
+
+  student User  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  alert   Alert? @relation(fields: [alertId], references: [id])
+
+  @@map("student_analyses")
 }
 
 model Notification {

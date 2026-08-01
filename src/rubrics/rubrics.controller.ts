@@ -11,6 +11,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import { ApiTags, ApiOperation, ApiBody, ApiConsumes } from '@nestjs/swagger';
 import { RubricsService } from './rubrics.service';
 import { CreateRubricDto } from './dto';
@@ -50,10 +51,13 @@ export class RubricsController {
     return this.rubricsService.confirm(id);
   }
 
-  @Roles('ADMIN')
+  @Roles('TEACHER', 'ADMIN')
   @Post('import-pdf')
   @UseInterceptors(
-    FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } }),
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: 10 * 1024 * 1024 },
+    }),
   )
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Upload a PDF rubric and extract criteria' })
@@ -77,7 +81,10 @@ export class RubricsController {
   @Roles('TEACHER', 'ADMIN')
   @Post('from-pdf')
   @UseInterceptors(
-    FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } }),
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: 10 * 1024 * 1024 },
+    }),
   )
   @ApiConsumes('multipart/form-data')
   @ApiOperation({

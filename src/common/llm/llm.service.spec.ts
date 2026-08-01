@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { LlmService } from './llm.service';
 import { PiiService } from '../pii/pii.service';
 import { ProviderService } from '../ai/provider.service';
+import { ValidationError } from '../validation/retry-once';
 import { z } from 'zod';
 
 const mockHfEmbed = jest.fn().mockResolvedValue(new Array(1024).fill(0.1));
@@ -85,6 +86,75 @@ describe('LlmService', () => {
 
       expect(result.name).toBe('test');
       expect(result.score).toBe(85);
+    });
+
+    it('should strip raw control characters from provider JSON', async () => {
+      mockChat.mockResolvedValueOnce('{"name":"line1\nline2","score":85}');
+
+      const result = await service.generateStructured({
+        systemPrompt: 'Test',
+        userPrompt: 'Test',
+        schema,
+      });
+
+      expect(mockChat).toHaveBeenCalledTimes(1);
+      expect(result.name).toBe('line1line2');
+    });
+
+    it('should strip control chars re-injected by PII restore', async () => {
+      const prevRedact = mockRedact.getMockImplementation();
+      const prevRestore = mockRestore.getMockImplementation();
+
+      mockRedact.mockImplementation((text: string) => ({
+        redacted: text,
+        replacements: new Map([['[REDACTED_0]', 'line1\nline2']]),
+      }));
+      mockRestore.mockImplementation((text: string) =>
+        text.replace('[REDACTED_0]', 'line1\nline2'),
+      );
+      mockChat.mockResolvedValueOnce(
+        JSON.stringify({ name: '[REDACTED_0]', score: 85 }),
+      );
+
+      const result = await service.generateStructured({
+        systemPrompt: 'Test',
+        userPrompt: 'Test',
+        schema,
+      });
+
+      expect(mockRestore).toHaveBeenCalled();
+      expect(result.name).toBe('line1line2');
+
+      mockRedact.mockImplementation(prevRedact);
+      mockRestore.mockImplementation(prevRestore);
+    });
+
+    it('should throw ValidationError when provider returns empty response', async () => {
+      mockChat.mockResolvedValue('');
+
+      await expect(
+        service.generateStructured({
+          systemPrompt: 'Test',
+          userPrompt: 'Test',
+          schema,
+        }),
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it('should retry 3 times total before succeeding on last attempt', async () => {
+      mockChat
+        .mockResolvedValueOnce('not json')
+        .mockResolvedValueOnce('also not json')
+        .mockResolvedValueOnce(JSON.stringify({ name: 'retried', score: 90 }));
+
+      const result = await service.generateStructured({
+        systemPrompt: 'Test',
+        userPrompt: 'Test',
+        schema,
+      });
+
+      expect(mockChat).toHaveBeenCalledTimes(3);
+      expect(result).toEqual({ name: 'retried', score: 90 });
     });
   });
 });

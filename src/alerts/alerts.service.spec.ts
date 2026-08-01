@@ -26,6 +26,85 @@ describe('AlertsService', () => {
     jest.clearAllMocks();
   });
 
+  describe('findAll', () => {
+    it('should return enriched alerts', async () => {
+      mockPrisma.alert.findMany.mockResolvedValue([
+        {
+          id: 'a1',
+          type: 'FAILING',
+          reason: 'Low scores',
+          status: 'ACTIVE',
+          studentId: 's1',
+          createdAt: new Date('2026-07-30'),
+          student: {
+            name: 'Jamie S.',
+            enrollments: [{ class: { name: 'Biology 101' } }],
+          },
+          analyses: [
+            {
+              diagnosis: { severity: 'HIGH', hasIssue: true },
+              teacherContent: { skillGaps: ['gap1', 'gap2', 'gap3'] },
+            },
+          ],
+        },
+        {
+          id: 'a2',
+          type: 'DOWNWARD_TREND',
+          reason: 'Dropped scores',
+          status: 'ACTIVE',
+          studentId: 's2',
+          createdAt: new Date('2026-07-28'),
+          student: {
+            name: 'Sam L.',
+            enrollments: [],
+          },
+          analyses: [],
+        },
+      ]);
+
+      const result = await service.findAll();
+
+      expect(result).toEqual([
+        {
+          id: 'a1',
+          type: 'FAILING',
+          reason: 'Low scores',
+          status: 'ACTIVE',
+          studentId: 's1',
+          createdAt: '2026-07-30T00:00:00.000Z',
+          studentName: 'Jamie S.',
+          className: 'Biology 101',
+          severity: 'HIGH',
+          skillGapCount: 3,
+        },
+        {
+          id: 'a2',
+          type: 'DOWNWARD_TREND',
+          reason: 'Dropped scores',
+          status: 'ACTIVE',
+          studentId: 's2',
+          createdAt: '2026-07-28T00:00:00.000Z',
+          studentName: 'Sam L.',
+          className: null,
+          severity: null,
+          skillGapCount: 0,
+        },
+      ]);
+    });
+
+    it('should filter by status', async () => {
+      mockPrisma.alert.findMany.mockResolvedValue([]);
+
+      await service.findAll('ACTIVE');
+
+      expect(mockPrisma.alert.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { status: 'ACTIVE' },
+        }),
+      );
+    });
+  });
+
   describe('resolve', () => {
     it('should update alert status to RESOLVED', async () => {
       const existingAlert = { id: 'alert-id', status: 'ACTIVE' };

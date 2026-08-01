@@ -24,6 +24,13 @@ export class AlertsController {
     return this.alertsService.findAll(status);
   }
 
+  @Get(':id/teacher-detail')
+  @Roles('TEACHER', 'ADMIN')
+  @ApiOperation({ summary: 'Get structured analysis data for an alert' })
+  getTeacherDetail(@Param('id') id: string) {
+    return this.alertsService.getTeacherDetail(id);
+  }
+
   @Patch(':id')
   @Roles('TEACHER', 'ADMIN')
   @ApiOperation({ summary: 'Resolve or dismiss an alert' })

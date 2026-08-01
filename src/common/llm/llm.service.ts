@@ -4,6 +4,13 @@ import { PiiService } from '../pii/pii.service';
 import { ProviderService } from '../ai/provider.service';
 import { validateWithRetry } from '../validation/retry-once';
 
+function sanitizeControlChars(text: string): string {
+  return text
+    .split('')
+    .filter((c) => c.charCodeAt(0) >= 0x20 && c.charCodeAt(0) !== 0x7f)
+    .join('');
+}
+
 @Injectable()
 export class LlmService {
   constructor(
@@ -22,17 +29,26 @@ export class LlmService {
   }): Promise<T> {
     const { systemPrompt, userPrompt, schema } = params;
 
-    const { redacted, replacements } = this.piiService.redact(
-      `${systemPrompt}\n${userPrompt}`,
+    const redactedSystem = this.piiService.redact(systemPrompt);
+    const redactedUser = this.piiService.redact(
+      userPrompt,
+      redactedSystem.replacements.size,
     );
+    const replacements = new Map([
+      ...redactedSystem.replacements,
+      ...redactedUser.replacements,
+    ]);
 
     const callLlm = async (): Promise<unknown> => {
-      const content = await this.providerService.chat(redacted, userPrompt);
+      const content = await this.providerService.chat(
+        redactedSystem.redacted,
+        redactedUser.redacted,
+      );
       console.log('[LlmService] Raw response:', content);
 
-      const cleaned = content
-        .replace(/^```(?:json)?\s*\n?|\s*```$/g, '')
-        .trim();
+      const cleaned = sanitizeControlChars(
+        content.replace(/^```(?:json)?\s*\n?|\s*```$/g, ''),
+      ).trim();
 
       if (!cleaned) throw new Error('Empty LLM response');
 
@@ -40,7 +56,9 @@ export class LlmService {
 
       if (replacements.size > 0) {
         return JSON.parse(
-          this.piiService.restore(JSON.stringify(parsed), replacements),
+          sanitizeControlChars(
+            this.piiService.restore(JSON.stringify(parsed), replacements),
+          ),
         ) as unknown;
       }
 
@@ -51,6 +69,7 @@ export class LlmService {
       schema,
       await callLlm().catch(() => null),
       callLlm,
+      3,
     );
 
     return result;

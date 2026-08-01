@@ -4,6 +4,8 @@ import { z } from 'zod';
 const TeacherDashboardSchema = z.object({
   classCount: z.number(),
   pendingConfirmations: z.number(),
+  activeAlertCount: z.number(),
+  resolvedAlertCount: z.number(),
   recentAlerts: z.array(
     z.object({
       id: z.string().uuid(),
