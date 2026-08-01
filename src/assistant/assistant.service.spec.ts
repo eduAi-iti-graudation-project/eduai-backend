@@ -216,26 +216,38 @@ describe('AssistantService', () => {
       expect(llm.generateStructured).toHaveBeenCalledTimes(3);
     });
 
-    it('should generate quiz without prior search when no search needed', async () => {
+    it('should refuse to generate quiz when search found no material', async () => {
+      llm.generateStructured
+        .mockResolvedValueOnce({
+          action: 'search_curriculum',
+          query: 'quantum mechanics',
+        })
+        .mockResolvedValueOnce({
+          action: 'create_quiz',
+          topic: 'quantum mechanics',
+          questionCount: 3,
+          types: ['mcq', 'short_answer'],
+        });
+
+      materials.searchChunks.mockResolvedValue([]);
+
+      const result = await service.chat({
+        classId,
+        messages: [],
+        newMessage: 'Create a quiz about quantum mechanics',
+      });
+
+      expect(result.reply).toContain('not covered');
+      expect(result.quiz).toBeUndefined();
+      expect(llm.generateStructured).toHaveBeenCalledTimes(2);
+    });
+
+    it('should refuse to generate quiz without any search context', async () => {
       llm.generateStructured.mockResolvedValueOnce({
         action: 'create_quiz',
         topic: 'basic math',
         questionCount: 2,
       });
-
-      const quizResult = {
-        title: 'Basic Math Quiz',
-        questions: [
-          {
-            type: 'mcq' as const,
-            question: 'What is 2+2?',
-            options: ['3', '4', '5', '6'],
-            correctAnswer: '4',
-          },
-        ],
-      };
-
-      llm.generateStructured.mockResolvedValueOnce(quizResult);
 
       const result = await service.chat({
         classId,
@@ -243,9 +255,10 @@ describe('AssistantService', () => {
         newMessage: 'Give me a math quiz',
       });
 
-      expect(result.reply).toContain('Basic Math Quiz');
-      expect(result.quiz).toEqual(quizResult);
-      expect(llm.generateStructured).toHaveBeenCalledTimes(2);
+      expect(result.reply).toContain('not covered');
+      expect(result.quiz).toBeUndefined();
+      expect(llm.generateStructured).toHaveBeenCalledTimes(1);
+      expect(materials.searchChunks).not.toHaveBeenCalled();
     });
   });
 });

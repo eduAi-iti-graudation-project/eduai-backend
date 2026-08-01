@@ -23,7 +23,9 @@ Available actions and their exact JSON format:
 Rules:
 1. Always call search_curriculum first when you need curriculum information.
 2. After receiving search results, call create_quiz if the teacher asked for a quiz.
-3. Be thorough and detailed in your responses.`;
+3. Base all answers and quizzes ONLY on the curriculum search results. Never use your own knowledge or information outside the results.
+4. If the search returned no material, tell the teacher the topic is not covered in the uploaded curriculum material. Never fall back to general knowledge.
+5. Be thorough and detailed in your responses.`;
 
 const QUIZ_PROMPT = `You are a quiz generator for an educator. Given a topic and context from curriculum materials, create a quiz with a mix of multiple-choice and short-answer questions.
 
@@ -31,7 +33,8 @@ Rules:
 1. MCQ questions must have exactly 4 options with one correct answer. Include the options array.
 2. Short answer questions must have a clear correct answer.
 3. Questions should be grade-level appropriate and test understanding.
-4. Include an explanation for the correct answer where helpful.`;
+4. Include an explanation for the correct answer where helpful.
+5. Base every question ONLY on the provided curriculum context. Never use outside knowledge.`;
 
 interface ConversationMessage {
   role: 'user' | 'assistant';
@@ -53,6 +56,7 @@ export class AssistantService {
     ];
 
     let lastSearchContext = '';
+    let hasSearchContext = false;
 
     for (let i = 0; i < MAX_ITERATIONS; i++) {
       const userPrompt = history
@@ -77,6 +81,7 @@ export class AssistantService {
           topK,
         );
 
+        hasSearchContext = chunks.length > 0;
         lastSearchContext =
           chunks.length > 0
             ? chunks
@@ -85,7 +90,7 @@ export class AssistantService {
                     `[Result ${idx + 1}] (from: ${c.materialTitle}, relevance: ${c.distance.toFixed(4)})\n${c.content}`,
                 )
                 .join('\n\n')
-            : 'No relevant curriculum material found. Please use your general knowledge to answer.';
+            : 'No relevant curriculum material found.';
 
         history.push(
           {
@@ -100,13 +105,18 @@ export class AssistantService {
       }
 
       if (result.action === 'create_quiz') {
+        if (!hasSearchContext) {
+          return {
+            reply: `The topic "${result.topic}" is not covered in this class's uploaded curriculum material, so I can't create a quiz on it. Upload material covering this topic first, then ask me again.`,
+          };
+        }
+
         const questionCount = result.questionCount ?? 5;
         const types = result.types ?? ['mcq', 'short_answer'];
 
         const quiz = await this.llm.generateStructured<Quiz>({
           systemPrompt: QUIZ_PROMPT,
-          userPrompt: `Topic: ${result.topic}\nNumber of questions: ${questionCount}\nQuestion types: ${types.join(', ')}\n\nCurriculum context:\n${lastSearchContext || 'No curriculum context available. Use general knowledge.'}`,
-
+          userPrompt: `Topic: ${result.topic}\nNumber of questions: ${questionCount}\nQuestion types: ${types.join(', ')}\n\nCurriculum context:\n${lastSearchContext}`,
           schema: QuizSchema,
         });
 
