@@ -8,6 +8,6 @@ import { CommunicationAgentModule } from '../communication-agent/communication-a
   imports: [FeedbackWriterModule, CommunicationAgentModule],
   providers: [GradingService],
   controllers: [GradingController],
-  exports: [GradingService],       
+  exports: [GradingService],
 })
 export class GradingModule {}
