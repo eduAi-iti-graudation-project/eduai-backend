@@ -1,8 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { GradingService } from './grading.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { FeedbackWriterService } from '../feedback-writer/feedback-writer.service';
 import { CommunicationAgentService } from '../communication-agent/communication-agent.service';
+import { FeedbackWriterService } from '../feedback-writer/feedback-writer.service';
 import { NotFoundException } from '@nestjs/common';
 
 describe('GradingService', () => {
@@ -26,10 +26,12 @@ describe('GradingService', () => {
     $transaction: jest.fn(),
   };
 
-  const mockFeedbackWriterService = {
-    write: jest.fn().mockResolvedValue(undefined),
   const mockCommunicationAgentService = {
     analyze: jest.fn().mockResolvedValue(undefined),
+  };
+
+  const mockFeedbackWriterService = {
+    write: jest.fn().mockResolvedValue(undefined),
   };
 
   beforeEach(async () => {
@@ -38,10 +40,12 @@ describe('GradingService', () => {
         GradingService,
         { provide: PrismaService, useValue: mockPrisma },
         {
-          provide: FeedbackWriterService,
-          useValue: mockFeedbackWriterService,
           provide: CommunicationAgentService,
           useValue: mockCommunicationAgentService,
+        },
+        {
+          provide: FeedbackWriterService,
+          useValue: mockFeedbackWriterService,
         },
       ],
     }).compile();
@@ -111,11 +115,10 @@ describe('GradingService', () => {
         include: { scores: true },
       });
       expect(mockPrisma.$transaction).toHaveBeenCalled();
-      expect(result.status).toBe('CONFIRMED');
+      expect(result?.status).toBe('CONFIRMED');
     });
 
-    it('should call FeedbackWriterService.write after confirm', async () => {
-    it('should call CommunicationAgentService.analyze after confirm', async () => {
+    it('should call CommunicationAgentService.analyze and FeedbackWriterService.write after confirm', async () => {
       const submission = {
         id: 'submission-id',
         studentId: 'student-id',
@@ -142,8 +145,10 @@ describe('GradingService', () => {
 
       await service.confirmAll('submission-id');
 
-      expect(mockFeedbackWriterService.write).toHaveBeenCalledWith(
       expect(mockCommunicationAgentService.analyze).toHaveBeenCalledWith(
+        'submission-id',
+      );
+      expect(mockFeedbackWriterService.write).toHaveBeenCalledWith(
         'submission-id',
       );
     });

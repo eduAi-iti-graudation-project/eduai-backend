@@ -28,8 +28,7 @@ Four roles: **Teacher**, **Student**, **Guardian**, **Admin**.
 - Both repos use `main` (protected, deploys automatically) and `dev`
   (protected, integration branch). Feature branches target `dev`.
 
-## 3. Core features (in priority order — do not build later ones before
-   earlier ones are solid)
+## 3. Core features (all items below are implemented and shipped in `dev`)
 
 1. **Rubric Builder** — manual form (criterion + points) is the baseline.
    "Import from PDF" (the Prompt Factory) extracts criteria from a messy PDF
@@ -80,14 +79,23 @@ Four roles: **Teacher**, **Student**, **Guardian**, **Admin**.
     role-specific data (teacher: class summaries + pending confirmations;
     student: upcoming assignments + confirmed grades; guardian: child overview;
     admin: school-wide stats).
-13. **Feedback Writer Agent** — after grading suggests scores, a Mastra agent
-    writes per-criterion natural-language feedback explaining why the student
-    got that score and how to improve. Replaces the current placeholder string
-    in `GradingScore.aiFeedback`.
+13. **Feedback Writer Agent** — a Mastra agent writes per-criterion
+    natural-language feedback explaining why the student got that score and
+    how to improve. It fires (fire-and-forget) after the teacher confirms
+    scores, writing to `GradingScore.aiFeedback`; a backfill endpoint covers
+    historically confirmed scores without feedback.
 14. **Homework Helper Agent** — students ask assignment questions in plain
-    language; the agent searches curriculum, looks up assignment context, and
-    returns hints or explanations without giving away the answer. Logs
-    interactions so the teacher knows who's struggling. Mastra multi-tool agent.
+    language via `POST /assistant/homework-help`; the agent searches
+    curriculum, looks up assignment context, and returns hints or
+    explanations without giving away the answer. Logs interactions
+    (`HomeworkHelpInteraction`) so the teacher knows who's struggling.
+15. **Quiz Engine** — teachers generate quizzes from curriculum context
+    (Mastra agent), manage quiz CRUD, and students take them with
+    anti-cheat violation tracking; short answers are graded with teacher
+    confirmation before scores are real.
+16. **Communication Agent** — after a teacher confirms grades, a Mastra
+    agent analyzes the student's performance and creates alerts with
+    plain-language explanations, notifying the guardian when tripped.
 
 ## 4. Non-negotiable rules (violating these is a bug, not a style choice)
 
@@ -95,8 +103,9 @@ Four roles: **Teacher**, **Student**, **Guardian**, **Admin**.
   an LLM API. Redact, call the LLM, re-attach the real identity afterward
   using the internal ID — never the reverse order.
 - **Every LLM call that returns structured data must be schema-validated**
-  (Zod) with exactly one retry on a malformed response, then a graceful
-  failure — never let a malformed LLM response silently corrupt a grade.
+  (Zod) with a bounded retry budget (default 3 total attempts) on a
+  malformed response, then a graceful failure — never let a malformed LLM
+  response silently corrupt a grade.
 - **A grade is not visible to a student, and not eligible for analysis,
   until a teacher has confirmed it.** No code path may skip this.
 - **The Analysis Agent's trigger condition is a plain function, not a
@@ -116,7 +125,8 @@ Four roles: **Teacher**, **Student**, **Guardian**, **Admin**.
 ## 5. Data model
 
 Canonical schema is `schema.prisma` in the backend repo. Key entities:
-`User` (role: TEACHER/STUDENT/GUARDIAN/ADMIN), `Class`, `Enrollment`,
+`User` (role: TEACHER/STUDENT/GUARDIAN/ADMIN, links to Supabase Auth by
+unique `authId`), `Class`, `Enrollment`,
 `Rubric` → `RubricCriterion` (has `embedding vector(1024)`), `Assignment`,
 `Submission` (status: SUBMITTED → GRADING_IN_PROGRESS → REVIEW_READY →
 CONFIRMED) → `SubmissionChunk` (has `embedding vector(1024)`),
@@ -125,10 +135,14 @@ CONFIRMED) → `SubmissionChunk` (has `embedding vector(1024)`),
 Assistant Agent), `Alert` (type, reason, status), `Notification` (user,
 type, channel, read status), `StudentReport` (three-section LLM output per
 alert), `DeviceToken` (FCM push tokens), `Attendance` (student, class,
-date, status).
+date, status), `StudentAnalysis` (communication-agent output per student),
+`HomeworkHelpInteraction` (homework-helper Q&A log), and the quiz set:
+`Quiz` → `QuizQuestion` + `QuizAnswer`, `QuizAttempt` (status, violations
+log, unique per quiz+student).
 
-Embeddings: **OpenAI, 1536 dimensions.** This is a locked decision — do not
-switch embedding providers without a schema migration.
+Embeddings: **HuggingFace (via the ITI API gateway), 1024 dimensions.** This
+is a locked decision — do not switch embedding providers without a schema
+migration.
 
 ## 6. RAG design
 
@@ -164,8 +178,10 @@ CREATE INDEX ON material_chunks USING hnsw (embedding vector_cosine_ops);
 | Orchestrator | Not an LLM at all — deterministic status-transition logic |
 | Criterion Detector | Plain code decides the flag (50% × 2 consecutive); LLM generates three role-specific reports |
 | Notification Dispatcher | Not AI — plain code that calls NotificationService after a report is created |
-| Feedback Writer | Mastra agent with one tool per criterion; calls LlmService, saves to GradingScore.aiFeedback |
+| Feedback Writer | Mastra agent with one tool per criterion; calls LlmService, saves to GradingScore.aiFeedback; fires after confirmAll + via backfill endpoint |
 | Homework Helper | Mastra multi-tool agent (search_curriculum, lookup_assignment, log_interaction); student-facing POST endpoint |
+| Communication Agent | Mastra agent (student_profile, class_context, create_alert, log_analysis, notify_recipient); fires after confirmAll, creates alerts |
+| Quiz Generation | Mastra agent (generate_questions, review_questions, save_quiz, search_curriculum); teachers generate quizzes from curriculum |
 
 Do not add tool-calling or autonomy to Grading or Analysis "to make it more
 agentic." Their determinism is a deliberate correctness choice, not a
