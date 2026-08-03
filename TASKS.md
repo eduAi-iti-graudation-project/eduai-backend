@@ -430,8 +430,8 @@ manual session creation, chat export.
 
 ## Task 4 — Dashboard insights (backend half of a shared backend/frontend task)
 
-- **Owner:** Ahmed Selim
-- **Status:** Not started
+- **Owner:** Abdallah (taken over from Ahmed Selim — Ahmed unavailable)
+- **Status:** In progress
 - **Depends on:** nothing new — the dashboard module, agents' persisted
   outputs (`StudentAnalysis`, `StudentReport`, `HomeworkHelpInteraction`),
   and the confirmed-grade rule all exist on `dev`.

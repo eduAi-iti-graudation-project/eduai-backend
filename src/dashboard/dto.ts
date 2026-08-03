@@ -92,3 +92,40 @@ export class GuardianDashboardDto extends createZodDto(
   GuardianDashboardSchema,
 ) {}
 export class AdminDashboardDto extends createZodDto(AdminDashboardSchema) {}
+
+export const InsightsQuerySchema = z.object({
+  interval: z.enum(['week', 'month']).default('week'),
+});
+
+const InsightSectionSchema = z.object({
+  key: z.string(),
+  title: z.string(),
+  chartType: z.enum(['line', 'area', 'bar', 'radar', 'donut']),
+  series: z.array(
+    z.object({
+      label: z.string(),
+      value: z.number(),
+    }),
+  ),
+  delta: z
+    .object({
+      deltaPercent: z.number(),
+      direction: z.enum(['up', 'down', 'flat']),
+    })
+    .optional(),
+});
+
+const AgentInsightSchema = z.object({
+  title: z.string(),
+  summary: z.string(),
+});
+
+const InsightsResponseSchema = z.object({
+  interval: z.enum(['week', 'month']),
+  sections: z.array(InsightSectionSchema),
+  agentInsights: z.array(AgentInsightSchema),
+  unreadNotifications: z.number(),
+});
+
+export class InsightsQueryDto extends createZodDto(InsightsQuerySchema) {}
+export class InsightsResponseDto extends createZodDto(InsightsResponseSchema) {}
