@@ -6,7 +6,6 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { HomeworkHelperAgent } from './homework-helper.agent';
-import type { Quiz, QuizAttempt } from '@prisma/client';
 import type {
   HomeworkHelpRequestDto,
   HomeworkHelpResponseDto,
@@ -25,19 +24,6 @@ export class HomeworkHelperService {
     studentId: string,
     dto: HomeworkHelpRequestDto,
   ): Promise<HomeworkHelpResponseDto> {
-    const activeAttempt = await this.prisma.quizAttempt.findFirst({
-      where: { studentId, status: 'IN_PROGRESS' },
-      include: { quiz: true },
-    });
-    if (
-      activeAttempt &&
-      this.isAttemptBlockingHelp(activeAttempt, dto.classId)
-    ) {
-      throw new ForbiddenException(
-        'You cannot ask for help while a quiz is in progress',
-      );
-    }
-
     const result = await this.agent.help({
       classId: dto.classId,
       studentId,
@@ -57,17 +43,6 @@ export class HomeworkHelperService {
       interactionId: result.interactionId,
       teacherNotified: result.action === 'REDIRECT_TEACHER',
     };
-  }
-
-  private isAttemptBlockingHelp(
-    attempt: QuizAttempt & { quiz: Quiz },
-    classId: string,
-  ): boolean {
-    if (attempt.quiz.classId !== classId) return false;
-    if (!attempt.quiz.timeLimit) return true;
-    const deadline =
-      attempt.startedAt.getTime() + attempt.quiz.timeLimit * 60_000;
-    return Date.now() <= deadline;
   }
 
   async getHistory(

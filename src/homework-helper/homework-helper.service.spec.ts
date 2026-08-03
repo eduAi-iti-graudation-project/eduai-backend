@@ -19,9 +19,6 @@ describe('HomeworkHelperService', () => {
       update: jest.fn(),
       create: jest.fn(),
     },
-    quizAttempt: {
-      findFirst: jest.fn(),
-    },
     class: { findUnique: jest.fn() },
     user: { findUnique: jest.fn() },
   };
@@ -49,109 +46,6 @@ describe('HomeworkHelperService', () => {
   });
 
   describe('help', () => {
-    it('should block help while a quiz attempt is in progress in the same class', async () => {
-      mockPrisma.quizAttempt.findFirst.mockResolvedValue({
-        id: 'attempt-1',
-        status: 'IN_PROGRESS',
-        startedAt: new Date(),
-        quiz: { classId: 'class-1', timeLimit: 30 },
-      });
-
-      await expect(
-        service.help('student-1', {
-          classId: 'class-1',
-          question: 'Help me with question 3',
-        }),
-      ).rejects.toThrow(ForbiddenException);
-
-      expect(mockPrisma.quizAttempt.findFirst).toHaveBeenCalledWith({
-        where: { studentId: 'student-1', status: 'IN_PROGRESS' },
-        include: { quiz: true },
-      });
-      expect(mockAgent.help).not.toHaveBeenCalled();
-    });
-
-    it('should block help when attempt has no time limit in the same class', async () => {
-      mockPrisma.quizAttempt.findFirst.mockResolvedValue({
-        id: 'attempt-2',
-        status: 'IN_PROGRESS',
-        startedAt: new Date(Date.now() - 60 * 60_000),
-        quiz: { classId: 'class-1', timeLimit: null },
-      });
-
-      await expect(
-        service.help('student-1', {
-          classId: 'class-1',
-          question: 'Help me with question 3',
-        }),
-      ).rejects.toThrow(ForbiddenException);
-      expect(mockAgent.help).not.toHaveBeenCalled();
-    });
-
-    it('should allow help when the attempt is in a different class', async () => {
-      mockPrisma.quizAttempt.findFirst.mockResolvedValue({
-        id: 'attempt-3',
-        status: 'IN_PROGRESS',
-        startedAt: new Date(),
-        quiz: { classId: 'class-2', timeLimit: 30 },
-      });
-      mockAgent.help.mockResolvedValue({
-        answer: 'Try looking at the light-dependent reactions first.',
-        action: 'HINT' as const,
-        sources: ['Curriculum: Photosynthesis Unit'],
-        interactionId: 'log-1',
-      });
-
-      const result = await service.help('student-1', {
-        classId: 'class-1',
-        question: 'I dont get question 3 on photosynthesis',
-      });
-
-      expect(result.action).toBe('HINT');
-      expect(mockAgent.help).toHaveBeenCalled();
-    });
-
-    it('should allow help when the same-class attempt has expired', async () => {
-      mockPrisma.quizAttempt.findFirst.mockResolvedValue({
-        id: 'attempt-4',
-        status: 'IN_PROGRESS',
-        startedAt: new Date(Date.now() - 40 * 60_000),
-        quiz: { classId: 'class-1', timeLimit: 30 },
-      });
-      mockAgent.help.mockResolvedValue({
-        answer: 'Try looking at the light-dependent reactions first.',
-        action: 'HINT' as const,
-        sources: ['Curriculum: Photosynthesis Unit'],
-        interactionId: 'log-1',
-      });
-
-      const result = await service.help('student-1', {
-        classId: 'class-1',
-        question: 'I dont get question 3 on photosynthesis',
-      });
-
-      expect(result.action).toBe('HINT');
-      expect(mockAgent.help).toHaveBeenCalled();
-    });
-
-    it('should allow help when no quiz is in progress', async () => {
-      mockPrisma.quizAttempt.findFirst.mockResolvedValue(null);
-      mockAgent.help.mockResolvedValue({
-        answer: 'Try looking at the light-dependent reactions first.',
-        action: 'HINT' as const,
-        sources: ['Curriculum: Photosynthesis Unit'],
-        interactionId: 'log-1',
-      });
-
-      const result = await service.help('student-1', {
-        classId: 'class-1',
-        question: 'I dont get question 3 on photosynthesis',
-      });
-
-      expect(result.action).toBe('HINT');
-      expect(mockAgent.help).toHaveBeenCalled();
-    });
-
     it('should delegate to agent and return response', async () => {
       mockAgent.help.mockResolvedValue({
         answer: 'Try looking at the light-dependent reactions first.',
@@ -182,7 +76,6 @@ describe('HomeworkHelperService', () => {
     });
 
     it('should pass assignmentId to the agent when provided', async () => {
-      mockPrisma.quizAttempt.findFirst.mockResolvedValue(null);
       mockAgent.help.mockResolvedValue({
         answer: 'Try setting up the equation first.',
         action: 'HINT' as const,
