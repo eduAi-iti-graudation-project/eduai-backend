@@ -164,8 +164,9 @@ export class AuthService {
       throw new BadRequestException('Missing authorization code');
     }
 
-    const { data, error } =
-      await this.supabaseService.exchangeCodeForSession(params.code);
+    const { data, error } = await this.supabaseService.exchangeCodeForSession(
+      params.code,
+    );
     if (error || !data.session) {
       throw new UnauthorizedException(
         error?.message || 'Failed to exchange authorization code',

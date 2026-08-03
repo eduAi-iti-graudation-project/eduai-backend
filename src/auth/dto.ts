@@ -58,8 +58,14 @@ export class SignupDto extends createZodDto(SignupSchema) {}
 export class LoginDto extends createZodDto(LoginSchema) {}
 export class UserDto extends createZodDto(UserSchema) {}
 export class AuthResponseDto extends createZodDto(UserSchema) {}
-export class OauthAuthorizeParams extends createZodDto(OauthAuthorizeParamsSchema) {}
+export class OauthAuthorizeParams extends createZodDto(
+  OauthAuthorizeParamsSchema,
+) {}
 export class RefreshDto extends createZodDto(RefreshSchema) {}
-export class ProvidersResponseDto extends createZodDto(ProvidersResponseSchema) {}
-export class OauthAuthorizeResponseDto extends createZodDto(OauthAuthorizeResponseSchema) {}
+export class ProvidersResponseDto extends createZodDto(
+  ProvidersResponseSchema,
+) {}
+export class OauthAuthorizeResponseDto extends createZodDto(
+  OauthAuthorizeResponseSchema,
+) {}
 export class RefreshResponseDto extends createZodDto(RefreshResponseSchema) {}
