@@ -39,7 +39,7 @@ export class ChatController {
     return this.chatService.getMessages(
       threadId,
       userId,
-      query.after,
+      query.before,
       query.limit,
     );
   }

@@ -181,40 +181,13 @@ describe('ChatService', () => {
       ).rejects.toThrow(ForbiddenException);
     });
 
-    it('returns messages for a participant with a next cursor', async () => {
+    it('returns the latest messages ascending with a next cursor when older exist', async () => {
       mockPrisma.chatThread.findUnique.mockResolvedValue(threadRow);
-      mockPrisma.chatMessage.findUnique.mockResolvedValue(null);
       mockPrisma.chatMessage.findMany.mockResolvedValue([
-        {
-          id: 'msg-1',
-          threadId: 'thread-1',
-          authorId: 'teacher-1',
-          text: 'hello',
-          readAt: null,
-          createdAt: new Date('2026-01-01T00:00:01Z'),
-        },
+        { id: 'm5', createdAt: new Date('2026-01-01T00:00:05Z') },
+        { id: 'm4', createdAt: new Date('2026-01-01T00:00:04Z') },
+        { id: 'm3', createdAt: new Date('2026-01-01T00:00:03Z') },
       ]);
-
-      const result = await service.getMessages('thread-1', 'student-1');
-
-      expect(result.items).toHaveLength(1);
-      expect(result.items[0].text).toBe('hello');
-      expect(result.nextCursor).toBe('msg-1');
-    });
-
-    it('caps the page at the limit', async () => {
-      mockPrisma.chatThread.findUnique.mockResolvedValue(threadRow);
-      mockPrisma.chatMessage.findUnique.mockResolvedValue(null);
-      mockPrisma.chatMessage.findMany.mockResolvedValue(
-        Array.from({ length: 3 }, (_, i) => ({
-          id: `msg-${i}`,
-          threadId: 'thread-1',
-          authorId: 'teacher-1',
-          text: `m${i}`,
-          readAt: null,
-          createdAt: new Date(2026, 0, 1, 0, 0, i),
-        })),
-      );
 
       const result = await service.getMessages(
         'thread-1',
@@ -222,8 +195,91 @@ describe('ChatService', () => {
         undefined,
         2,
       );
+
+      expect(mockPrisma.chatMessage.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          take: 3,
+        }),
+      );
+      expect(result.items.map((m) => m.id)).toEqual(['m4', 'm5']);
+      expect(result.nextCursor).toBe('m4');
+    });
+
+    it('returns nextCursor null when the tail is exhausted', async () => {
+      mockPrisma.chatThread.findUnique.mockResolvedValue(threadRow);
+      mockPrisma.chatMessage.findMany.mockResolvedValue([
+        { id: 'm2', createdAt: new Date('2026-01-01T00:00:02Z') },
+        { id: 'm1', createdAt: new Date('2026-01-01T00:00:01Z') },
+      ]);
+
+      const result = await service.getMessages(
+        'thread-1',
+        'student-1',
+        undefined,
+        2,
+      );
+
+      expect(result.items.map((m) => m.id)).toEqual(['m1', 'm2']);
+      expect(result.nextCursor).toBeNull();
+    });
+
+    it('returns the messages strictly older than the cursor, newest page first', async () => {
+      mockPrisma.chatThread.findUnique.mockResolvedValue(threadRow);
+      mockPrisma.chatMessage.findUnique.mockResolvedValue({
+        id: 'm4',
+        createdAt: new Date('2026-01-01T00:00:04Z'),
+      });
+      mockPrisma.chatMessage.findMany.mockResolvedValue([
+        { id: 'm3', createdAt: new Date('2026-01-01T00:00:03Z') },
+        { id: 'm2', createdAt: new Date('2026-01-01T00:00:02Z') },
+      ]);
+
+      const result = await service.getMessages(
+        'thread-1',
+        'student-1',
+        'm4',
+        1,
+      );
+
+      expect(mockPrisma.chatMessage.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            threadId: 'thread-1',
+            OR: [
+              { createdAt: { lt: new Date('2026-01-01T00:00:04Z') } },
+              {
+                createdAt: new Date('2026-01-01T00:00:04Z'),
+                id: { lt: 'm4' },
+              },
+            ],
+          },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          take: 2,
+        }),
+      );
+      expect(result.items.map((m) => m.id)).toEqual(['m3']);
+      expect(result.nextCursor).toBe('m3');
+    });
+
+    it('coerces a string limit without 500ing', async () => {
+      mockPrisma.chatThread.findUnique.mockResolvedValue(threadRow);
+      mockPrisma.chatMessage.findMany.mockResolvedValue([
+        { id: 'm2', createdAt: new Date('2026-01-01T00:00:02Z') },
+        { id: 'm1', createdAt: new Date('2026-01-01T00:00:01Z') },
+      ]);
+
+      const result = await service.getMessages(
+        'thread-1',
+        'student-1',
+        undefined,
+        '2' as unknown as number,
+      );
+
+      expect(mockPrisma.chatMessage.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ take: 3 }),
+      );
       expect(result.items).toHaveLength(2);
-      expect(result.nextCursor).toBe('msg-1');
     });
   });
 
@@ -275,14 +331,15 @@ describe('ChatService', () => {
   });
 
   describe('listThreads', () => {
-    it('scopes a teacher to threads they own', async () => {
+    it('scopes a teacher to threads they own and reports unread counts', async () => {
       mockPrisma.chatThread.findMany.mockResolvedValue([
         {
           ...threadRow,
           class: { id: 'class-1', name: 'Math' },
           teacher: { id: 'teacher-1', name: 'T' },
           student: { id: 'student-1', name: 'S' },
-          messages: [{ text: 'last' }],
+          messages: [{ text: 'last', authorId: 'student-1' }],
+          _count: { messages: 3 },
         },
       ]);
 
@@ -293,6 +350,8 @@ describe('ChatService', () => {
       );
       expect(result[0].peerId).toBe('student-1');
       expect(result[0].lastMessage).toBe('last');
+      expect(result[0].lastMessageAuthorId).toBe('student-1');
+      expect(result[0].unreadCount).toBe(3);
     });
   });
 });

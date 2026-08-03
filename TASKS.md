@@ -580,3 +580,89 @@ any math or chart-selection logic.
 - [ ] `docs/dashboard-insights-frontend.md` documents every section key,
   the `chartType` → Recharts mapping, and the delta badge rules.
 - [ ] All tests above exist and pass; `lint` + `test` + `build` clean.
+
+---
+
+## Task 5 — Global Zod validation pipe (runtime-enforce all DTOs)
+
+- **Owner:** Abdallah
+- **Status:** Not started
+- **Depends on:** nothing — discovered while fixing chat pagination.
+
+### Context
+
+Verified empirically (2026-08-03): **the app has no runtime validation.**
+`ValidationModule` (`src/common/validation/validation.module.ts`) is empty
+(`@Global() @Module({})`), `main.ts` calls no `useGlobalPipes`, and neither
+`APP_PIPE` nor `ZodValidationPipe` nor `class-validator` appears anywhere.
+All `createZodDto` classes are Swagger-docs-only. Consequence seen in the
+wild: `GET /chat/threads/:id/messages?limit=50` → the string `"50"` reaches
+Prisma as `take: "501"` → 500 (fixed locally in the chat service by
+coercing; the rest of the API still 500s on malformed query params).
+
+The only runtime zod usages today: `common/validation/retry-once.ts`
+(`schema.parse` for LLM structured outputs, with retry) and manual
+`InsightsQuerySchema.safeParse({ interval })` in
+`src/dashboard/dashboard.controller.ts`.
+
+### Goal
+
+Register a global `ZodValidationPipe` so every endpoint's `createZodDto`
+(queries, params, bodies) is enforced at runtime — 400 on violations, with
+a stable error shape the frontend interceptor can surface.
+
+### Design (decisions already made)
+
+1. Implement `ZodValidationPipe` (transform mode, `whitelist: true`-style:
+   strip unknown keys, apply `z.coerce` on query strings, coerce
+   defaults/optional). Use `ZodValidationPipe` from `nestjs-zod` if the
+   project already depends on it — it does not; either add
+   `nestjs-zod` + `zod` peer, or hand-roll the pipe (small, no new deps).
+   Prefer hand-rolled: keep the dependency surface flat.
+2. Register via `useGlobalPipes` in `main.ts` (before `SwaggerModule.setup`
+   — swagger decorators stay metadata-only). Do **not** add `@Body()`-level
+   pipes; global only.
+3. **Order-of-business hazard:** DTOs were written docs-first and never
+   executed — enabling the pipe will break endpoints whose DTOs disagree
+   with reality. The roll-out must be incremental:
+   a. Land the pipe in "report-only" mode first (log violations, don't
+      reject) on `dev`;
+   b. Fix every DTO/service mismatch the log surfaces (each fix is a small
+      PR);
+   c. Flip to reject mode (400) once a full day of logs shows zero
+      false-positive violations.
+4. Error shape (reject mode): `400 { statusCode: 400, message: string[],
+   error: 'Bad Request' }` — same shape as Nest's built-in pipe, so the
+   frontend's existing error handling keeps working.
+5. Out of scope: class-validator migration, per-route pipe overrides,
+   OpenAPI schema regeneration (docs already track the DTOs).
+
+### Files to create/modify
+
+- `src/common/validation/zod-validation.pipe.ts` — new (hand-rolled pipe).
+- `src/common/validation/validation.module.ts` — optionally export the
+  pipe (or just import it in `main.ts`).
+- `src/main.ts` — `app.useGlobalPipes(new ZodValidationPipe({ mode }))`,
+  mode from env (`VALIDATION_MODE=report|reject`, default `report`).
+- `.env.example` — document `VALIDATION_MODE`.
+- Spec: `src/common/validation/zod-validation.pipe.spec.ts` (see Tests).
+
+### Tests (required)
+
+- Pipe unit tests: valid body passes through (transformed); unknown key
+  stripped; invalid body → 400 with the `{ statusCode, message[], error }`
+  shape; query string coercion (`"50"` → `50`); `report` mode logs and does
+  not throw; `reject` mode throws.
+- Regression after flip-to-reject (acceptance criterion): full
+  `npm run test` green with `VALIDATION_MODE=reject` on at least the chat,
+  dashboard, submissions, and classes modules (their DTOs are the ones
+  known to be exercised by the frontend).
+
+### Acceptance criteria
+
+- [ ] `?limit=50` (string) on chat messages no longer 500s — 400 or works
+  via coercion, never a Prisma 500.
+- [ ] Report mode ships first; no endpoint rejects until violations are
+  logged and fixed.
+- [ ] Reject mode produces the standard 400 shape; `lint` + `test` +
+  `build` clean in both modes.

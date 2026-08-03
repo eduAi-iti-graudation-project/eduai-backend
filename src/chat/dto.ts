@@ -15,7 +15,7 @@ export const SendMessageSchema = z.object({
 export class SendMessageDto extends createZodDto(SendMessageSchema) {}
 
 export const GetMessagesQuerySchema = z.object({
-  after: z.string().uuid().optional(),
+  before: z.string().uuid().optional(),
   limit: z.coerce.number().int().min(1).max(200).default(100),
 });
 

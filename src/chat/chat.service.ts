@@ -80,6 +80,8 @@ export class ChatService {
       peerId: string;
       peerName: string;
       lastMessage: string | null;
+      lastMessageAuthorId: string | null;
+      unreadCount: number;
     }>
   > {
     const where =
@@ -94,7 +96,14 @@ export class ChatService {
         messages: {
           orderBy: { createdAt: 'desc' },
           take: 1,
-          select: { text: true },
+          select: { text: true, authorId: true },
+        },
+        _count: {
+          select: {
+            messages: {
+              where: { authorId: { not: user.id }, readAt: null },
+            },
+          },
         },
       },
       orderBy: { updatedAt: 'desc' },
@@ -103,6 +112,7 @@ export class ChatService {
     return threads.map((thread) => {
       const isTeacher = user.role === 'TEACHER';
       const peer = isTeacher ? thread.student : thread.teacher;
+      const lastMessage = thread.messages[0] ?? null;
       return {
         id: thread.id,
         classId: thread.classId,
@@ -113,7 +123,9 @@ export class ChatService {
         className: thread.class.name,
         peerId: peer.id,
         peerName: peer.name,
-        lastMessage: thread.messages[0]?.text ?? null,
+        lastMessage: lastMessage?.text ?? null,
+        lastMessageAuthorId: lastMessage?.authorId ?? null,
+        unreadCount: thread._count.messages,
       };
     });
   }
@@ -121,7 +133,7 @@ export class ChatService {
   async getMessages(
     threadId: string,
     userId: string,
-    after?: string,
+    before?: string,
     limit = 100,
   ): Promise<{
     items: Array<{
@@ -136,8 +148,10 @@ export class ChatService {
   }> {
     await this.assertParticipant(threadId, userId);
 
-    const cursor = after
-      ? await this.prisma.chatMessage.findUnique({ where: { id: after } })
+    const pageSize = Math.max(1, Math.min(200, Number(limit) || 100));
+
+    const cursor = before
+      ? await this.prisma.chatMessage.findUnique({ where: { id: before } })
       : null;
 
     const messages = await this.prisma.chatMessage.findMany({
@@ -146,22 +160,21 @@ export class ChatService {
         ...(cursor
           ? {
               OR: [
-                { createdAt: { gt: cursor.createdAt } },
+                { createdAt: { lt: cursor.createdAt } },
                 {
                   createdAt: cursor.createdAt,
-                  id: { gt: cursor.id },
+                  id: { lt: cursor.id },
                 },
               ],
             }
           : {}),
       },
-      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-      take: limit + 1,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: pageSize + 1,
     });
 
-    const hasMore = messages.length > limit;
-    const page = hasMore ? messages.slice(0, limit) : messages;
-    const last = page[page.length - 1];
+    const hasMore = messages.length > pageSize;
+    const page = (hasMore ? messages.slice(0, pageSize) : messages).reverse();
 
     return {
       items: page.map((m) => ({
@@ -172,7 +185,7 @@ export class ChatService {
         readAt: m.readAt?.toISOString() ?? null,
         createdAt: m.createdAt.toISOString(),
       })),
-      nextCursor: last ? last.id : null,
+      nextCursor: page.length > 0 && hasMore ? page[0].id : null,
     };
   }
 
