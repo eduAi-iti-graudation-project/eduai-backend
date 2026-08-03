@@ -237,7 +237,12 @@ describe('AuthService', () => {
       await service.handleOauthCallback({ code: 'code-123' });
 
       expect(mockPrisma.user.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({ name: 'Jane Doe' }),
+        data: {
+          authId: 'supabase-auth-id-1',
+          email: 'student@eduai.test',
+          name: 'Jane Doe',
+          role: 'STUDENT',
+        },
       });
     });
 
