@@ -1,6 +1,12 @@
 import { Injectable, Optional, UnauthorizedException } from '@nestjs/common';
 import { createClient } from '@supabase/supabase-js';
-import type { SupabaseClient } from '@supabase/supabase-js';
+import type {
+  AuthResponse,
+  AuthTokenResponse,
+  OAuthResponse,
+  Provider,
+  SupabaseClient,
+} from '@supabase/supabase-js';
 import * as crypto from 'node:crypto';
 
 type Database = Record<string, never>;
@@ -66,13 +72,34 @@ export class SupabaseService {
       process.env.SUPABASE_URL!,
       process.env.SUPABASE_SERVICE_KEY!,
       {
-        auth: { persistSession: false },
+        auth: {
+          persistSession: false,
+          flowType: 'pkce',
+        },
       },
     );
   }
 
   getClient(): SupabaseClient<Database> {
     return this.client;
+  }
+
+  async signInWithOAuth(
+    provider: Provider,
+    redirectTo: string,
+  ): Promise<OAuthResponse> {
+    return this.client.auth.signInWithOAuth({
+      provider,
+      options: { redirectTo },
+    });
+  }
+
+  async exchangeCodeForSession(authCode: string): Promise<AuthTokenResponse> {
+    return this.client.auth.exchangeCodeForSession(authCode);
+  }
+
+  async refreshSession(refreshToken: string): Promise<AuthResponse> {
+    return this.client.auth.refreshSession({ refresh_token: refreshToken });
   }
 
   async verifyToken(token: string): Promise<{ id: string }> {
