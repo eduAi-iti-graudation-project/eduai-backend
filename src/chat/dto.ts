@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 export const CreateThreadSchema = z.object({
   classId: z.string().uuid(),
+  studentId: z.string().uuid().optional(),
 });
 
 export class CreateThreadDto extends createZodDto(CreateThreadSchema) {}

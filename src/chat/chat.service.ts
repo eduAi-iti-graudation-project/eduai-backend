@@ -13,6 +13,7 @@ export class ChatService {
   async createThreadOrGet(
     user: User,
     classId: string,
+    studentId?: string,
   ): Promise<{
     id: string;
     classId: string;
@@ -29,20 +30,30 @@ export class ChatService {
       throw new NotFoundException('Class not found');
     }
 
-    await this.assertApprovedEnrollment(classEntity.id, user.id);
+    const teacherInitiated = studentId !== undefined;
+    if (teacherInitiated) {
+      if (classEntity.teacherId !== user.id) {
+        throw new ForbiddenException(
+          'Only the class teacher can start a thread with a student',
+        );
+      }
+    }
+
+    const targetStudentId = teacherInitiated ? studentId : user.id;
+    await this.assertApprovedEnrollment(classEntity.id, targetStudentId);
 
     const thread = await this.prisma.chatThread.upsert({
       where: {
         teacherId_studentId_classId: {
           teacherId: classEntity.teacherId,
-          studentId: user.id,
+          studentId: targetStudentId,
           classId,
         },
       },
       update: {},
       create: {
         teacherId: classEntity.teacherId,
-        studentId: user.id,
+        studentId: targetStudentId,
         classId,
       },
     });
@@ -217,7 +228,7 @@ export class ChatService {
 
     if (!enrollment || enrollment.status !== 'APPROVED') {
       throw new ForbiddenException(
-        'You must be an approved student in this class to start a chat',
+        'A chat requires an approved enrollment in this class',
       );
     }
   }
