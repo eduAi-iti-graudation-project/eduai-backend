@@ -29,6 +29,7 @@ import { TeachersModule } from './teachers/teachers.module';
 import { UsersModule } from './users/users.module';
 import { FeedbackWriterModule } from './feedback-writer/feedback-writer.module';
 import { HomeworkHelperModule } from './homework-helper/homework-helper.module';
+import { ChatModule } from './chat/chat.module';
 
 @Module({
   imports: [
@@ -57,6 +58,7 @@ import { HomeworkHelperModule } from './homework-helper/homework-helper.module';
     UsersModule,
     FeedbackWriterModule,
     HomeworkHelperModule,
+    ChatModule,
   ],
   controllers: [AppController],
   providers: [
