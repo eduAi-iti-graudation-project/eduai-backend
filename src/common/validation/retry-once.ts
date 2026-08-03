@@ -15,23 +15,45 @@ export async function validateWithRetry<T>(
   schema: ZodSchema<T>,
   data: unknown,
   retryFn: () => Promise<unknown>,
+  attempts = 2,
 ): Promise<T> {
-  try {
-    return schema.parse(data);
-  } catch (firstError) {
+  let firstError: unknown;
+
+  for (let i = 0; i < attempts; i++) {
     try {
-      const retried = await retryFn();
-      return schema.parse(retried);
-    } catch (secondError) {
-      const message =
-        secondError instanceof ZodError
-          ? `Schema validation failed after retry: ${secondError.message}`
-          : `Validation failed after retry: ${String(secondError)}`;
-      const errors = {
-        first: firstError as Error,
-        second: secondError as Error,
-      };
-      throw new ValidationError(message, errors, 2);
+      return schema.parse(data);
+    } catch (error) {
+      if (i === 0) firstError = error;
+      if (i === attempts - 1) {
+        const message =
+          error instanceof ZodError
+            ? `Schema validation failed after retry: ${error.message}`
+            : `Validation failed after retry: ${String(error)}`;
+        throw new ValidationError(
+          message,
+          {
+            first: firstError as Error,
+            second: error as Error,
+          },
+          attempts,
+        );
+      }
+      try {
+        data = await retryFn();
+      } catch (retryError) {
+        if (i + 1 >= attempts - 1) {
+          throw new ValidationError(
+            `Validation failed after retry: ${String(retryError)}`,
+            {
+              first: error as Error,
+              second: retryError as Error,
+            },
+            attempts,
+          );
+        }
+      }
     }
   }
+
+  throw new Error('validateWithRetry: unreachable');
 }

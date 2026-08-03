@@ -8,6 +8,7 @@
 ## Read first, every session
 1. `specs.md` — product, architecture, data model, non-negotiable rules
 2. `backend-specs.md` — this repo's structure and conventions
+3. `TASKS.md` — current work items, owners, and required tests
 
 ## Exploring the codebase
 When asked about an endpoint:
@@ -24,60 +25,6 @@ provider (ITI API gateway) + HuggingFace embeddings (1024-dim) + Supabase
 Auth + Supabase Storage.
 Modular monolith — one module per feature (see `backend-specs.md`).
 
-## Phases — Mastra agent buildout
-
-### Phase 1: Feedback Writer Agent
-Replace the placeholder `aiFeedback` (`"Auto-graded placeholder..."`) in
-`GradingService.gradeSubmission()` with real per-criterion natural-language
-feedback written by a Mastra agent.
-
-**Trigger:** Fires after `gradeSubmission()` upserts scores — calls
-`FeedbackWriterService.write(submissionId)`.
-
-**Flow:**
-1. Reads submission chunks + rubric criteria + per-criterion scores
-2. For each criterion, calls `LlmService` via a Mastra agent tool to
-   generate specific, actionable feedback (e.g. *"Your thesis was clear
-   but needs textual evidence — try citing line 12."*)
-3. Saves feedback to `GradingScore.aiFeedback`
-
-**Files to create:**
-```
-src/feedback-writer/
-  feedback-writer.module.ts
-  feedback-writer.service.ts
-  feedback-writer.agent.ts     ← Mastra Agent definition
-  tools/write-feedback.tool.ts ← createTool calling LlmService
-```
-**Depends on:** `@mastra/core` + `@mastra/nestjs` wired into the project.
-
-### Phase 2: Homework Helper Agent
-A student-facing agent that answers homework questions by searching the
-curriculum, looking up assignments, and giving hints.
-
-**Endpoint:** `POST /assistant/homework-help`
-
-**Flow:**
-1. Student sends "I don't get question 3 on the math assignment"
-2. Agent searches curriculum (tool 1 — via `MaterialsService`)
-3. Agent looks up assignment + rubric context (tool 2)
-4. Agent decides: give a hint, explain a concept, or redirect to teacher
-5. Responds to student + logs the interaction (tool 3)
-
-**Files to create:**
-```
-src/homework-helper/
-  homework-helper.module.ts
-  homework-helper.controller.ts
-  homework-helper.service.ts
-  homework-helper.agent.ts
-  tools/search-curriculum.tool.ts
-  tools/lookup-assignment.tool.ts
-  tools/log-interaction.tool.ts
-```
-**Depends on:** Phase 1 complete (Mastra already wired), frontend team
-for the student-side UI.
-
 ## Remaining architecture
 
 ### Key decisions
@@ -88,7 +35,9 @@ for the student-side UI.
   Confirmed grades are visible to students via `GET /students/:id/grades`.
 - Reports auto-trigger on alert creation — no manual gate in MVP.
 - All 4 roles have separate dashboard views via `GET /dashboard/overview`.
-- Auth uses placeholder UUID; teammate wires Supabase Auth later.
+- Auth: Supabase JWTs verified locally via JWKS (RS256/ES256). Local users
+  link to Supabase by `authId`; seed links the demo accounts. Email/password
+  signup + login go through the backend (`/auth/signup`, `/auth/login`).
 
 ### Modules
 
@@ -113,8 +62,11 @@ for the student-side UI.
 | `teachers/` | Teacher-grade assignment |
 | `users/` | Admin `GET /users?role=&q=` |
 | `students/` | Student classes, update, link guardian |
-| `feedback-writer/` | **Phase 1** — Mastra agent for per-criterion feedback |
-| `homework-helper/` | **Phase 2** — Mastra agent for student homework help |
+| `feedback-writer/` | Mastra agent for per-criterion feedback (`write()`) |
+| `communication-agent/` | Mastra agent for student analysis + alert creation (`analyze()`) |
+| `homework-helper/` | Mastra agent for student homework help (`POST /assistant/homework-help`) |
+| `quizzes/` | Quiz generation agent, CRUD, attempts with anti-cheat, grading + confirmation |
+| `mastra/` | Global Mastra instance registered via `MastraModule` |
 | `common/llm/` | `LlmService` — all LLM calls go through this |
 | `common/pii/` | Redact student name/ID before any LLM call |
 | `common/chunker/` | Shared `chunkText()` — paragraph-aware, token window |
@@ -152,11 +104,11 @@ writing any code. Don't proceed on the issue number alone.
 ## Testing is not optional, ever
 Every GitHub issue for a task states, explicitly, what tests it requires —
 or an explicit reason testing doesn't apply (e.g. "N/A -- pure UI, no new
-logic"). This applies to every task, not only the 4 named non-negotiables
-above. If you're implementing a task and its issue has no tests section,
-that's a bug in the issue — stop and add one before writing code, don't
-silently skip it. A task is not done until its stated tests exist and pass,
-or you've confirmed with the person who assigned it that no tests apply.
+logic"). The same rule applies to tasks in `TASKS.md`: each task lists the
+tests it requires; a task with no tests section is a bug in the task — stop
+and add one before writing code, don't silently skip it. A task is not done
+until its stated tests exist and pass, or you've confirmed with the person
+who assigned it that no tests apply.
 
 ## Before finishing any task
 Run lint + test + build locally, every time, no exceptions. Confirm the

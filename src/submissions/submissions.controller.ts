@@ -10,6 +10,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import {
   ApiTags,
   ApiOperation,
@@ -43,7 +44,10 @@ export class SubmissionsController {
   @Roles('STUDENT')
   @Post('import-pdf')
   @UseInterceptors(
-    FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } }),
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: 10 * 1024 * 1024 },
+    }),
   )
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Upload a submission as PDF' })

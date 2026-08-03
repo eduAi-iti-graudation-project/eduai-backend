@@ -1,3 +1,4 @@
+import { NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { StudentsService } from './students.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -8,6 +9,9 @@ describe('StudentsService', () => {
   const mockPrisma = {
     gradingScore: {
       findMany: jest.fn(),
+    },
+    submission: {
+      findUnique: jest.fn(),
     },
   };
 
@@ -21,6 +25,70 @@ describe('StudentsService', () => {
 
     service = module.get<StudentsService>(StudentsService);
     jest.clearAllMocks();
+  });
+
+  describe('getSubmissionGrades', () => {
+    const studentId = 'student-uuid';
+    const submissionId = 'sub-1';
+
+    it('should return grades filtered by student and submission', async () => {
+      mockPrisma.submission.findUnique.mockResolvedValue({
+        id: submissionId,
+        studentId,
+        assignmentId: 'a-1',
+      });
+      mockPrisma.gradingScore.findMany.mockResolvedValue([
+        {
+          id: 's1',
+          submissionId,
+          criteriaId: 'c1',
+          pointsAwarded: 8,
+          aiFeedback: null,
+          teacherNotes: null,
+          isConfirmed: true,
+          createdAt: new Date(),
+          criteria: { id: 'c1', description: 'Thesis', maxPoints: 10 },
+        },
+      ]);
+
+      const result = await service.getSubmissionGrades(studentId, submissionId);
+
+      expect(mockPrisma.gradingScore.findMany).toHaveBeenCalledWith({
+        where: { submissionId, isConfirmed: true },
+        include: { criteria: true },
+      });
+      expect(result).toHaveLength(1);
+      expect(result[0]).toMatchObject({
+        assignmentId: 'a-1',
+        criterionDescription: 'Thesis',
+        criterionMaxPoints: 10,
+      });
+    });
+
+    it('should throw NotFoundException if submission does not belong to student', async () => {
+      mockPrisma.submission.findUnique.mockResolvedValue({
+        id: submissionId,
+        studentId: 'other-student',
+      });
+
+      try {
+        await service.getSubmissionGrades(studentId, submissionId);
+        expect('should have thrown').toBe('but did not');
+      } catch (err) {
+        expect(err).toBeInstanceOf(NotFoundException);
+      }
+    });
+
+    it('should throw NotFoundException if submission does not exist', async () => {
+      mockPrisma.submission.findUnique.mockResolvedValue(null);
+
+      try {
+        await service.getSubmissionGrades(studentId, submissionId);
+        expect('should have thrown').toBe('but did not');
+      } catch (err) {
+        expect(err).toBeInstanceOf(NotFoundException);
+      }
+    });
   });
 
   describe('getGrades', () => {
@@ -66,11 +134,16 @@ describe('StudentsService', () => {
       expect(result).toEqual([]);
     });
 
-    it('should include criteria and submission relations', async () => {
+    it('should flatten criteria and submission into the grade object', async () => {
       const grade = {
         id: 's1',
+        submissionId: 'sub-1',
+        criteriaId: 'c1',
         pointsAwarded: 8,
+        aiFeedback: null,
+        teacherNotes: null,
         isConfirmed: true,
+        createdAt: new Date(),
         criteria: { id: 'c1', description: 'Thesis', maxPoints: 10 },
         submission: { id: 'sub-1', assignmentId: 'a-1' },
       };
@@ -78,8 +151,14 @@ describe('StudentsService', () => {
 
       const result = await service.getGrades(studentId);
 
-      expect(result[0]).toHaveProperty('criteria');
-      expect(result[0]).toHaveProperty('submission');
+      expect(result[0]).toMatchObject({
+        assignmentId: 'a-1',
+        criterionDescription: 'Thesis',
+        criterionMaxPoints: 10,
+        criteriaId: 'c1',
+      });
+      expect(result[0]).not.toHaveProperty('submission');
+      expect(result[0]).not.toHaveProperty('criteria');
     });
   });
 });

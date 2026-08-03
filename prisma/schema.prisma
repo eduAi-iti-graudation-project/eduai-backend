@@ -127,12 +127,17 @@ model User {
   submissions   Submission[]
   quizAttempts  QuizAttempt[]
   alerts        Alert[]
+  analyses      StudentAnalysis[]
   notifications Notification[]
   reports       StudentReport[]
   deviceTokens  DeviceToken[]
   attendance    Attendance[]
+  homeworkHelpInteractions HomeworkHelpInteraction[]
   guardian      User?        @relation("GuardianWards", fields: [guardianId], references: [id])
   wards         User[]       @relation("GuardianWards")
+  threadsAsTeacher ChatThread[] @relation("ThreadTeacher")
+  threadsAsStudent ChatThread[] @relation("ThreadStudent")
+  chatMessages  ChatMessage[]
 
   @@map("users")
 }
@@ -153,6 +158,7 @@ model Class {
   assignments Assignment[]
   quizzes     Quiz[]
   attendance  Attendance[]
+  chatThreads ChatThread[]
 
   @@map("classes")
 }
@@ -324,10 +330,30 @@ model Alert {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  student   User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  student   User              @relation(fields: [studentId], references: [id], onDelete: Cascade)
   reports   StudentReport[]
+  analyses  StudentAnalysis[]
 
   @@map("alerts")
+}
+
+model StudentAnalysis {
+  id                 String   @id @default(uuid()) @db.Uuid
+  submissionId       String?  @db.Uuid
+  studentId          String   @db.Uuid
+  alertId            String?  @db.Uuid
+  classId            String?  @db.Uuid
+  diagnosis          Json
+  teacherContent     Json?
+  guardianContent    Json?
+  teacherFeedback    Json?
+  managementSummary  Json?
+  createdAt          DateTime @default(now())
+
+  student User  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  alert   Alert? @relation(fields: [alertId], references: [id])
+
+  @@map("student_analyses")
 }
 
 model Notification {
@@ -444,6 +470,54 @@ model DeviceToken {
 
   @@unique([userId, token])
   @@map("device_tokens")
+}
+
+model HomeworkHelpInteraction {
+  id         String   @id @default(uuid()) @db.Uuid
+  studentId  String   @db.Uuid
+  classId    String   @db.Uuid
+  question   String
+  answer     String
+  action     String
+  sources    Json     @default("[]")
+  feedback   String?
+  createdAt  DateTime @default(now())
+
+  student User @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@map("homework_help_interactions")
+}
+
+model ChatThread {
+  id        String   @id @default(uuid()) @db.Uuid
+  classId   String   @db.Uuid
+  teacherId String   @db.Uuid
+  studentId String   @db.Uuid
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  teacher  User          @relation("ThreadTeacher", fields: [teacherId], references: [id], onDelete: Cascade)
+  student  User          @relation("ThreadStudent", fields: [studentId], references: [id], onDelete: Cascade)
+  class    Class         @relation(fields: [classId], references: [id], onDelete: Cascade)
+  messages ChatMessage[]
+
+  @@unique([teacherId, studentId, classId])
+  @@map("chat_threads")
+}
+
+model ChatMessage {
+  id        String   @id @default(uuid()) @db.Uuid
+  threadId  String   @db.Uuid
+  authorId  String   @db.Uuid
+  text      String
+  readAt    DateTime?
+  createdAt DateTime @default(now())
+
+  thread ChatThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  author User       @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([threadId, createdAt])
+  @@map("chat_messages")
 }
 
 

@@ -18,6 +18,17 @@ export class StudentsController {
   }
 
   @Roles('STUDENT', 'GUARDIAN')
+  @Get(':id/grades/:submissionId')
+  @ApiOperation({ summary: 'Get confirmed grades for a specific submission' })
+  @ApiOkResponse({ type: GradeDto, isArray: true })
+  getSubmissionGrades(
+    @Param('id') id: string,
+    @Param('submissionId') submissionId: string,
+  ) {
+    return this.studentsService.getSubmissionGrades(id, submissionId);
+  }
+
+  @Roles('STUDENT', 'GUARDIAN')
   @Get(':id/classes')
   @ApiOperation({ summary: 'Get enrolled classes for a student' })
   getClasses(@Param('id') id: string) {

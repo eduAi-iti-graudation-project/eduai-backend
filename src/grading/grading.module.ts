@@ -1,10 +1,11 @@
 import { Module } from '@nestjs/common';
 import { GradingService } from './grading.service';
 import { GradingController } from './grading.controller';
-import { AnalysisModule } from '../analysis/analysis.module';
+import { FeedbackWriterModule } from '../feedback-writer/feedback-writer.module';
+import { CommunicationAgentModule } from '../communication-agent/communication-agent.module';
 
 @Module({
-  imports: [AnalysisModule],
+  imports: [FeedbackWriterModule, CommunicationAgentModule],
   providers: [GradingService],
   controllers: [GradingController],
   exports: [GradingService],
