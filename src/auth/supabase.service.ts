@@ -1,9 +1,17 @@
 import { Injectable, Optional, UnauthorizedException } from '@nestjs/common';
 import { createClient } from '@supabase/supabase-js';
-import type { SupabaseClient } from '@supabase/supabase-js';
+import type {
+  AuthResponse,
+  AuthTokenResponse,
+  OAuthResponse,
+  Provider,
+  SupabaseClient,
+} from '@supabase/supabase-js';
 import * as crypto from 'node:crypto';
 
 type Database = Record<string, never>;
+
+export type OAuthProvider = 'google' | 'microsoft';
 
 interface JwksKey {
   kty: string;
@@ -66,13 +74,36 @@ export class SupabaseService {
       process.env.SUPABASE_URL!,
       process.env.SUPABASE_SERVICE_KEY!,
       {
-        auth: { persistSession: false },
+        auth: {
+          persistSession: false,
+          flowType: 'pkce',
+        },
       },
     );
   }
 
   getClient(): SupabaseClient<Database> {
     return this.client;
+  }
+
+  async signInWithOAuth(
+    provider: OAuthProvider,
+    redirectTo: string,
+  ): Promise<OAuthResponse> {
+    const supabaseProvider: Provider =
+      provider === 'microsoft' ? 'azure' : provider;
+    return this.client.auth.signInWithOAuth({
+      provider: supabaseProvider,
+      options: { redirectTo },
+    });
+  }
+
+  async exchangeCodeForSession(authCode: string): Promise<AuthTokenResponse> {
+    return this.client.auth.exchangeCodeForSession(authCode);
+  }
+
+  async refreshSession(refreshToken: string): Promise<AuthResponse> {
+    return this.client.auth.refreshSession({ refresh_token: refreshToken });
   }
 
   async verifyToken(token: string): Promise<{ id: string }> {
