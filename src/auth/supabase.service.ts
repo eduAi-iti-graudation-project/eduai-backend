@@ -11,6 +11,8 @@ import * as crypto from 'node:crypto';
 
 type Database = Record<string, never>;
 
+export type OAuthProvider = 'google' | 'microsoft';
+
 interface JwksKey {
   kty: string;
   kid: string;
@@ -85,11 +87,13 @@ export class SupabaseService {
   }
 
   async signInWithOAuth(
-    provider: Provider,
+    provider: OAuthProvider,
     redirectTo: string,
   ): Promise<OAuthResponse> {
+    const supabaseProvider: Provider =
+      provider === 'microsoft' ? 'azure' : provider;
     return this.client.auth.signInWithOAuth({
-      provider,
+      provider: supabaseProvider,
       options: { redirectTo },
     });
   }
