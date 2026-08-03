@@ -52,6 +52,24 @@ enum EnrollmentStatus {
   REJECTED
 }
 
+enum QuizStatus {
+  DRAFT
+  PUBLISHED
+  CLOSED
+}
+
+enum QuestionType {
+  MCQ
+  TRUE_FALSE
+  SHORT_ANSWER
+  ESSAY
+}
+
+enum AttemptStatus {
+  IN_PROGRESS
+  COMPLETED
+}
+
 model Grade {
   id        String   @id @default(uuid()) @db.Uuid
   level     Int      @unique
@@ -104,8 +122,10 @@ model User {
   grade         Grade?         @relation(fields: [gradeId], references: [id])
   teacherGrades TeacherGrade[]
   taughtClasses Class[]        @relation("TeacherClasses")
+  teacherQuizzes Quiz[]        @relation("TeacherQuizzes")
   enrollments   Enrollment[]
   submissions   Submission[]
+  quizAttempts  QuizAttempt[]
   alerts        Alert[]
   analyses      StudentAnalysis[]
   notifications Notification[]
@@ -136,6 +156,7 @@ model Class {
   enrollments Enrollment[]
   materials   Material[]
   assignments Assignment[]
+  quizzes     Quiz[]
   attendance  Attendance[]
   chatThreads ChatThread[]
 
@@ -364,6 +385,78 @@ model StudentReport {
   alert              Alert        @relation(fields: [alertId], references: [id], onDelete: Cascade)
 
   @@map("student_reports")
+}
+
+model Quiz {
+  id           String     @id @default(uuid()) @db.Uuid
+  title        String
+  description  String?
+  classId      String     @db.Uuid
+  teacherId    String     @db.Uuid
+  timeLimit    Int?
+  passingScore Int?
+  status       QuizStatus @default(DRAFT)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  class     Class          @relation(fields: [classId], references: [id], onDelete: Cascade)
+  teacher   User           @relation("TeacherQuizzes", fields: [teacherId], references: [id], onDelete: Cascade)
+  questions QuizQuestion[]
+  attempts  QuizAttempt[]
+
+  @@map("quizzes")
+}
+
+model QuizQuestion {
+  id        String       @id @default(uuid()) @db.Uuid
+  quizId    String       @db.Uuid
+  type      QuestionType
+  question  String
+  options   Json?
+  points    Int
+  order     Int
+  createdAt DateTime     @default(now())
+
+  quiz    Quiz         @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  answers QuizAnswer[]
+
+  @@map("quiz_questions")
+}
+
+model QuizAttempt {
+  id          String        @id @default(uuid()) @db.Uuid
+  quizId      String        @db.Uuid
+  studentId   String        @db.Uuid
+  startedAt   DateTime      @default(now())
+  submittedAt DateTime?
+  totalScore  Int?
+  status      AttemptStatus @default(IN_PROGRESS)
+  violations  Json          @default("[]")
+
+  quiz    Quiz         @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  student User         @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  answers QuizAnswer[]
+
+  @@unique([quizId, studentId])
+  @@map("quiz_attempts")
+}
+
+model QuizAnswer {
+  id            String   @id @default(uuid()) @db.Uuid
+  attemptId     String   @db.Uuid
+  questionId    String   @db.Uuid
+  answer        String
+  pointsAwarded Int?
+  isConfirmed   Boolean  @default(false)
+  aiFeedback    String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  attempt  QuizAttempt  @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  question QuizQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([attemptId, questionId])
+  @@map("quiz_answers")
 }
 
 model DeviceToken {

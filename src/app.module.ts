@@ -27,6 +27,7 @@ import { GradesModule } from './grades/grades.module';
 import { EnrollmentsModule } from './enrollments/enrollments.module';
 import { TeachersModule } from './teachers/teachers.module';
 import { UsersModule } from './users/users.module';
+import { QuizzesModule } from './quizzes/quizzes.module';
 import { FeedbackWriterModule } from './feedback-writer/feedback-writer.module';
 import { HomeworkHelperModule } from './homework-helper/homework-helper.module';
 import { ChatModule } from './chat/chat.module';
@@ -56,6 +57,7 @@ import { ChatModule } from './chat/chat.module';
     EnrollmentsModule,
     TeachersModule,
     UsersModule,
+    QuizzesModule,
     FeedbackWriterModule,
     HomeworkHelperModule,
     ChatModule,
