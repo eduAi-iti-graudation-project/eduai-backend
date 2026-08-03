@@ -19,6 +19,9 @@ describe('HomeworkHelperService', () => {
       update: jest.fn(),
       create: jest.fn(),
     },
+    quizAttempt: {
+      findFirst: jest.fn(),
+    },
     class: { findUnique: jest.fn() },
     user: { findUnique: jest.fn() },
   };
@@ -39,6 +42,7 @@ describe('HomeworkHelperService', () => {
 
     service = module.get<HomeworkHelperService>(HomeworkHelperService);
     jest.clearAllMocks();
+    mockPrisma.quizAttempt.findFirst.mockResolvedValue(null);
   });
 
   it('should be defined', () => {
@@ -46,7 +50,26 @@ describe('HomeworkHelperService', () => {
   });
 
   describe('help', () => {
-    it('should delegate to agent and return response', async () => {
+    it('should block help while a quiz attempt is in progress in any class', async () => {
+      mockPrisma.quizAttempt.findFirst.mockResolvedValue({
+        id: 'attempt-1',
+      });
+
+      await expect(
+        service.help('student-1', {
+          classId: 'class-1',
+          question: 'Help me with question 3',
+        }),
+      ).rejects.toThrow(ForbiddenException);
+
+      expect(mockPrisma.quizAttempt.findFirst).toHaveBeenCalledWith({
+        where: { studentId: 'student-1', status: 'IN_PROGRESS' },
+        select: { id: true },
+      });
+      expect(mockAgent.help).not.toHaveBeenCalled();
+    });
+
+    it('should allow help when no quiz attempt is in progress', async () => {
       mockAgent.help.mockResolvedValue({
         answer: 'Try looking at the light-dependent reactions first.',
         action: 'HINT' as const,
