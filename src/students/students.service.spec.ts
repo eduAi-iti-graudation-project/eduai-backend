@@ -6,12 +6,14 @@ import { PrismaService } from '../prisma/prisma.service';
 describe('StudentsService', () => {
   let service: StudentsService;
 
+  const organizationId = 'org-1';
+
   const mockPrisma = {
     gradingScore: {
       findMany: jest.fn(),
     },
     submission: {
-      findUnique: jest.fn(),
+      findFirst: jest.fn(),
     },
   };
 
@@ -32,7 +34,7 @@ describe('StudentsService', () => {
     const submissionId = 'sub-1';
 
     it('should return grades filtered by student and submission', async () => {
-      mockPrisma.submission.findUnique.mockResolvedValue({
+      mockPrisma.submission.findFirst.mockResolvedValue({
         id: submissionId,
         studentId,
         assignmentId: 'a-1',
@@ -51,7 +53,11 @@ describe('StudentsService', () => {
         },
       ]);
 
-      const result = await service.getSubmissionGrades(studentId, submissionId);
+      const result = await service.getSubmissionGrades(
+        studentId,
+        submissionId,
+        organizationId,
+      );
 
       expect(mockPrisma.gradingScore.findMany).toHaveBeenCalledWith({
         where: { submissionId, isConfirmed: true },
@@ -66,24 +72,33 @@ describe('StudentsService', () => {
     });
 
     it('should throw NotFoundException if submission does not belong to student', async () => {
-      mockPrisma.submission.findUnique.mockResolvedValue({
-        id: submissionId,
-        studentId: 'other-student',
-      });
+      mockPrisma.submission.findFirst.mockResolvedValue(null);
 
       try {
-        await service.getSubmissionGrades(studentId, submissionId);
+        await service.getSubmissionGrades(
+          studentId,
+          submissionId,
+          organizationId,
+        );
         expect('should have thrown').toBe('but did not');
       } catch (err) {
         expect(err).toBeInstanceOf(NotFoundException);
       }
+
+      expect(mockPrisma.submission.findFirst).toHaveBeenCalledWith({
+        where: { id: submissionId, studentId, student: { organizationId } },
+      });
     });
 
     it('should throw NotFoundException if submission does not exist', async () => {
-      mockPrisma.submission.findUnique.mockResolvedValue(null);
+      mockPrisma.submission.findFirst.mockResolvedValue(null);
 
       try {
-        await service.getSubmissionGrades(studentId, submissionId);
+        await service.getSubmissionGrades(
+          studentId,
+          submissionId,
+          organizationId,
+        );
         expect('should have thrown').toBe('but did not');
       } catch (err) {
         expect(err).toBeInstanceOf(NotFoundException);
@@ -104,10 +119,13 @@ describe('StudentsService', () => {
       };
       mockPrisma.gradingScore.findMany.mockResolvedValue([confirmedScore]);
 
-      const result = await service.getGrades(studentId);
+      const result = await service.getGrades(studentId, organizationId);
 
       expect(mockPrisma.gradingScore.findMany).toHaveBeenCalledWith({
-        where: { submission: { studentId }, isConfirmed: true },
+        where: {
+          submission: { studentId, student: { organizationId } },
+          isConfirmed: true,
+        },
         include: { criteria: true, submission: true },
       });
       expect(result).toHaveLength(1);
@@ -117,11 +135,14 @@ describe('StudentsService', () => {
     it('should exclude unconfirmed grades', async () => {
       mockPrisma.gradingScore.findMany.mockResolvedValue([]);
 
-      const result = await service.getGrades(studentId);
+      const result = await service.getGrades(studentId, organizationId);
 
       expect(result).toHaveLength(0);
       expect(mockPrisma.gradingScore.findMany).toHaveBeenCalledWith({
-        where: { submission: { studentId }, isConfirmed: true },
+        where: {
+          submission: { studentId, student: { organizationId } },
+          isConfirmed: true,
+        },
         include: { criteria: true, submission: true },
       });
     });
@@ -129,7 +150,7 @@ describe('StudentsService', () => {
     it('should return empty array when student has no grades', async () => {
       mockPrisma.gradingScore.findMany.mockResolvedValue([]);
 
-      const result = await service.getGrades(studentId);
+      const result = await service.getGrades(studentId, organizationId);
 
       expect(result).toEqual([]);
     });
@@ -149,7 +170,7 @@ describe('StudentsService', () => {
       };
       mockPrisma.gradingScore.findMany.mockResolvedValue([grade]);
 
-      const result = await service.getGrades(studentId);
+      const result = await service.getGrades(studentId, organizationId);
 
       expect(result[0]).toMatchObject({
         assignmentId: 'a-1',

@@ -36,7 +36,12 @@ export class MaterialsService {
     classId: string,
     buffer: Buffer,
     filename: string,
+    organizationId: string,
   ) {
+    const cls = await this.prisma.class.findFirst({
+      where: { id: classId, organizationId },
+    });
+    if (!cls) throw new NotFoundException('Class not found');
     const isPdf = filename.toLowerCase().endsWith('.pdf');
     let rawText: string;
     if (isPdf) {
@@ -122,17 +127,17 @@ export class MaterialsService {
     };
   }
 
-  async findByClass(classId: string) {
+  async findByClass(classId: string, organizationId: string) {
     return this.prisma.material.findMany({
-      where: { classId },
+      where: { classId, class: { organizationId } },
       include: { _count: { select: { chunks: true } } },
       orderBy: { createdAt: 'desc' },
     });
   }
 
-  async findOne(id: string) {
-    const material = await this.prisma.material.findUnique({
-      where: { id },
+  async findOne(id: string, organizationId: string) {
+    const material = await this.prisma.material.findFirst({
+      where: { id, class: { organizationId } },
       include: { chunks: true },
     });
     if (!material) throw new NotFoundException('Material not found');
@@ -164,6 +169,10 @@ export class MaterialsService {
     return chunks;
   }
 
+  async delete(id: string, organizationId: string) {
+    const material = await this.prisma.material.findFirst({
+      where: { id, class: { organizationId } },
+    });
   async getMaterialFileUrl(id: string, user: User) {
     const material = await this.prisma.material.findUnique({
       where: { id },

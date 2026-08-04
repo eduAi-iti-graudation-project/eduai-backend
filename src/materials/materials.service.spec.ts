@@ -18,12 +18,16 @@ jest.mock('pdf-parse', () => ({
 describe('MaterialsService', () => {
   let service: MaterialsService;
 
+  const organizationId = 'org-1';
+
   const mockPrisma = {
+    class: {
+      findFirst: jest.fn(),
+    },
     material: {
       create: jest.fn(),
       findMany: jest.fn(),
-      findUnique: jest.fn(),
-      update: jest.fn(),
+      findFirst: jest.fn(),
       delete: jest.fn(),
     },
     $executeRawUnsafe: jest.fn(),
@@ -75,6 +79,7 @@ describe('MaterialsService', () => {
       const buffer = Buffer.from(text);
       const filename = 'test.txt';
 
+      mockPrisma.class.findFirst.mockResolvedValue({ id: classId });
       mockPrisma.material.create.mockResolvedValue({
         id: 'mat-1',
         title,
@@ -85,7 +90,13 @@ describe('MaterialsService', () => {
       mockLlm.embed.mockResolvedValue([0.1, 0.2, 0.3]);
       mockPrisma.$executeRawUnsafe.mockResolvedValue(undefined);
 
-      const result = await service.upload(title, classId, buffer, filename);
+      const result = await service.upload(
+        title,
+        classId,
+        buffer,
+        filename,
+        organizationId,
+      );
 
       expect(result.id).toBe('mat-1');
       expect(result.chunkCount).toBe(1);
@@ -109,8 +120,9 @@ describe('MaterialsService', () => {
       const buffer = Buffer.from('   \n\n  ');
       const filename = 'empty.txt';
 
+      mockPrisma.class.findFirst.mockResolvedValue({ id: classId });
       await expect(
-        service.upload(title, classId, buffer, filename),
+        service.upload(title, classId, buffer, filename, organizationId),
       ).rejects.toThrow(BadRequestException);
     });
 
@@ -217,11 +229,11 @@ describe('MaterialsService', () => {
         { id: 'mat-1', title: 'M1', classId: 'c1', _count: { chunks: 3 } },
       ]);
 
-      const result = await service.findByClass('c1');
+      const result = await service.findByClass('c1', organizationId);
 
       expect(result).toHaveLength(1);
       expect(mockPrisma.material.findMany).toHaveBeenCalledWith({
-        where: { classId: 'c1' },
+        where: { classId: 'c1', class: { organizationId } },
         include: { _count: { select: { chunks: true } } },
         orderBy: { createdAt: 'desc' },
       });
@@ -230,23 +242,23 @@ describe('MaterialsService', () => {
 
   describe('findOne', () => {
     it('should return material with chunks', async () => {
-      mockPrisma.material.findUnique.mockResolvedValue({
+      mockPrisma.material.findFirst.mockResolvedValue({
         id: 'mat-1',
         title: 'M1',
         chunks: [{ id: 'chunk-1', content: '...' }],
       });
 
-      const result = await service.findOne('mat-1');
+      const result = await service.findOne('mat-1', organizationId);
 
       expect(result.id).toBe('mat-1');
     });
 
     it('should throw when not found', async () => {
-      mockPrisma.material.findUnique.mockResolvedValue(null);
+      mockPrisma.material.findFirst.mockResolvedValue(null);
 
-      await expect(service.findOne('nonexistent')).rejects.toThrow(
-        'Material not found',
-      );
+      await expect(
+        service.findOne('nonexistent', organizationId),
+      ).rejects.toThrow('Material not found');
     });
   });
 
@@ -472,7 +484,7 @@ describe('MaterialsService', () => {
       mockStorageBucket.remove.mockResolvedValue({ error: null });
       mockPrisma.material.delete.mockResolvedValue({ id: 'mat-1' });
 
-      const result = await service.delete('mat-1');
+      const result = await service.delete('mat-1', organizationId);
 
       expect(result.deleted).toBe(true);
       expect(mockStorageBucket.remove).toHaveBeenCalledWith([
@@ -513,11 +525,11 @@ describe('MaterialsService', () => {
     });
 
     it('should throw when not found', async () => {
-      mockPrisma.material.findUnique.mockResolvedValue(null);
+      mockPrisma.material.findFirst.mockResolvedValue(null);
 
-      await expect(service.delete('nonexistent')).rejects.toThrow(
-        'Material not found',
-      );
+      await expect(
+        service.delete('nonexistent', organizationId),
+      ).rejects.toThrow('Material not found');
     });
   });
 });

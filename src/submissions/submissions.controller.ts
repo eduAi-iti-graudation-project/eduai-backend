@@ -37,8 +37,9 @@ export class SubmissionsController {
   create(
     @Body() dto: CreateSubmissionDto,
     @CurrentUser('id') studentId: string,
+    @CurrentUser('organizationId') organizationId: string,
   ) {
-    return this.submissionsService.create(dto, studentId);
+    return this.submissionsService.create(dto, studentId, organizationId);
   }
 
   @Roles('STUDENT')
@@ -65,6 +66,7 @@ export class SubmissionsController {
     @UploadedFile() file: Express.Multer.File,
     @Body('assignmentId') assignmentId: string,
     @CurrentUser('id') studentId: string,
+    @CurrentUser('organizationId') organizationId: string,
   ) {
     if (!file) {
       throw new BadRequestException(
@@ -78,6 +80,7 @@ export class SubmissionsController {
       file.buffer,
       assignmentId,
       studentId,
+      organizationId,
     );
   }
 
@@ -92,14 +95,22 @@ export class SubmissionsController {
   findAll(
     @Query('status') status?: string,
     @Query('assignmentId') assignmentId?: string,
+    @CurrentUser('organizationId') organizationId?: string,
   ) {
-    return this.submissionsService.findAll(status, assignmentId);
+    return this.submissionsService.findAll(
+      status,
+      assignmentId,
+      organizationId!,
+    );
   }
 
   @Roles('TEACHER', 'STUDENT')
   @Get(':id')
   @ApiOperation({ summary: 'Get submission with scores' })
-  findOne(@Param('id') id: string) {
-    return this.submissionsService.findOne(id);
+  findOne(
+    @Param('id') id: string,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.submissionsService.findOne(id, organizationId);
   }
 }

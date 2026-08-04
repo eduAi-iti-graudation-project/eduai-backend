@@ -17,7 +17,7 @@ export class DashboardService {
       case 'GUARDIAN':
         return this.guardianDashboard(user.id);
       case 'ADMIN':
-        return this.adminDashboard();
+        return this.adminDashboard(user.organizationId);
     }
   }
 
@@ -289,7 +289,7 @@ export class DashboardService {
     return { children, unreadNotifications };
   }
 
-  private async adminDashboard() {
+  private async adminDashboard(organizationId: string) {
     const [
       teacherCount,
       studentCount,
@@ -299,19 +299,28 @@ export class DashboardService {
       unreadNotifications,
       teachers,
     ] = await Promise.all([
-      this.prisma.user.count({ where: { role: 'TEACHER' } }),
-      this.prisma.user.count({ where: { role: 'STUDENT' } }),
-      this.prisma.class.count(),
+      this.prisma.user.count({
+        where: { role: 'TEACHER', organizationId },
+      }),
+      this.prisma.user.count({
+        where: { role: 'STUDENT', organizationId },
+      }),
+      this.prisma.class.count({ where: { organizationId } }),
       this.prisma.user.count({
         where: {
           role: 'STUDENT',
+          organizationId,
           alerts: { some: { status: 'ACTIVE' } },
         },
       }),
-      this.prisma.studentReport.count({ where: { status: 'NEW' } }),
-      this.prisma.notification.count({ where: { readAt: null } }),
+      this.prisma.studentReport.count({
+        where: { student: { organizationId }, status: 'NEW' },
+      }),
+      this.prisma.notification.count({
+        where: { user: { organizationId }, readAt: null },
+      }),
       this.prisma.user.findMany({
-        where: { role: 'TEACHER' },
+        where: { role: 'TEACHER', organizationId },
         include: {
           taughtClasses: {
             include: {
@@ -351,7 +360,7 @@ export class DashboardService {
       };
     });
 
-    const passRate = await this.computePassRate();
+    const passRate = await this.computePassRate(organizationId);
 
     return {
       teacherCount,
@@ -365,9 +374,12 @@ export class DashboardService {
     };
   }
 
-  private async computePassRate(): Promise<number> {
+  private async computePassRate(organizationId: string): Promise<number> {
     const scores = await this.prisma.gradingScore.findMany({
-      where: { isConfirmed: true },
+      where: {
+        isConfirmed: true,
+        submission: { assignment: { class: { organizationId } } },
+      },
       include: { criteria: true },
     });
 

@@ -7,9 +7,11 @@ import {
 } from '@nestjs/swagger';
 import { ReportsService } from './reports.service';
 import { ReportDto } from './dto';
+import { RequiresTier } from '../auth/requires-tier.decorator';
 
 @ApiTags('reports')
 @Controller('reports')
+@RequiresTier('PRO', 'ENTERPRISE')
 export class ReportsController {
   constructor(private readonly reportsService: ReportsService) {}
 

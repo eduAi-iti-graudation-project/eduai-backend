@@ -11,11 +11,18 @@ export class RubricsService {
     private readonly llm: LlmService,
   ) {}
 
-  create(dto: {
-    title: string;
-    assignmentId: string;
-    criteria: { description: string; maxPoints: number }[];
-  }) {
+  async create(
+    dto: {
+      title: string;
+      assignmentId: string;
+      criteria: { description: string; maxPoints: number }[];
+    },
+    organizationId: string,
+  ) {
+    const assignment = await this.prisma.assignment.findFirst({
+      where: { id: dto.assignmentId, class: { organizationId } },
+    });
+    if (!assignment) throw new NotFoundException('Assignment not found');
     return this.prisma.rubric.create({
       data: {
         title: dto.title,
@@ -26,27 +33,32 @@ export class RubricsService {
     });
   }
 
-  findAll(assignmentId?: string) {
-    return assignmentId
-      ? this.prisma.rubric.findMany({
-          where: { assignmentId },
-          include: { criteria: true },
-        })
-      : this.prisma.rubric.findMany({ include: { criteria: true } });
+  findAll(assignmentId: string | undefined, organizationId: string) {
+    return this.prisma.rubric.findMany({
+      where: {
+        ...(assignmentId ? { assignmentId } : {}),
+        assignment: { class: { organizationId } },
+      },
+      include: { criteria: true },
+    });
   }
 
-  async findOne(id: string) {
-    const rubric = await this.prisma.rubric.findUnique({
-      where: { id },
+  async findOne(id: string, organizationId: string) {
+    const rubric = await this.prisma.rubric.findFirst({
+      where: { id, assignment: { class: { organizationId } } },
       include: { criteria: true, assignment: true },
     });
     if (!rubric) throw new NotFoundException('Rubric not found');
     return rubric;
   }
 
-  async findConfirmedRubric(assignmentId: string) {
+  async findConfirmedRubric(assignmentId: string, organizationId: string) {
     const rubric = await this.prisma.rubric.findFirst({
-      where: { assignmentId, isConfirmed: true },
+      where: {
+        assignmentId,
+        isConfirmed: true,
+        assignment: { class: { organizationId } },
+      },
       include: { criteria: true },
     });
     if (!rubric)
@@ -59,6 +71,7 @@ export class RubricsService {
   async findSimilarCriteria(
     embedding: number[],
     assignmentId: string,
+    organizationId: string,
     limit = 50,
   ) {
     const vectorStr = `[${embedding.join(',')}]`;
@@ -68,21 +81,26 @@ export class RubricsService {
       SELECT rc.id, rc.description, rc."maxPoints", rc.embedding <-> ${vectorStr}::vector AS distance
       FROM rubric_criteria rc
       JOIN rubrics r ON r.id = rc."rubricId"
+      JOIN assignments a ON a.id = r."assignmentId"
+      JOIN classes c ON c.id = a."classId"
       WHERE r."assignmentId" = ${assignmentId}::uuid
+        AND c."organizationId" = ${organizationId}::uuid
         AND r."isConfirmed" = true
         AND rc.embedding IS NOT NULL
       ORDER BY distance ASC
       LIMIT ${limit}
     `;
     if (criteria.length === 0) {
-      return this.findConfirmedRubric(assignmentId).then((r) => r.criteria);
+      return this.findConfirmedRubric(assignmentId, organizationId).then(
+        (r) => r.criteria,
+      );
     }
     return criteria;
   }
 
-  async confirm(id: string) {
-    const rubric = await this.prisma.rubric.findUnique({
-      where: { id },
+  async confirm(id: string, organizationId: string) {
+    const rubric = await this.prisma.rubric.findFirst({
+      where: { id, assignment: { class: { organizationId } } },
       include: { criteria: true },
     });
     if (!rubric) throw new NotFoundException('Rubric not found');
@@ -187,7 +205,11 @@ Return valid JSON matching this schema:
     }
   }
 
-  async fromPdf(buffer: Buffer, assignmentId: string) {
+  async fromPdf(buffer: Buffer, assignmentId: string, organizationId: string) {
+    const assignment = await this.prisma.assignment.findFirst({
+      where: { id: assignmentId, class: { organizationId } },
+    });
+    if (!assignment) throw new NotFoundException('Assignment not found');
     const extracted = await this.importPdf(buffer);
     return this.prisma.rubric.create({
       data: {

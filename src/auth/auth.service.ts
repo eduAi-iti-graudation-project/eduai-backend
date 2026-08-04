@@ -9,7 +9,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { SupabaseService, OAuthProvider } from './supabase.service';
 
 const DEFAULT_OAUTH_PROVIDERS: OAuthProvider[] = ['google', 'microsoft'];
-const DEFAULT_OAUTH_ROLE = 'STUDENT';
+const DEFAULT_OAUTH_ROLE = 'ADMIN';
 
 @Injectable()
 export class AuthService {
@@ -22,19 +22,8 @@ export class AuthService {
     email: string;
     password: string;
     name: string;
-    role: 'TEACHER' | 'STUDENT' | 'GUARDIAN' | 'ADMIN';
-    gradeLevel?: number;
+    organizationName?: string;
   }) {
-    let gradeId: string | undefined;
-    if (dto.gradeLevel) {
-      const grade = await this.prisma.grade.findUnique({
-        where: { level: dto.gradeLevel },
-      });
-      if (!grade)
-        throw new BadRequestException(`Grade ${dto.gradeLevel} not found`);
-      gradeId = grade.id;
-    }
-
     const { data, error } = await this.supabaseService
       .getClient()
       .auth.admin.createUser({
@@ -47,14 +36,22 @@ export class AuthService {
       throw new UnauthorizedException(error?.message || 'Signup failed');
     }
 
-    const user = await this.prisma.user.create({
-      data: {
-        authId: data.user.id,
-        email: dto.email,
-        name: dto.name,
-        role: dto.role,
-        gradeId,
-      },
+    const user = await this.prisma.$transaction(async (tx) => {
+      const organization = await tx.organization.create({
+        data: {
+          name: dto.organizationName ?? `${dto.name}'s School`,
+        },
+      });
+
+      return tx.user.create({
+        data: {
+          authId: data.user.id,
+          email: dto.email,
+          name: dto.name,
+          role: 'ADMIN',
+          organizationId: organization.id,
+        },
+      });
     });
 
     const {
@@ -81,17 +78,28 @@ export class AuthService {
       throw new UnauthorizedException(error?.message || 'Login failed');
     }
 
-    const user = await this.prisma.user.findUnique({
-      where: { authId: session.user.id },
-    });
+    const user =
+      (await this.prisma.user.findUnique({
+        where: { authId: session.user.id },
+      })) ??
+      (await this.prisma.user.findUnique({
+        where: { email: session.user.email ?? '' },
+      }));
 
     if (!user) {
       throw new UnauthorizedException('User not found');
     }
 
+    if (user.authId !== session.user.id) {
+      await this.prisma.user.update({
+        where: { id: user.id },
+        data: { authId: session.user.id },
+      });
+    }
+
     return {
       accessToken: session.access_token,
-      user,
+      user: { ...user, authId: session.user.id },
     };
   }
 
@@ -235,8 +243,21 @@ export class AuthService {
     }
 
     try {
-      await this.prisma.user.create({
-        data: { authId, email, name, role: DEFAULT_OAUTH_ROLE },
+      await this.prisma.$transaction(async (tx) => {
+        const organization = await tx.organization.create({
+          data: {
+            name: `${name}'s School`,
+          },
+        });
+        await tx.user.create({
+          data: {
+            authId,
+            email,
+            name,
+            role: DEFAULT_OAUTH_ROLE,
+            organizationId: organization.id,
+          },
+        });
       });
     } catch (err) {
       if (

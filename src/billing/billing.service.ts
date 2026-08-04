@@ -1,0 +1,143 @@
+import { BadRequestException, Inject, Injectable } from '@nestjs/common';
+import { NotFoundException } from '@nestjs/common';
+import type { Stripe } from 'stripe';
+import { PrismaService } from '../prisma/prisma.service';
+import { STRIPE_CLIENT } from './stripe-client';
+import { PlanId } from './dto';
+
+@Injectable()
+export class BillingService {
+  private readonly planPrices: Record<PlanId, string | undefined> = {
+    basic: process.env.STRIPE_PRICE_BASIC,
+    pro: process.env.STRIPE_PRICE_PRO,
+    enterprise: process.env.STRIPE_PRICE_ENTERPRISE,
+  };
+
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject(STRIPE_CLIENT) private readonly stripe: Stripe,
+  ) {}
+
+  async createCheckoutSession(input: {
+    organizationId: string;
+    planId: PlanId;
+    successUrl: string;
+    cancelUrl: string;
+  }) {
+    const priceId = this.planPrices[input.planId];
+    if (!priceId) {
+      throw new BadRequestException(
+        `Plan '${input.planId}' is not available for checkout`,
+      );
+    }
+
+    const organization = await this.prisma.organization.findUnique({
+      where: { id: input.organizationId },
+    });
+    if (!organization) {
+      throw new NotFoundException('Organization not found');
+    }
+
+    let customerId = organization.stripeCustomerId;
+    if (!customerId) {
+      const customer = await this.stripe.customers.create({
+        name: organization.name,
+        metadata: { organizationId: organization.id },
+      });
+      customerId = customer.id;
+      await this.prisma.organization.update({
+        where: { id: organization.id },
+        data: { stripeCustomerId: customerId },
+      });
+    }
+
+    const session = await this.stripe.checkout.sessions.create({
+      mode: 'subscription',
+      customer: customerId,
+      line_items: [{ price: priceId, quantity: 1 }],
+      success_url: input.successUrl,
+      cancel_url: input.cancelUrl,
+      metadata: { organizationId: organization.id, planId: input.planId },
+    });
+
+    return { url: session.url ?? '' };
+  }
+
+  async changePlan(input: {
+    organizationId: string;
+    planId: PlanId;
+    atPeriodEnd: boolean;
+  }) {
+    const priceId = this.planPrices[input.planId];
+    if (!priceId) {
+      throw new BadRequestException(
+        `Plan '${input.planId}' is not available for checkout`,
+      );
+    }
+
+    const organization = await this.prisma.organization.findUnique({
+      where: { id: input.organizationId },
+    });
+    if (!organization) {
+      throw new NotFoundException('Organization not found');
+    }
+    if (!organization.stripeSubscriptionId) {
+      throw new BadRequestException(
+        'Organization has no active subscription to change',
+      );
+    }
+
+    const subscription = await this.stripe.subscriptions.retrieve(
+      organization.stripeSubscriptionId,
+    );
+    const item = subscription.items?.data?.[0];
+    if (!item) {
+      throw new BadRequestException(
+        'Subscription has no billable items to change',
+      );
+    }
+
+    const updated = await this.stripe.subscriptions.update(subscription.id, {
+      items: [{ id: item.id, price: priceId }],
+      proration_behavior: input.atPeriodEnd ? 'none' : 'create_prorations',
+    });
+
+    return {
+      planId: input.planId,
+      status: updated.status,
+      cancelAtPeriodEnd: updated.cancel_at_period_end,
+    };
+  }
+
+  async createBillingPortalSession(input: {
+    organizationId: string;
+    returnUrl: string;
+  }) {
+    const organization = await this.prisma.organization.findUnique({
+      where: { id: input.organizationId },
+    });
+    if (!organization) {
+      throw new NotFoundException('Organization not found');
+    }
+
+    let customerId = organization.stripeCustomerId;
+    if (!customerId) {
+      const customer = await this.stripe.customers.create({
+        name: organization.name,
+        metadata: { organizationId: organization.id },
+      });
+      customerId = customer.id;
+      await this.prisma.organization.update({
+        where: { id: organization.id },
+        data: { stripeCustomerId: customerId },
+      });
+    }
+
+    const session = await this.stripe.billingPortal.sessions.create({
+      customer: customerId,
+      return_url: input.returnUrl,
+    });
+
+    return { url: session.url ?? '' };
+  }
+}

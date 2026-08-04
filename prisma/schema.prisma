@@ -15,6 +15,20 @@ enum UserRole {
   ADMIN
 }
 
+enum SubscriptionTier {
+  TRIAL
+  BASIC
+  PRO
+  ENTERPRISE
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+}
+
 enum NotificationChannel {
   EMAIL
   PUSH
@@ -70,6 +84,38 @@ enum AttemptStatus {
   COMPLETED
 }
 
+model Organization {
+  id                   String             @id @default(uuid()) @db.Uuid
+  name                 String
+  stripeCustomerId     String?            @unique
+  stripeSubscriptionId String?            @unique
+  subscriptionTier     SubscriptionTier   @default(TRIAL)
+  subscriptionStatus   SubscriptionStatus @default(TRIALING)
+  seatLimit            Int?
+  createdAt            DateTime           @default(now())
+  trialReminderSentAt  DateTime?
+  trialExpiredSentAt   DateTime?
+
+  users              User[]
+  classes            Class[]
+  subscriptionEvents SubscriptionEvent[]
+
+  @@map("organizations")
+}
+
+model SubscriptionEvent {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  stripeEventId  String   @unique
+  type           String
+  raw            Json
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("subscription_events")
+}
+
 model Grade {
   id        String   @id @default(uuid()) @db.Uuid
   level     Int      @unique
@@ -116,10 +162,12 @@ model User {
   role      UserRole
   gradeId    String?  @db.Uuid
   guardianId String?  @db.Uuid
+  organizationId String @db.Uuid
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   grade         Grade?         @relation(fields: [gradeId], references: [id])
+  organization  Organization   @relation(fields: [organizationId], references: [id])
   teacherGrades TeacherGrade[]
   taughtClasses Class[]        @relation("TeacherClasses")
   teacherQuizzes Quiz[]        @relation("TeacherQuizzes")
@@ -139,6 +187,7 @@ model User {
   threadsAsStudent ChatThread[] @relation("ThreadStudent")
   chatMessages  ChatMessage[]
 
+  @@index([organizationId])
   @@map("users")
 }
 
@@ -147,11 +196,13 @@ model Class {
   name        String
   description String?
   teacherId   String   @db.Uuid
+  organizationId String @db.Uuid
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   // Relations
   teacher     User         @relation("TeacherClasses", fields: [teacherId], references: [id])
+  organization Organization @relation(fields: [organizationId], references: [id])
   gradeLinks  GradeClass[]
   enrollments Enrollment[]
   materials   Material[]
@@ -160,6 +211,7 @@ model Class {
   attendance  Attendance[]
   chatThreads ChatThread[]
 
+  @@index([organizationId])
   @@map("classes")
 }
 

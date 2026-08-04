@@ -15,6 +15,7 @@ import { DashboardService } from './dashboard.service';
 import { InsightsService } from './insights.service';
 import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
+import { RequiresTier } from '../auth/requires-tier.decorator';
 import type { User } from '@prisma/client';
 import { InsightsQuerySchema, InsightsResponseDto } from './dto';
 
@@ -38,6 +39,7 @@ export class DashboardController {
 
   @Get('insights')
   @Roles('TEACHER', 'STUDENT', 'GUARDIAN', 'ADMIN')
+  @RequiresTier('ENTERPRISE')
   @ApiOperation({ summary: 'Role-aware dashboard insights' })
   @ApiQuery({
     name: 'interval',
@@ -59,6 +61,7 @@ export class DashboardController {
 
   @Get('insights/students/:id')
   @Roles('TEACHER', 'STUDENT', 'GUARDIAN', 'ADMIN')
+  @RequiresTier('ENTERPRISE')
   @ApiOperation({ summary: 'Per-student insights drill-down' })
   @ApiQuery({
     name: 'interval',

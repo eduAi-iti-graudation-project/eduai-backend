@@ -7,6 +7,7 @@ import { MaterialsController } from './materials.controller';
 import { MaterialsService } from './materials.service';
 
 const CLASS_ID = '00000000-0000-0000-0000-000000000001';
+const ORGANIZATION_ID = 'org-1';
 
 describe('MaterialsController (upload)', () => {
   let app: INestApplication<App>;
@@ -14,7 +15,7 @@ describe('MaterialsController (upload)', () => {
   const mockMaterialsService = {
     upload: jest.fn<
       Promise<{ id: string; chunkCount: number }>,
-      [string, string, Buffer, string]
+      [string, string, Buffer, string, string]
     >(),
     findByClass: jest.fn(),
     findOne: jest.fn(),
@@ -32,6 +33,16 @@ describe('MaterialsController (upload)', () => {
     }).compile();
 
     app = moduleFixture.createNestApplication();
+    app.use(
+      (
+        req: { user?: { organizationId: string } },
+        _res: unknown,
+        next: () => void,
+      ) => {
+        req.user = { organizationId: ORGANIZATION_ID };
+        next();
+      },
+    );
     await app.init();
     mockMaterialsService.upload
       .mockReset()
@@ -62,6 +73,7 @@ describe('MaterialsController (upload)', () => {
       CLASS_ID,
       expect.any(Buffer),
       'sample.pdf',
+      ORGANIZATION_ID,
     );
     const bufferArg = mockMaterialsService.upload.mock.calls[0][2];
     expect(Buffer.isBuffer(bufferArg)).toBe(true);
@@ -81,6 +93,7 @@ describe('MaterialsController (upload)', () => {
       CLASS_ID,
       expect.any(Buffer),
       'notes.txt',
+      ORGANIZATION_ID,
     );
   });
 });

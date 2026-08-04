@@ -25,7 +25,7 @@ describe('RolesGuard', () => {
       }),
       getHandler: () => handler,
       getClass: () => ({}),
-    } as ExecutionContext;
+    } as unknown as ExecutionContext;
   }
 
   it('should allow access when no roles are required', () => {

@@ -32,8 +32,10 @@ import {
 } from './dto';
 import { Public } from './public.decorator';
 import { CurrentUser } from './current-user.decorator';
+import { SkipSubscriptionCheck } from './skip-subscription.decorator';
 
 @ApiTags('auth')
+@SkipSubscriptionCheck()
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}

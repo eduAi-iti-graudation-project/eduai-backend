@@ -6,9 +6,11 @@ import { NotFoundException } from '@nestjs/common';
 describe('AlertsService', () => {
   let service: AlertsService;
 
+  const organizationId = 'org-1';
+
   const mockPrisma = {
     alert: {
-      findUnique: jest.fn(),
+      findFirst: jest.fn(),
       findMany: jest.fn(),
       update: jest.fn(),
     },
@@ -62,7 +64,7 @@ describe('AlertsService', () => {
         },
       ]);
 
-      const result = await service.findAll();
+      const result = await service.findAll(undefined, organizationId);
 
       expect(result).toEqual([
         {
@@ -95,11 +97,11 @@ describe('AlertsService', () => {
     it('should filter by status', async () => {
       mockPrisma.alert.findMany.mockResolvedValue([]);
 
-      await service.findAll('ACTIVE');
+      await service.findAll('ACTIVE', organizationId);
 
       expect(mockPrisma.alert.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { status: 'ACTIVE' },
+          where: { status: 'ACTIVE', student: { organizationId } },
         }),
       );
     });
@@ -110,13 +112,17 @@ describe('AlertsService', () => {
       const existingAlert = { id: 'alert-id', status: 'ACTIVE' };
       const updatedAlert = { id: 'alert-id', status: 'RESOLVED' };
 
-      mockPrisma.alert.findUnique.mockResolvedValue(existingAlert);
+      mockPrisma.alert.findFirst.mockResolvedValue(existingAlert);
       mockPrisma.alert.update.mockResolvedValue(updatedAlert);
 
-      const result = await service.resolve('alert-id', 'RESOLVED');
+      const result = await service.resolve(
+        'alert-id',
+        'RESOLVED',
+        organizationId,
+      );
 
-      expect(mockPrisma.alert.findUnique).toHaveBeenCalledWith({
-        where: { id: 'alert-id' },
+      expect(mockPrisma.alert.findFirst).toHaveBeenCalledWith({
+        where: { id: 'alert-id', student: { organizationId } },
       });
       expect(mockPrisma.alert.update).toHaveBeenCalledWith({
         where: { id: 'alert-id' },
@@ -129,10 +135,14 @@ describe('AlertsService', () => {
       const existingAlert = { id: 'alert-id', status: 'ACTIVE' };
       const updatedAlert = { id: 'alert-id', status: 'DISMISSED' };
 
-      mockPrisma.alert.findUnique.mockResolvedValue(existingAlert);
+      mockPrisma.alert.findFirst.mockResolvedValue(existingAlert);
       mockPrisma.alert.update.mockResolvedValue(updatedAlert);
 
-      const result = await service.resolve('alert-id', 'DISMISSED');
+      const result = await service.resolve(
+        'alert-id',
+        'DISMISSED',
+        organizationId,
+      );
 
       expect(mockPrisma.alert.update).toHaveBeenCalledWith({
         where: { id: 'alert-id' },
@@ -142,11 +152,22 @@ describe('AlertsService', () => {
     });
 
     it('should throw NotFoundException for non-existent alert', async () => {
-      mockPrisma.alert.findUnique.mockResolvedValue(null);
+      mockPrisma.alert.findFirst.mockResolvedValue(null);
 
-      await expect(service.resolve('bad-id', 'RESOLVED')).rejects.toThrow(
-        NotFoundException,
-      );
+      await expect(
+        service.resolve('bad-id', 'RESOLVED', organizationId),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('should throw NotFoundException when the alert belongs to another organization', async () => {
+      mockPrisma.alert.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.resolve('org-b-alert', 'RESOLVED', organizationId),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockPrisma.alert.findFirst).toHaveBeenCalledWith({
+        where: { id: 'org-b-alert', student: { organizationId } },
+      });
     });
   });
 });

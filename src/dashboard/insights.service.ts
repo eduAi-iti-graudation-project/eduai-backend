@@ -77,7 +77,10 @@ export class InsightsService {
         return { interval, sections, agentInsights, unreadNotifications };
       }
       case 'ADMIN': {
-        const { sections, agentInsights } = await this.adminInsights(interval);
+        const { sections, agentInsights } = await this.adminInsights(
+          interval,
+          user.organizationId,
+        );
         return { interval, sections, agentInsights, unreadNotifications };
       }
     }
@@ -129,6 +132,11 @@ export class InsightsService {
         break;
       }
       case 'ADMIN':
+        if (target.organizationId !== user.organizationId) {
+          throw new ForbiddenException(
+            'You can only view insights for students in your organization',
+          );
+        }
         break;
     }
 
@@ -511,7 +519,10 @@ export class InsightsService {
 
   // ── ADMIN ────────────────────────────────────────────────────────────────
 
-  private async adminInsights(interval: InsightsInterval) {
+  private async adminInsights(
+    interval: InsightsInterval,
+    organizationId: string,
+  ) {
     const since = bucketStarts(interval, TREND_BUCKETS)[0];
 
     const [
@@ -525,31 +536,48 @@ export class InsightsService {
       reports,
     ] = await Promise.all([
       this.prisma.submission.findMany({
-        where: { createdAt: { gte: since } },
+        where: {
+          createdAt: { gte: since },
+          assignment: { class: { organizationId } },
+        },
         select: { createdAt: true },
       }),
       this.prisma.gradingScore.findMany({
-        where: { isConfirmed: true, createdAt: { gte: since } },
+        where: {
+          isConfirmed: true,
+          createdAt: { gte: since },
+          submission: { assignment: { class: { organizationId } } },
+        },
         select: { createdAt: true },
       }),
       this.prisma.gradingScore.findMany({
-        where: { isConfirmed: true },
+        where: {
+          isConfirmed: true,
+          submission: { assignment: { class: { organizationId } } },
+        },
         include: { criteria: { select: { maxPoints: true } } },
       }),
       this.prisma.alert.findMany({
-        where: { createdAt: { gte: since } },
+        where: {
+          createdAt: { gte: since },
+          student: { organizationId },
+        },
         select: { createdAt: true },
       }),
-      this.prisma.alert.findMany({ select: { status: true } }),
+      this.prisma.alert.findMany({
+        where: { student: { organizationId } },
+        select: { status: true },
+      }),
       this.prisma.user.findMany({
         where: {
           role: { in: ['STUDENT', 'TEACHER'] },
+          organizationId,
           createdAt: { gte: since },
         },
         select: { createdAt: true },
       }),
       this.prisma.user.findMany({
-        where: { role: 'TEACHER' },
+        where: { role: 'TEACHER', organizationId },
         select: {
           id: true,
           name: true,
@@ -579,6 +607,7 @@ export class InsightsService {
         },
       }),
       this.prisma.studentReport.findMany({
+        where: { student: { organizationId } },
         select: {
           managementSection: true,
           student: { select: { name: true } },

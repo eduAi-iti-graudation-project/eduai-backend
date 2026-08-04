@@ -666,3 +666,103 @@ a stable error shape the frontend interceptor can surface.
   logged and fixed.
 - [ ] Reject mode produces the standard 400 shape; `lint` + `test` +
   `build` clean in both modes.
+
+## Task 6 — Multi-tenant billing (Stripe Checkout + webhooks + gating) — DONE
+
+Backend work on `feature/multi-tenant-billing` (target: `dev`). All items below are implemented, tested (358 tests total suite), and smoke-tested against the live server. Lint 0 errors / build clean / `tsc --noEmit` 0 errors.
+
+### What shipped
+
+- [x] Org model + tenant audit: `Organization`, `SubscriptionEvent` models; `organizationId` FK + `where { organizationId }` scoping in audit-scoped services; new-org + ADMIN on self-signup and OAuth.
+- [x] Phase 1 audited endpoints (server-side org-scoped, cross-org => 404):
+      rubrics, submissions, alerts, materials, users, classes, students, dashboard.
+- [x] Stripe Checkout: `POST /billing/checkout` (ADMIN) — creates/persists Stripe customer, metadata `{organizationId, planId}`, plan prices from env (`STRIPE_PRICE_BASIC/PRO/ENTERPRISE`).
+- [x] Webhooks: `POST /webhooks/stripe` (`@Public`, raw body + signature verify) — `checkout.session.completed` -> ACTIVE + tier + seatLimit, `invoice.payment_failed` -> PAST_DUE, `customer.subscription.deleted` -> CANCELED; idempotent via `SubscriptionEvent.stripeEventId`.
+- [x] Gating: global `SubscriptionGuard` (3rd in chain: AuthGuard -> RolesGuard -> SubscriptionGuard); ACTIVE always; TRIALING within 14 days of org creation; otherwise 402. `@SkipSubscriptionCheck()` on auth + billing controllers.
+- [x] Org API: `GET /organizations/me`, `POST /organizations/:id/invite` (ADMIN, seat check, Supabase `inviteUserByEmail` + local user row); `assertSeatAvailable` (402 when full).
+- [x] Login links invited users: `AuthService.login` falls back to email lookup when `authId` misses, re-links `authId`.
+- [x] Required tenant-isolation tests: Class query returns only caller-org classes; org A user cannot fetch org B Class / Submission / Alert (service-level specs).
+- [x] `.env.example` documents `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_BASIC/PRO/ENTERPRISE`.
+
+### Deferred (documented follow-ups, not part of this task)
+
+- [ ] Org-scope Phase 1 leftovers (approved list): attendance, grades, teachers, enrollments, quizzes, homework-helper, assistant (chat).
+- [ ] Seat enforcement on signup/OAuth when org exists (self-serve seats = ADMIN only, agreed with product owner).
+- [ ] `GET /organizations/:id/invites` pending-invites list + revoke/resend.
+
+### External setup (one-time, human — not code)
+
+- [ ] Create Stripe test-mode prices (basic/pro/enterprise), set the 3 `STRIPE_PRICE_*` env vars; `STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET` (via `stripe listen` or dashboard endpoint).
+- [ ] Confirm Supabase SMTP invites work for the invite flow (dev mode rate-limits invite emails — observed during smoke test).
+
+### Tests (done)
+
+- [x] `npx tsc --noEmit` — 0 errors.
+- [x] `npm run test` — 358/358 (44 suites) including new billing (5), webhooks (9), subscription guard (8), organizations, auth login (4), classes tenant-isolation (3), submissions/alerts cross-org tests.
+- [x] `npm run lint` — 0 errors (2 pre-existing warnings in `src/analysis/analysis.service.ts`).
+- [x] `npm run build` — clean.
+- [x] Live smoke test: `/organizations/me` returns org summary; `/billing/checkout` -> 400 when plan price unconfigured; `/webhooks/stripe` -> 500 when secret unconfigured; invite error surfaces Supabase rate-limit message cleanly; cross-org 404s verified earlier in session.
+
+## Task 7 — Billing lifecycle completion (portal, plan change, dunning, trial reminders) — DONE
+
+Follow-up to Task 6, same branch (`feature/multi-tenant-billing`). Fixes the PAST_DUE->ACTIVE recovery gap and adds the self-serve billing surface.
+
+### What shipped
+
+- [x] Schema (2 migrations): `Organization.stripeSubscriptionId` (unique), `trialReminderSentAt`, `trialExpiredSentAt` (idempotency for the reminder sweep).
+- [x] `POST /billing/change-plan` (ADMIN, `@SkipSubscriptionCheck`) — switches the plan immediately with proration: resolves price from env, retrieves the Stripe subscription, `subscriptions.update` with `proration_behavior: 'create_prorations'`; 400 when the org has no subscription or the plan price is unconfigured.
+- [x] `POST /billing/portal` (ADMIN, `@SkipSubscriptionCheck`) — Stripe billing portal session (auto-creates the customer if the org has none) so admins can self-serve card updates / cancellation.
+- [x] Webhooks: `checkout.session.completed` now persists `stripeSubscriptionId`; new `customer.subscription.updated` syncs tier + seatLimit by reverse-mapping the subscription's price id (covers plan changes, prorations, renewals); new `invoice.paid` recovers `PAST_DUE` -> `ACTIVE` + notifies admins; `invoice.payment_failed` keeps `PAST_DUE` and dunning-notifies all org ADMINS (amount + due date) via NotificationsService (in-app + email when SMTP configured).
+- [x] `TrialReminderService` — hourly sweep (setInterval, no new dep) notifying admins of TRIALING orgs at T-3 days and on expiry; idempotent via the two sentAt columns; disabled via `TRIAL_REMINDER_ENABLED=false`; registered in BillingModule.
+- [x] `.env.example`: `TRIAL_REMINDER_ENABLED` documented.
+- [x] Seat-shrink rule on downgrade documented: no eviction, invites 402 until headcount drops below the new limit.
+
+### Tests (done)
+
+- [x] Billing service: change-plan (no sub -> 400, proration args, atPeriodEnd skips proration, unconfigured price -> 400, no items -> 400), portal (existing customer, auto-create customer, missing org).
+- [x] Webhooks service: checkout persists sub id; subscription.updated syncs tier/limits, ignores unknown price; invoice.paid recovers + notifies (and does not notify when already ACTIVE); payment_failed notifies with amount; notification failure never breaks the webhook ack.
+- [x] Trial reminders: expiring-soon, expired, all-admins, no-admins, already-reminded skip, disabled-env.
+- [x] Gate: `tsc --noEmit` 0 errors; `npm run test` 378/378 (45 suites); `npm run lint` 0 errors (2 pre-existing warnings); `npm run build` clean.
+- [x] Live smoke: `/billing/change-plan` -> 400 (plan price unconfigured), `/billing/portal` -> Stripe 401 (placeholder key) — both wired and reachable.
+
+### External setup (one-time, human — not code)
+
+- [x] Same as Task 6: real `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` / `STRIPE_PRICE_*`; portal features (card update / cancel / plan switch) enabled in the Stripe dashboard.
+
+## Task 8 — Subscription-tier gating of AI features — DONE
+
+Same branch (`feature/multi-tenant-billing`). Gates the high-cost AI surfaces behind the org's `subscriptionTier`. Policy (decided with the team): **trial = full access to every tier's features** (14-day window, no artificial ceiling); Basic+ by default for everything else.
+
+### Tier matrix
+
+| Surface | Tier required |
+|---|---|
+| Assistant chat (`POST /assistant/chat`) | PRO, ENTERPRISE |
+| Homework helper (whole `/assistant/homework-help*` controller) | PRO, ENTERPRISE |
+| Quiz generation (`POST /quizzes/generate`) — attempts/grading stay open | PRO, ENTERPRISE |
+| Reports (whole `reports` controller) | PRO, ENTERPRISE |
+| Student Chat (`chat` controller) | PRO, ENTERPRISE |
+| Dashboard insights (`GET /dashboard/insights`, `GET /dashboard/insights/students/:id`) | ENTERPRISE |
+| Communication agent (background `analyze()` run after `confirmAll`) | ENTERPRISE |
+| Grading, rubrics, materials RAG, submissions, alerts, classes, grades | BASIC (no decorator) |
+
+### What shipped
+
+- [x] `src/auth/requires-tier.decorator.ts` — `@RequiresTier(...SubscriptionTier[])` + `REQUIRED_TIERS_KEY` metadata.
+- [x] `SubscriptionGuard.enforceTier()` — runs only for ACTIVE orgs; TRIALING bypasses; 403 with `This feature requires the <min required tier> plan or higher`; `@SkipSubscriptionCheck` routes still exempt; role checks (RolesGuard) still run first.
+- [x] Request-bound gating: decorators applied in `assistant`, `homework-helper`, `quizzes` (generate only), `reports`, `chat`, `dashboard` (insights ×2).
+- [x] Background-agent gating: `CommunicationAgentService.analyze()` resolves the org from the submission's class and skips (with log) unless TRIALING or ENTERPRISE — background jobs can't carry a request context, so the guard alone would never catch them.
+- [x] Downgrade behavior: immediate 403 at the request boundary on next call (no cached entitlements); invite overshoot rule from Task 6 unchanged.
+
+### Tests (done)
+
+- [x] `subscription.guard.spec.ts`: Basic+Pro-required -> 403; Pro+Pro-required allowed; Pro+Enterprise-required -> 403; Enterprise+Enterprise-required allowed; TRIALING allowed on Enterprise-only; no decorator -> allowed.
+- [x] New `communication-agent.service.spec.ts` (5 tests): missing submission early return; ACTIVE PRO skipped (no LLM, no score count); ENTERPRISE runs; TRIALING runs; insufficient confirmed scores still skip LLM.
+- [x] Gate: `tsc --noEmit` 0 errors; `npm run test` 389/389 (46 suites); `npm run lint` 0 errors (2 pre-existing warnings); `npm run build` clean.
+- [x] Live smoke: TRIALING org — chat/reports/insights all allowed; org flipped to ACTIVE/BASIC via SQL — chat 403 "pro plan or higher", reports 403, insights 403 "enterprise plan or higher", `/classes` still 200; flipped back to TRIALING.
+
+### Not covered (deferred, aware)
+
+- Reports-viewing nuance: the whole reports controller is gated, so students on Basic can't open generated reports even though nothing regenerates on view. Accepted for MVP; revisit if the team wants view-only open.
+- Quiz attempts/grading remain open to all tiers (anti-cheat logic doesn't leak AI cost); re-flag if the model cost of grading attempts becomes material.
+- [ ] (Optional) SMTP vars for backend dunning/trial emails; without them notifications stay in-app only.

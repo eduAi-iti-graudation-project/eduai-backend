@@ -23,7 +23,12 @@ export class SubmissionsService {
   async create(
     dto: { assignmentId: string; content: string },
     studentId: string,
+    organizationId: string,
   ) {
+    const assignment = await this.prisma.assignment.findFirst({
+      where: { id: dto.assignmentId, class: { organizationId } },
+    });
+    if (!assignment) throw new NotFoundException('Assignment not found');
     const submission = await this.prisma.submission.create({
       data: {
         assignmentId: dto.assignmentId,
@@ -54,7 +59,12 @@ export class SubmissionsService {
     };
   }
 
-  async createFromPdf(buffer: Buffer, assignmentId: string, studentId: string) {
+  async createFromPdf(
+    buffer: Buffer,
+    assignmentId: string,
+    studentId: string,
+    organizationId: string,
+  ) {
     let rawText: string;
     try {
       const pdfData = await pdfParse(buffer);
@@ -69,11 +79,21 @@ export class SubmissionsService {
       throw new BadRequestException('PDF contained no extractable text');
     }
 
-    return this.create({ assignmentId, content: rawText }, studentId);
+    return this.create(
+      { assignmentId, content: rawText },
+      studentId,
+      organizationId,
+    );
   }
 
-  findAll(status?: string, assignmentId?: string) {
-    const where: Record<string, unknown> = {};
+  findAll(
+    status: string | undefined,
+    assignmentId: string | undefined,
+    organizationId: string,
+  ) {
+    const where: Record<string, unknown> = {
+      assignment: { class: { organizationId } },
+    };
     if (status) where.status = status;
     if (assignmentId) where.assignmentId = assignmentId;
     return this.prisma.submission.findMany({
@@ -82,9 +102,9 @@ export class SubmissionsService {
     });
   }
 
-  async findOne(id: string) {
-    const submission = await this.prisma.submission.findUnique({
-      where: { id },
+  async findOne(id: string, organizationId: string) {
+    const submission = await this.prisma.submission.findFirst({
+      where: { id, assignment: { class: { organizationId } } },
       include: {
         student: true,
         assignment: true,

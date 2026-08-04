@@ -5,9 +5,11 @@ import { ChatService } from './chat.service';
 import { CreateThreadDto, GetMessagesQueryDto, SendMessageDto } from './dto';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { Roles } from '../auth/roles.decorator';
+import { RequiresTier } from '../auth/requires-tier.decorator';
 
 @ApiTags('chat')
 @Controller('chat')
+@RequiresTier('PRO', 'ENTERPRISE')
 export class ChatController {
   constructor(private readonly chatService: ChatService) {}
 
