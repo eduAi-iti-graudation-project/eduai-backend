@@ -23,9 +23,11 @@ import {
 import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
 import type { User } from '@prisma/client';
+import { RequiresTier } from '../auth/requires-tier.decorator';
 
 @ApiTags('assistant')
 @Controller('assistant')
+@RequiresTier('PRO', 'ENTERPRISE')
 export class HomeworkHelperController {
   constructor(private readonly homeworkHelperService: HomeworkHelperService) {}
 

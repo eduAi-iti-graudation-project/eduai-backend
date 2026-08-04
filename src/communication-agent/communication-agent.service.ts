@@ -46,10 +46,29 @@ export class CommunicationAgentService {
   async analyze(submissionId: string): Promise<void> {
     const submission = await this.prisma.submission.findUnique({
       where: { id: submissionId },
-      include: { assignment: true, student: true },
+      include: {
+        assignment: {
+          include: { class: { select: { organizationId: true } } },
+        },
+        student: true,
+      },
     });
     if (!submission) {
       this.logger.warn(`Submission ${submissionId} not found`);
+      return;
+    }
+
+    const organization = await this.prisma.organization.findUnique({
+      where: { id: submission.assignment.class.organizationId },
+      select: { subscriptionStatus: true, subscriptionTier: true },
+    });
+    const enterpriseAccess =
+      organization?.subscriptionStatus === 'TRIALING' ||
+      organization?.subscriptionTier === 'ENTERPRISE';
+    if (!enterpriseAccess) {
+      this.logger.log(
+        `Skipping communication agent for ${submissionId}: organization is not on Enterprise`,
+      );
       return;
     }
 
