@@ -11,9 +11,17 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
-import { ApiTags, ApiOperation, ApiConsumes, ApiBody } from '@nestjs/swagger';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiConsumes,
+  ApiBody,
+  ApiOkResponse,
+} from '@nestjs/swagger';
+import type { User } from '@prisma/client';
 import { MaterialsService } from './materials.service';
 import { UploadMaterialDto } from './dto';
+import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
 
 @ApiTags('materials')
@@ -84,6 +92,21 @@ export class MaterialsController {
     @CurrentUser('organizationId') organizationId: string,
   ) {
     return this.materialsService.findOne(id, organizationId);
+  }
+
+  @Roles('TEACHER', 'STUDENT', 'GUARDIAN', 'ADMIN')
+  @Get(':id/file')
+  @ApiOperation({
+    summary: 'Get a short-lived signed download URL for a material file',
+  })
+  @ApiOkResponse({
+    schema: {
+      type: 'object',
+      properties: { url: { type: 'string' } },
+    },
+  })
+  getFile(@Param('id') id: string, @CurrentUser() user: User) {
+    return this.materialsService.getMaterialFileUrl(id, user);
   }
 
   @Delete(':id')
