@@ -5,9 +5,12 @@ import { PrismaService } from '../prisma/prisma.service';
 export class StudentsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async getGrades(id: string) {
+  async getGrades(id: string, organizationId: string) {
     const grades = await this.prisma.gradingScore.findMany({
-      where: { submission: { studentId: id }, isConfirmed: true },
+      where: {
+        submission: { studentId: id, student: { organizationId } },
+        isConfirmed: true,
+      },
       include: { criteria: true, submission: true },
     });
 
@@ -26,13 +29,19 @@ export class StudentsService {
     }));
   }
 
-  async getSubmissionGrades(studentId: string, submissionId: string) {
-    const submission = await this.prisma.submission.findUnique({
-      where: { id: submissionId },
+  async getSubmissionGrades(
+    studentId: string,
+    submissionId: string,
+    organizationId: string,
+  ) {
+    const submission = await this.prisma.submission.findFirst({
+      where: {
+        id: submissionId,
+        studentId,
+        student: { organizationId },
+      },
     });
-    if (!submission || submission.studentId !== studentId) {
-      throw new NotFoundException('Submission not found');
-    }
+    if (!submission) throw new NotFoundException('Submission not found');
 
     const grades = await this.prisma.gradingScore.findMany({
       where: { submissionId, isConfirmed: true },
@@ -54,9 +63,10 @@ export class StudentsService {
     }));
   }
 
-  async getClasses(studentId: string) {
+  async getClasses(studentId: string, organizationId: string) {
     return this.prisma.class.findMany({
       where: {
+        organizationId,
         enrollments: {
           some: { studentId, status: 'APPROVED' },
         },
@@ -76,19 +86,34 @@ export class StudentsService {
       gradeId?: string;
       guardianId?: string;
     },
+    organizationId: string,
   ) {
-    const student = await this.prisma.user.findUnique({
-      where: { id: studentId },
+    const student = await this.prisma.user.findFirst({
+      where: { id: studentId, organizationId },
     });
     if (!student) throw new NotFoundException('Student not found');
+    if (dto.guardianId) {
+      const guardian = await this.prisma.user.findFirst({
+        where: { id: dto.guardianId, organizationId },
+      });
+      if (!guardian) throw new NotFoundException('Guardian not found');
+    }
     return this.prisma.user.update({ where: { id: studentId }, data: dto });
   }
 
-  async linkGuardian(studentId: string, guardianId: string) {
-    const student = await this.prisma.user.findUnique({
-      where: { id: studentId },
+  async linkGuardian(
+    studentId: string,
+    guardianId: string,
+    organizationId: string,
+  ) {
+    const student = await this.prisma.user.findFirst({
+      where: { id: studentId, organizationId },
     });
     if (!student) throw new NotFoundException('Student not found');
+    const guardian = await this.prisma.user.findFirst({
+      where: { id: guardianId, organizationId },
+    });
+    if (!guardian) throw new NotFoundException('Guardian not found');
     return this.prisma.user.update({
       where: { id: studentId },
       data: { guardianId },

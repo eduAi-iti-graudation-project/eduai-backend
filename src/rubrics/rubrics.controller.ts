@@ -16,6 +16,7 @@ import { ApiTags, ApiOperation, ApiBody, ApiConsumes } from '@nestjs/swagger';
 import { RubricsService } from './rubrics.service';
 import { CreateRubricDto } from './dto';
 import { Roles } from '../auth/roles.decorator';
+import { CurrentUser } from '../auth/current-user.decorator';
 
 @ApiTags('rubrics')
 @Controller('rubrics')
@@ -26,29 +27,41 @@ export class RubricsController {
   @Post()
   @ApiOperation({ summary: 'Create a rubric with criteria' })
   @ApiBody({ type: CreateRubricDto })
-  create(@Body() dto: CreateRubricDto) {
-    return this.rubricsService.create(dto);
+  create(
+    @Body() dto: CreateRubricDto,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.rubricsService.create(dto, organizationId);
   }
 
   @Roles('TEACHER')
   @Get()
   @ApiOperation({ summary: 'List rubrics, optionally filtered by assignment' })
-  findAll(@Query('assignmentId') assignmentId?: string) {
-    return this.rubricsService.findAll(assignmentId);
+  findAll(
+    @Query('assignmentId') assignmentId: string | undefined,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.rubricsService.findAll(assignmentId, organizationId);
   }
 
   @Roles('TEACHER')
   @Get(':id')
   @ApiOperation({ summary: 'Get rubric with criteria' })
-  findOne(@Param('id') id: string) {
-    return this.rubricsService.findOne(id);
+  findOne(
+    @Param('id') id: string,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.rubricsService.findOne(id, organizationId);
   }
 
   @Roles('TEACHER', 'ADMIN')
   @Patch(':id/confirm')
   @ApiOperation({ summary: 'Confirm a rubric (enables grading against it)' })
-  confirm(@Param('id') id: string) {
-    return this.rubricsService.confirm(id);
+  confirm(
+    @Param('id') id: string,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.rubricsService.confirm(id, organizationId);
   }
 
   @Roles('TEACHER', 'ADMIN')
@@ -102,6 +115,7 @@ export class RubricsController {
   fromPdf(
     @UploadedFile() file: Express.Multer.File,
     @Body('assignmentId') assignmentId: string,
+    @CurrentUser('organizationId') organizationId: string,
   ) {
     if (!file) {
       throw new BadRequestException(
@@ -111,6 +125,10 @@ export class RubricsController {
     if (!assignmentId) {
       throw new BadRequestException('assignmentId is required');
     }
-    return this.rubricsService.fromPdf(file.buffer, assignmentId);
+    return this.rubricsService.fromPdf(
+      file.buffer,
+      assignmentId,
+      organizationId,
+    );
   }
 }
