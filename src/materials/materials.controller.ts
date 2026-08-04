@@ -14,6 +14,7 @@ import { memoryStorage } from 'multer';
 import { ApiTags, ApiOperation, ApiConsumes, ApiBody } from '@nestjs/swagger';
 import { MaterialsService } from './materials.service';
 import { UploadMaterialDto } from './dto';
+import { CurrentUser } from '../auth/current-user.decorator';
 
 @ApiTags('materials')
 @Controller('materials')
@@ -42,12 +43,14 @@ export class MaterialsController {
   upload(
     @UploadedFile() file: Express.Multer.File,
     @Body() dto: UploadMaterialDto,
+    @CurrentUser('organizationId') organizationId: string,
   ) {
     return this.materialsService.upload(
       dto.title,
       dto.classId,
       file.buffer,
       file.originalname,
+      organizationId,
     );
   }
 
@@ -67,19 +70,28 @@ export class MaterialsController {
 
   @Get('class/:classId')
   @ApiOperation({ summary: 'List materials for a class' })
-  findByClass(@Param('classId') classId: string) {
-    return this.materialsService.findByClass(classId);
+  findByClass(
+    @Param('classId') classId: string,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.materialsService.findByClass(classId, organizationId);
   }
 
   @Get(':id')
   @ApiOperation({ summary: 'Get a material with its chunks' })
-  findOne(@Param('id') id: string) {
-    return this.materialsService.findOne(id);
+  findOne(
+    @Param('id') id: string,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.materialsService.findOne(id, organizationId);
   }
 
   @Delete(':id')
   @ApiOperation({ summary: 'Delete a material' })
-  delete(@Param('id') id: string) {
-    return this.materialsService.delete(id);
+  delete(
+    @Param('id') id: string,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.materialsService.delete(id, organizationId);
   }
 }

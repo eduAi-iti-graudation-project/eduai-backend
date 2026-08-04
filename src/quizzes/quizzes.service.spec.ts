@@ -278,7 +278,10 @@ describe('QuizzesService', () => {
       status: 'IN_PROGRESS',
     });
 
-    const result = await service.startAttempt('quiz-1', 'student-1');
+    const result = (await service.startAttempt('quiz-1', 'student-1')) as {
+      expiresAt: Date;
+      serverNow: string;
+    };
     expect(result.expiresAt).toEqual(new Date('2026-07-31T10:10:00.000Z'));
     expect(result.serverNow).toEqual(expect.any(String));
   });
@@ -366,9 +369,9 @@ describe('QuizzesService', () => {
         ],
       });
 
-    const result = await service.submitAttempt('quiz-1', 'student-1', [
+    const result = (await service.submitAttempt('quiz-1', 'student-1', [
       { questionId: 'q-1', answer: '4' },
-    ]);
+    ])) as { status: string };
 
     expect(result.status).toBe('COMPLETED');
     expect(mockGradingService.gradeMcq).toHaveBeenCalledWith('4', [
@@ -490,7 +493,9 @@ describe('QuizzesService', () => {
       id: 'attempt-1',
     });
 
-    const result = await service.submitAttempt('quiz-1', 'student-1', []);
+    const result = (await service.submitAttempt('quiz-1', 'student-1', [])) as {
+      status: string;
+    };
 
     expect(result.status).toBe('COMPLETED');
     expect(mockPrisma.quizAttempt.update).toHaveBeenCalled();
@@ -707,7 +712,7 @@ describe('QuizzesService', () => {
 
       const result = await service.getAttempt('attempt-1');
 
-      expect(result.quizTitle).toBeUndefined();
+      expect((result as { quizTitle?: unknown }).quizTitle).toBeUndefined();
       expect(result.quiz.title).toBe('Test Quiz');
       expect(result.quiz.questions).toEqual([
         { id: 'q-1', question: 'Q1', points: 5, order: 0 },
@@ -753,8 +758,14 @@ describe('QuizzesService', () => {
 
       const result = await service.getAttemptsByQuiz('quiz-1');
 
-      expect(result[0].studentName).toBeUndefined();
-      expect(result[0].violationCount).toBeUndefined();
+      expect(
+        (result[0] as { studentName?: unknown; violationCount?: unknown })
+          .studentName,
+      ).toBeUndefined();
+      expect(
+        (result[0] as { studentName?: unknown; violationCount?: unknown })
+          .violationCount,
+      ).toBeUndefined();
       expect(result[0].student).toEqual({
         id: 'student-1',
         name: 'Test Student',
