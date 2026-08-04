@@ -28,16 +28,19 @@ export class ClassesController {
   @ApiOperation({ summary: 'Create a class (admin only, specify teacherId)' })
   @ApiBody({ type: CreateClassDto })
   @ApiOkResponse({ type: ClassDto })
-  create(@Body() dto: CreateClassDto) {
-    return this.classesService.create(dto, dto.teacherId);
+  create(
+    @Body() dto: CreateClassDto,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.classesService.create(dto, dto.teacherId, organizationId);
   }
 
   @Roles('TEACHER', 'STUDENT', 'GUARDIAN', 'ADMIN')
   @Get()
   @ApiOperation({ summary: 'List all classes' })
   @ApiOkResponse({ type: ClassDto, isArray: true })
-  findAll() {
-    return this.classesService.findAll();
+  findAll(@CurrentUser('organizationId') organizationId: string) {
+    return this.classesService.findAll(organizationId);
   }
 
   @Roles('STUDENT')
@@ -51,8 +54,11 @@ export class ClassesController {
   @Get(':id')
   @ApiOperation({ summary: 'Get class by ID' })
   @ApiOkResponse({ type: ClassDto })
-  findOne(@Param('id') id: string) {
-    return this.classesService.findOne(id);
+  findOne(
+    @Param('id') id: string,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.classesService.findOne(id, organizationId);
   }
 
   @Roles('TEACHER', 'ADMIN')
@@ -60,23 +66,34 @@ export class ClassesController {
   @ApiOperation({ summary: 'Update a class' })
   @ApiBody({ type: UpdateClassDto })
   @ApiOkResponse({ type: ClassDto })
-  update(@Param('id') id: string, @Body() dto: UpdateClassDto) {
-    return this.classesService.update(id, dto);
+  update(
+    @Param('id') id: string,
+    @Body() dto: UpdateClassDto,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.classesService.update(id, dto, organizationId);
   }
 
   @Roles('TEACHER', 'ADMIN')
   @Delete(':id')
   @ApiOperation({ summary: 'Delete a class' })
-  remove(@Param('id') id: string) {
-    return this.classesService.remove(id);
+  remove(
+    @Param('id') id: string,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.classesService.remove(id, organizationId);
   }
 
   @Roles('TEACHER')
   @Post(':id/enrollments')
   @ApiOperation({ summary: 'Enroll a student' })
   @ApiBody({ type: AddEnrollmentDto })
-  addEnrollment(@Param('id') id: string, @Body() dto: AddEnrollmentDto) {
-    return this.classesService.addEnrollment(id, dto.studentId);
+  addEnrollment(
+    @Param('id') id: string,
+    @Body() dto: AddEnrollmentDto,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.classesService.addEnrollment(id, dto.studentId, organizationId);
   }
 
   @Roles('STUDENT')
@@ -89,8 +106,11 @@ export class ClassesController {
   @Roles('TEACHER')
   @Get(':id/requests')
   @ApiOperation({ summary: 'List pending enrollment requests' })
-  getRequests(@Param('id') id: string) {
-    return this.classesService.getRequests(id);
+  getRequests(
+    @Param('id') id: string,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.classesService.getRequests(id, organizationId);
   }
 
   @Roles('TEACHER')
@@ -99,7 +119,12 @@ export class ClassesController {
   removeEnrollment(
     @Param('classId') classId: string,
     @Param('studentId') studentId: string,
+    @CurrentUser('organizationId') organizationId: string,
   ) {
-    return this.classesService.removeEnrollment(classId, studentId);
+    return this.classesService.removeEnrollment(
+      classId,
+      studentId,
+      organizationId,
+    );
   }
 }

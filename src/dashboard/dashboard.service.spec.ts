@@ -72,7 +72,13 @@ describe('DashboardService', () => {
         .mockResolvedValueOnce(5); // resolvedAlertCount
       mockPrisma.notification.count.mockResolvedValue(2);
 
-      const result = await service.getOverview(teacherUser);
+      const result = (await service.getOverview(teacherUser)) as {
+        recentAlerts: { studentName: string; type: string }[];
+        submissionsNeedingReview: {
+          studentName: string;
+          assignmentTitle: string;
+        }[];
+      };
 
       expect(result).toMatchObject({
         classCount: 3,
@@ -137,7 +143,9 @@ describe('DashboardService', () => {
       mockPrisma.alert.findMany.mockResolvedValue([]);
       mockPrisma.notification.count.mockResolvedValue(1);
 
-      const result = await service.getOverview(studentUser);
+      const result = (await service.getOverview(studentUser)) as {
+        recentGrades: unknown[];
+      };
 
       expect(result).toMatchObject({
         upcomingAssignments: [{ title: 'Homework 1', className: 'Math 101' }],
@@ -207,7 +215,9 @@ describe('DashboardService', () => {
         ],
         unreadNotifications: 2,
       });
-      const children = result.children as Array<{ attendanceRate: number }>;
+      const children = (
+        result as { children: Array<{ attendanceRate: number }> }
+      ).children;
       expect(children[0].attendanceRate).toBeCloseTo(0.67, 1);
     });
 
@@ -273,10 +283,9 @@ describe('DashboardService', () => {
         flaggedStudentCount: 3,
         pendingReportCount: 2,
       });
-      const teachers = result.teachers as Array<{
-        name: string;
-        studentCount: number;
-      }>;
+      const teachers = (
+        result as { teachers: Array<{ name: string; studentCount: number }> }
+      ).teachers;
       expect(teachers).toHaveLength(1);
       expect(teachers[0]).toMatchObject({
         name: 'Teacher A',

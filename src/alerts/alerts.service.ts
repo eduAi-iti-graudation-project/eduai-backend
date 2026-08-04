@@ -5,8 +5,10 @@ import { PrismaService } from '../prisma/prisma.service';
 export class AlertsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async findAll(status?: string) {
-    const where: Record<string, string> = {};
+  async findAll(status: string | undefined, organizationId: string) {
+    const where: Record<string, unknown> = {
+      student: { organizationId },
+    };
     if (status) where.status = status;
     const alerts = await this.prisma.alert.findMany({
       where,
@@ -47,8 +49,14 @@ export class AlertsService {
     }));
   }
 
-  async resolve(id: string, status: 'RESOLVED' | 'DISMISSED') {
-    const alert = await this.prisma.alert.findUnique({ where: { id } });
+  async resolve(
+    id: string,
+    status: 'RESOLVED' | 'DISMISSED',
+    organizationId: string,
+  ) {
+    const alert = await this.prisma.alert.findFirst({
+      where: { id, student: { organizationId } },
+    });
     if (!alert) throw new NotFoundException('Alert not found');
     return this.prisma.alert.update({
       where: { id },
@@ -56,9 +64,9 @@ export class AlertsService {
     });
   }
 
-  async getTeacherDetail(id: string) {
+  async getTeacherDetail(id: string, organizationId: string) {
     const analysis = await this.prisma.studentAnalysis.findFirst({
-      where: { alertId: id },
+      where: { alertId: id, alert: { student: { organizationId } } },
     });
     if (!analysis)
       throw new NotFoundException('Analysis not found for this alert');

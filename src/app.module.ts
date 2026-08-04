@@ -6,6 +6,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './auth/auth.module';
 import { AuthGuard } from './auth/auth.guard';
 import { RolesGuard } from './auth/roles.guard';
+import { SubscriptionGuard } from './auth/subscription.guard';
 import { ClassesModule } from './classes/classes.module';
 import { AssignmentsModule } from './assignments/assignments.module';
 import { RubricsModule } from './rubrics/rubrics.module';
@@ -31,6 +32,9 @@ import { QuizzesModule } from './quizzes/quizzes.module';
 import { FeedbackWriterModule } from './feedback-writer/feedback-writer.module';
 import { HomeworkHelperModule } from './homework-helper/homework-helper.module';
 import { ChatModule } from './chat/chat.module';
+import { BillingModule } from './billing/billing.module';
+import { WebhooksModule } from './webhooks/webhooks.module';
+import { OrganizationsModule } from './organizations/organizations.module';
 
 @Module({
   imports: [
@@ -61,12 +65,16 @@ import { ChatModule } from './chat/chat.module';
     FeedbackWriterModule,
     HomeworkHelperModule,
     ChatModule,
+    BillingModule,
+    WebhooksModule,
+    OrganizationsModule,
   ],
   controllers: [AppController],
   providers: [
     AppService,
     { provide: APP_GUARD, useClass: AuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
+    { provide: APP_GUARD, useClass: SubscriptionGuard },
   ],
 })
 export class AppModule {}

@@ -5,8 +5,10 @@ import { PrismaService } from '../prisma/prisma.service';
 export class UsersService {
   constructor(private readonly prisma: PrismaService) {}
 
-  findAll(query: { role?: string; q?: string }) {
-    const filters: Record<string, unknown> = {};
+  findAll(query: { role?: string; q?: string }, organizationId: string) {
+    const filters: Record<string, unknown> = {
+      organizationId,
+    };
 
     if (query.role) {
       filters.role = query.role;
@@ -25,6 +27,7 @@ export class UsersService {
         role: true,
         gradeId: true,
         guardianId: true,
+        organizationId: true,
         createdAt: true,
       },
       orderBy: { name: 'asc' },

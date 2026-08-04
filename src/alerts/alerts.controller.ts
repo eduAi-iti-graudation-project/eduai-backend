@@ -9,6 +9,7 @@ import {
 import { AlertsService } from './alerts.service';
 import { AlertDto, ResolveAlertDto } from './dto';
 import { Roles } from '../auth/roles.decorator';
+import { CurrentUser } from '../auth/current-user.decorator';
 
 @ApiTags('alerts')
 @Controller('alerts')
@@ -20,15 +21,21 @@ export class AlertsController {
   @ApiOperation({ summary: "List alerts for teacher's classes" })
   @ApiQuery({ name: 'status', required: false })
   @ApiOkResponse({ type: AlertDto, isArray: true })
-  findAll(@Query('status') status?: string) {
-    return this.alertsService.findAll(status);
+  findAll(
+    @Query('status') status: string | undefined,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.alertsService.findAll(status, organizationId);
   }
 
   @Get(':id/teacher-detail')
   @Roles('TEACHER', 'ADMIN')
   @ApiOperation({ summary: 'Get structured analysis data for an alert' })
-  getTeacherDetail(@Param('id') id: string) {
-    return this.alertsService.getTeacherDetail(id);
+  getTeacherDetail(
+    @Param('id') id: string,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.alertsService.getTeacherDetail(id, organizationId);
   }
 
   @Patch(':id')
@@ -36,7 +43,11 @@ export class AlertsController {
   @ApiOperation({ summary: 'Resolve or dismiss an alert' })
   @ApiBody({ type: ResolveAlertDto })
   @ApiOkResponse({ type: AlertDto })
-  resolve(@Param('id') id: string, @Body() dto: ResolveAlertDto) {
-    return this.alertsService.resolve(id, dto.status);
+  resolve(
+    @Param('id') id: string,
+    @Body() dto: ResolveAlertDto,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.alertsService.resolve(id, dto.status, organizationId);
   }
 }

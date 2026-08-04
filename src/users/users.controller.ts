@@ -2,6 +2,7 @@ import { Controller, Get, Query } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { UsersService } from './users.service';
 import { Roles } from '../auth/roles.decorator';
+import { CurrentUser } from '../auth/current-user.decorator';
 
 @ApiTags('users')
 @Controller('users')
@@ -21,7 +22,11 @@ export class UsersController {
     required: false,
     description: 'Free-text name search',
   })
-  findAll(@Query('role') role?: string, @Query('q') q?: string) {
-    return this.usersService.findAll({ role, q });
+  findAll(
+    @Query('role') role?: string,
+    @Query('q') q?: string,
+    @CurrentUser('organizationId') organizationId?: string,
+  ) {
+    return this.usersService.findAll({ role, q }, organizationId!);
   }
 }

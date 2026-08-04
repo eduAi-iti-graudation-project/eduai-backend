@@ -65,6 +65,17 @@ async function createAuthUser(
 async function main() {
   console.log('Seeding database...');
 
+  const organization = await prisma.organization.upsert({
+    where: { id: '00000000-0000-0000-0000-00000000a001' },
+    update: {},
+    create: {
+      id: '00000000-0000-0000-0000-00000000a001',
+      name: 'Demo School',
+      seatLimit: 50,
+    },
+  });
+  console.log(`  Organization: ${organization.name} (${organization.id})`);
+
   const adminUser = await prisma.user.upsert({
     where: { email: 'admin@eduai.test' },
     update: {},
@@ -72,6 +83,7 @@ async function main() {
       email: 'admin@eduai.test',
       name: 'Admin User',
       role: 'ADMIN',
+      organizationId: organization.id,
     },
   });
   console.log(`  Admin: ${adminUser.name} (${adminUser.id})`);
@@ -94,6 +106,7 @@ async function main() {
       email: 'teacher@eduai.test',
       name: 'Alex Mentor',
       role: 'TEACHER',
+      organizationId: organization.id,
     },
   });
   console.log(`  Teacher: ${teacher.name} (${teacher.id})`);
@@ -106,6 +119,7 @@ async function main() {
       name: 'Sam Learner',
       role: 'STUDENT',
       gradeId: grade10.id,
+      organizationId: organization.id,
     },
   });
   console.log(`  Student: ${student.name} (${student.id})`);
@@ -117,6 +131,7 @@ async function main() {
       email: 'guardian@eduai.test',
       name: 'Guardian User',
       role: 'GUARDIAN',
+      organizationId: organization.id,
     },
   });
   console.log(`  Guardian: ${guardian.name} (${guardian.id})`);
@@ -135,6 +150,7 @@ async function main() {
       email: 'placeholder@eduai.test',
       name: 'Placeholder User',
       role: 'TEACHER',
+      organizationId: organization.id,
     },
   });
   console.log(`  Placeholder: ${placeholder.name} (${placeholder.id})`);
@@ -147,6 +163,7 @@ async function main() {
       name: 'English 101 — Essay Writing',
       description: 'Foundational course on academic essay writing, thesis development, and argumentation.',
       teacherId: teacher.id,
+      organizationId: organization.id,
     },
   });
 
@@ -158,6 +175,7 @@ async function main() {
       name: 'History 201 — Research Methods',
       description: 'Intermediate course on historical research, source evaluation, and analytical writing.',
       teacherId: teacher.id,
+      organizationId: organization.id,
     },
   });
 
@@ -169,6 +187,7 @@ async function main() {
       name: 'Science 301 — Lab Reports',
       description: 'Advanced course on scientific writing, experimental methodology, and data presentation.',
       teacherId: teacher.id,
+      organizationId: organization.id,
     },
   });
 

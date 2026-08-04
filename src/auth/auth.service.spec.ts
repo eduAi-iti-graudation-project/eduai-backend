@@ -14,10 +14,24 @@ describe('AuthService', () => {
       create: jest.fn(),
       update: jest.fn(),
     },
+    organization: {
+      create: jest.fn(),
+    },
+    $transaction: jest.fn(),
+  };
+
+  const mockAuthClient = {
+    auth: {
+      signInWithPassword: jest.fn(),
+      admin: {
+        createUser: jest.fn(),
+        signOut: jest.fn(),
+      },
+    },
   };
 
   const mockSupabase = {
-    getClient: jest.fn(() => ({ auth: {} })),
+    getClient: jest.fn(() => mockAuthClient),
     signInWithOAuth: jest.fn(),
     exchangeCodeForSession: jest.fn(),
     refreshSession: jest.fn(),
@@ -210,19 +224,33 @@ describe('AuthService', () => {
       expect(mockPrisma.user.create).not.toHaveBeenCalled();
     });
 
-    it('creates a new STUDENT user with the name from the provider profile', async () => {
+    it('creates a new ADMIN user with a new organization', async () => {
       mockSupabase.exchangeCodeForSession.mockResolvedValue(oauthSession());
       mockPrisma.user.findUnique.mockResolvedValue(null);
+      mockPrisma.organization.create.mockResolvedValue({ id: 'org-1' });
       mockPrisma.user.create.mockResolvedValue({ id: 'local-new' });
+      mockPrisma.$transaction.mockImplementation(
+        (
+          cb: (tx: {
+            organization: typeof mockPrisma.organization;
+            user: typeof mockPrisma.user;
+          }) => Promise<unknown>,
+        ) =>
+          cb({ organization: mockPrisma.organization, user: mockPrisma.user }),
+      );
 
       await service.handleOauthCallback({ code: 'code-123' });
 
+      expect(mockPrisma.organization.create).toHaveBeenCalledWith({
+        data: { name: "John Doe's School" },
+      });
       expect(mockPrisma.user.create).toHaveBeenCalledWith({
         data: {
           authId: 'supabase-auth-id-1',
           email: 'student@eduai.test',
           name: 'John Doe',
-          role: 'STUDENT',
+          role: 'ADMIN',
+          organizationId: 'org-1',
         },
       });
     });
@@ -232,16 +260,30 @@ describe('AuthService', () => {
         oauthSession({ user_metadata: { name: 'Jane Doe' } }),
       );
       mockPrisma.user.findUnique.mockResolvedValue(null);
+      mockPrisma.organization.create.mockResolvedValue({ id: 'org-1' });
       mockPrisma.user.create.mockResolvedValue({ id: 'local-new' });
+      mockPrisma.$transaction.mockImplementation(
+        (
+          cb: (tx: {
+            organization: typeof mockPrisma.organization;
+            user: typeof mockPrisma.user;
+          }) => Promise<unknown>,
+        ) =>
+          cb({ organization: mockPrisma.organization, user: mockPrisma.user }),
+      );
 
       await service.handleOauthCallback({ code: 'code-123' });
 
+      expect(mockPrisma.organization.create).toHaveBeenCalledWith({
+        data: { name: "Jane Doe's School" },
+      });
       expect(mockPrisma.user.create).toHaveBeenCalledWith({
         data: {
           authId: 'supabase-auth-id-1',
           email: 'student@eduai.test',
           name: 'Jane Doe',
-          role: 'STUDENT',
+          role: 'ADMIN',
+          organizationId: 'org-1',
         },
       });
     });
@@ -257,7 +299,7 @@ describe('AuthService', () => {
           email: 'student@eduai.test',
           role: 'STUDENT',
         });
-      mockPrisma.user.create.mockRejectedValue(
+      mockPrisma.$transaction.mockRejectedValue(
         new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
           code: 'P2002',
           clientVersion: 'test',
@@ -270,6 +312,95 @@ describe('AuthService', () => {
         accessToken: 'access-token-123',
         refreshToken: 'refresh-token-123',
       });
+    });
+  });
+
+  describe('login', () => {
+    const credentials = {
+      email: 'student@eduai.test',
+      password: 'password123',
+    };
+
+    function sessionFor(userId: string) {
+      return {
+        data: {
+          session: {
+            access_token: 'access-token-456',
+            refresh_token: 'refresh-token-456',
+            user: { id: userId, email: credentials.email },
+          },
+        },
+        error: null,
+      };
+    }
+
+    beforeEach(() => {
+      mockAuthClient.auth.signInWithPassword.mockReset();
+    });
+
+    it('returns the user when authId matches', async () => {
+      mockAuthClient.auth.signInWithPassword.mockResolvedValue(
+        sessionFor('auth-1'),
+      );
+      mockPrisma.user.findUnique.mockResolvedValue({
+        id: 'local-1',
+        authId: 'auth-1',
+        email: credentials.email,
+      });
+
+      const result = await service.login(credentials);
+
+      expect(result.accessToken).toBe('access-token-456');
+      expect(result.user.id).toBe('local-1');
+      expect(mockPrisma.user.update).not.toHaveBeenCalled();
+    });
+
+    it('links an invited user by email when authId does not match', async () => {
+      mockAuthClient.auth.signInWithPassword.mockResolvedValue(
+        sessionFor('auth-2'),
+      );
+      mockPrisma.user.findUnique
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({
+          id: 'invited-1',
+          authId: null,
+          email: credentials.email,
+          role: 'TEACHER',
+        });
+      mockPrisma.user.update.mockResolvedValue({ id: 'invited-1' });
+
+      const result = await service.login(credentials);
+
+      expect(mockPrisma.user.findUnique).toHaveBeenNthCalledWith(2, {
+        where: { email: credentials.email },
+      });
+      expect(mockPrisma.user.update).toHaveBeenCalledWith({
+        where: { id: 'invited-1' },
+        data: { authId: 'auth-2' },
+      });
+      expect(result.user.authId).toBe('auth-2');
+    });
+
+    it('throws a 401 when no local user exists', async () => {
+      mockAuthClient.auth.signInWithPassword.mockResolvedValue(
+        sessionFor('auth-3'),
+      );
+      mockPrisma.user.findUnique.mockResolvedValue(null);
+
+      await expect(service.login(credentials)).rejects.toThrow(
+        UnauthorizedException,
+      );
+    });
+
+    it('throws a 401 when the password is wrong', async () => {
+      mockAuthClient.auth.signInWithPassword.mockResolvedValue({
+        data: { session: null },
+        error: { message: 'Invalid login credentials' },
+      });
+
+      await expect(service.login(credentials)).rejects.toThrow(
+        UnauthorizedException,
+      );
     });
   });
 
