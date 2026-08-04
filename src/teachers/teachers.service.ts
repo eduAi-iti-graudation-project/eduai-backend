@@ -11,10 +11,44 @@ export class TeachersService {
     });
     if (!teacher) throw new NotFoundException('Teacher not found');
 
-    return this.prisma.teacherGrade.findMany({
-      where: { teacherId },
-      include: { grade: true },
-    });
+    const [explicit, classes] = await Promise.all([
+      this.prisma.teacherGrade.findMany({
+        where: { teacherId },
+        include: { grade: true },
+      }),
+      this.prisma.class.findMany({
+        where: { teacherId },
+        include: { gradeLinks: { include: { grade: true } } },
+      }),
+    ]);
+
+    const rows: Array<{
+      id: string;
+      teacherId: string;
+      gradeId: string;
+      grade: object;
+    }> = [];
+    const seen = new Set<string>();
+
+    for (const tg of explicit) {
+      seen.add(tg.gradeId);
+      rows.push({ id: tg.id, teacherId, gradeId: tg.gradeId, grade: tg.grade });
+    }
+
+    for (const cls of classes) {
+      for (const link of cls.gradeLinks) {
+        if (seen.has(link.gradeId)) continue;
+        seen.add(link.gradeId);
+        rows.push({
+          id: link.id,
+          teacherId,
+          gradeId: link.gradeId,
+          grade: link.grade,
+        });
+      }
+    }
+
+    return rows;
   }
 
   async addGrade(teacherId: string, gradeId: string) {

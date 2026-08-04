@@ -19,12 +19,13 @@ export class ChatController {
   }
 
   @Post('threads')
-  @Roles('STUDENT')
+  @Roles('STUDENT', 'TEACHER')
   @ApiOperation({
-    summary: 'Create or get a chat thread with the class teacher',
+    summary:
+      'Create or get a chat thread (student with their class teacher, or teacher with a class student)',
   })
   createThread(@CurrentUser() user: User, @Body() dto: CreateThreadDto) {
-    return this.chatService.createThreadOrGet(user, dto.classId);
+    return this.chatService.createThreadOrGet(user, dto.classId, dto.studentId);
   }
 
   @Get('threads/:threadId/messages')
@@ -38,7 +39,7 @@ export class ChatController {
     return this.chatService.getMessages(
       threadId,
       userId,
-      query.after,
+      query.before,
       query.limit,
     );
   }

@@ -24,6 +24,16 @@ export class HomeworkHelperService {
     studentId: string,
     dto: HomeworkHelpRequestDto,
   ): Promise<HomeworkHelpResponseDto> {
+    const activeAttempt = await this.prisma.quizAttempt.findFirst({
+      where: { studentId, status: 'IN_PROGRESS' },
+      select: { id: true },
+    });
+    if (activeAttempt) {
+      throw new ForbiddenException(
+        'You cannot ask for help while a quiz is in progress',
+      );
+    }
+
     const result = await this.agent.help({
       classId: dto.classId,
       studentId,

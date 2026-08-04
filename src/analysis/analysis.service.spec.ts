@@ -95,7 +95,7 @@ describe('AnalysisService', () => {
           studentId,
           type: 'FAILING',
           status: 'ACTIVE',
-        }),
+        }) as object,
       });
       expect(mockReportsService.generate).toHaveBeenCalledWith(
         studentId,
@@ -130,7 +130,7 @@ describe('AnalysisService', () => {
           studentId,
           type: 'DOWNWARD_TREND',
           status: 'ACTIVE',
-        }),
+        }) as object,
       });
       expect(mockReportsService.generate).toHaveBeenCalledWith(
         studentId,

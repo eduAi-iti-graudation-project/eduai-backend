@@ -273,8 +273,12 @@ describe('DashboardService', () => {
         flaggedStudentCount: 3,
         pendingReportCount: 2,
       });
-      expect(result.teachers).toHaveLength(1);
-      expect(result.teachers[0]).toMatchObject({
+      const teachers = result.teachers as Array<{
+        name: string;
+        studentCount: number;
+      }>;
+      expect(teachers).toHaveLength(1);
+      expect(teachers[0]).toMatchObject({
         name: 'Teacher A',
         studentCount: 1,
       });
