@@ -1,10 +1,8 @@
-import {
-  Injectable,
-  ForbiddenException,
-  NotFoundException,
-} from '@nestjs/common';
+import { Injectable, HttpStatus } from '@nestjs/common';
 import type { User } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { ApiError } from '../common/errors/api-error';
+import { ErrorCode } from '../common/errors/codes';
 
 @Injectable()
 export class ChatService {
@@ -12,55 +10,61 @@ export class ChatService {
 
   async createThreadOrGet(
     user: User,
-    classId: string,
+    courseOfferingId: string,
     studentId?: string,
   ): Promise<{
     id: string;
-    classId: string;
+    courseOfferingId: string;
     teacherId: string;
     studentId: string;
     createdAt: string;
     updatedAt: string;
   }> {
-    const classEntity = await this.prisma.class.findUnique({
-      where: { id: classId },
+    const offering = await this.prisma.courseOffering.findUnique({
+      where: { id: courseOfferingId },
     });
 
-    if (!classEntity) {
-      throw new NotFoundException('Class not found');
+    if (!offering) {
+      throw new ApiError(
+        ErrorCode.OFFERING_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This class could not be found.',
+      );
     }
 
     const teacherInitiated = studentId !== undefined;
     if (teacherInitiated) {
-      if (classEntity.teacherId !== user.id) {
-        throw new ForbiddenException(
-          'Only the class teacher can start a thread with a student',
+      if (offering.teacherId !== user.id) {
+        throw new ApiError(
+          ErrorCode.CHAT_FORBIDDEN,
+          HttpStatus.FORBIDDEN,
+          'Only the class teacher can start a conversation with a student.',
         );
       }
     }
 
     const targetStudentId = teacherInitiated ? studentId : user.id;
-    await this.assertApprovedEnrollment(classEntity.id, targetStudentId);
+    await this.assertApprovedEnrollment(offering.sectionId, targetStudentId);
 
     const thread = await this.prisma.chatThread.upsert({
       where: {
-        teacherId_studentId_classId: {
-          teacherId: classEntity.teacherId,
+        teacherId_studentId_courseOfferingId: {
+          teacherId: offering.teacherId,
           studentId: targetStudentId,
-          classId,
+          courseOfferingId,
         },
       },
       update: {},
       create: {
-        teacherId: classEntity.teacherId,
+        teacherId: offering.teacherId,
         studentId: targetStudentId,
-        classId,
+        courseOfferingId,
       },
     });
 
     return {
       id: thread.id,
-      classId: thread.classId,
+      courseOfferingId: thread.courseOfferingId,
       teacherId: thread.teacherId,
       studentId: thread.studentId,
       createdAt: thread.createdAt.toISOString(),
@@ -71,7 +75,7 @@ export class ChatService {
   async listThreads(user: User): Promise<
     Array<{
       id: string;
-      classId: string;
+      courseOfferingId: string;
       teacherId: string;
       studentId: string;
       createdAt: string;
@@ -90,7 +94,13 @@ export class ChatService {
     const threads = await this.prisma.chatThread.findMany({
       where,
       include: {
-        class: { select: { id: true, name: true } },
+        offering: {
+          select: {
+            id: true,
+            course: { select: { name: true } },
+            section: { select: { name: true } },
+          },
+        },
         teacher: { select: { id: true, name: true } },
         student: { select: { id: true, name: true } },
         messages: {
@@ -115,12 +125,13 @@ export class ChatService {
       const lastMessage = thread.messages[0] ?? null;
       return {
         id: thread.id,
-        classId: thread.classId,
+        courseOfferingId: thread.courseOfferingId,
         teacherId: thread.teacherId,
         studentId: thread.studentId,
         createdAt: thread.createdAt.toISOString(),
         updatedAt: thread.updatedAt.toISOString(),
-        className: thread.class.name,
+        className:
+          thread.offering.course.name ?? thread.offering.section.name ?? null,
         peerId: peer.id,
         peerName: peer.name,
         lastMessage: lastMessage?.text ?? null,
@@ -232,16 +243,18 @@ export class ChatService {
   }
 
   private async assertApprovedEnrollment(
-    classId: string,
+    sectionId: string,
     studentId: string,
   ): Promise<void> {
     const enrollment = await this.prisma.enrollment.findUnique({
-      where: { classId_studentId: { classId, studentId } },
+      where: { sectionId_studentId: { sectionId, studentId } },
     });
 
     if (!enrollment || enrollment.status !== 'APPROVED') {
-      throw new ForbiddenException(
-        'A chat requires an approved enrollment in this class',
+      throw new ApiError(
+        ErrorCode.CHAT_FORBIDDEN,
+        HttpStatus.FORBIDDEN,
+        'A conversation requires an approved enrollment in this class.',
       );
     }
   }
@@ -255,11 +268,19 @@ export class ChatService {
     });
 
     if (!thread) {
-      throw new NotFoundException('Thread not found');
+      throw new ApiError(
+        ErrorCode.THREAD_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This conversation could not be found.',
+      );
     }
 
     if (thread.teacherId !== userId && thread.studentId !== userId) {
-      throw new ForbiddenException('You are not a participant in this thread');
+      throw new ApiError(
+        ErrorCode.THREAD_NOT_PARTICIPANT,
+        HttpStatus.FORBIDDEN,
+        'You are not a participant in this conversation.',
+      );
     }
   }
 }

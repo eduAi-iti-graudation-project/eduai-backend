@@ -8,9 +8,9 @@ interface ScoreWithCriteria {
   submission: { studentId: string };
 }
 
-interface ClassWithAssignments {
-  name: string;
-  enrollments: Array<{ length: number }>;
+interface OfferingWithAssignments {
+  course: { name: string };
+  section: { name?: string | null; enrollments: Array<{ length: number }> };
   assignments: Array<{
     submissions: Array<{
       studentId: string;
@@ -23,7 +23,7 @@ interface ClassWithAssignments {
 }
 
 const InputSchema = z.object({
-  classId: z.string(),
+  courseOfferingId: z.string(),
 });
 
 export type ClassContextTool = {
@@ -36,16 +36,20 @@ export const createGetClassContextTool = (
   prisma: PrismaService,
 ): ClassContextTool => ({
   execute: async (input) => {
-    const classEntity = await prisma.class.findUnique({
-      where: { id: input.classId },
-      include: { teacher: true, enrollments: true },
+    const offering = await prisma.courseOffering.findUnique({
+      where: { id: input.courseOfferingId },
+      include: {
+        teacher: true,
+        course: true,
+        section: { include: { enrollments: true } },
+      },
     });
-    if (!classEntity) throw new Error('Class not found');
+    if (!offering) throw new Error('Course offering not found');
 
     const allScores = (await prisma.gradingScore.findMany({
       where: {
         submission: {
-          assignment: { classId: input.classId },
+          assignment: { courseOfferingId: input.courseOfferingId },
           status: 'CONFIRMED',
         },
         isConfirmed: true,
@@ -77,13 +81,14 @@ export const createGetClassContextTool = (
 
     const belowAverageCount = studentAverages.filter((a) => a < 60).length;
 
-    const otherClasses = (await prisma.class.findMany({
+    const otherOfferings = (await prisma.courseOffering.findMany({
       where: {
-        teacherId: classEntity.teacherId,
-        id: { not: input.classId },
+        teacherId: offering.teacherId,
+        id: { not: input.courseOfferingId },
       },
       include: {
-        enrollments: true,
+        course: true,
+        section: { include: { enrollments: true } },
         assignments: {
           include: {
             submissions: {
@@ -98,11 +103,11 @@ export const createGetClassContextTool = (
           },
         },
       },
-    })) as unknown as ClassWithAssignments[];
+    })) as unknown as OfferingWithAssignments[];
 
-    const teacherOtherClasses = otherClasses.map((c) => {
+    const teacherOtherClasses = otherOfferings.map((o) => {
       const classStudentScores = new Map<string, number[]>();
-      for (const assignment of c.assignments) {
+      for (const assignment of o.assignments) {
         for (const sub of assignment.submissions) {
           for (const score of sub.scores) {
             const pct = (score.pointsAwarded / score.criteria.maxPoints) * 100;
@@ -116,20 +121,24 @@ export const createGetClassContextTool = (
         (s) => s.reduce((a, b) => a + b, 0) / s.length,
       );
       return {
-        className: c.name,
+        className: o.section?.name
+          ? `${o.course.name} — ${o.section.name}`
+          : o.course.name,
         averageScore:
           avgs.length > 0
             ? Math.round(avgs.reduce((a, b) => a + b, 0) / avgs.length)
             : 0,
-        studentCount: c.enrollments.length,
+        studentCount: o.section.enrollments.length,
       };
     });
 
     return {
-      className: classEntity.name,
-      teacherName: classEntity.teacher.name,
+      className: offering.section?.name
+        ? `${offering.course.name} — ${offering.section.name}`
+        : offering.course.name,
+      teacherName: offering.teacher.name,
       averageScore: classAverage,
-      totalStudents: classEntity.enrollments.length,
+      totalStudents: offering.section.enrollments.length,
       belowAverageCount,
       teacherOtherClasses,
     };

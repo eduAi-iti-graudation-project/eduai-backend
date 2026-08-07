@@ -1,5 +1,4 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { ChatService } from './chat.service';
 import { PrismaService } from '../prisma/prisma.service';
 import type { User } from '@prisma/client';
@@ -12,7 +11,7 @@ describe('ChatService', () => {
 
   const threadRow = {
     id: 'thread-1',
-    classId: 'class-1',
+    courseOfferingId: 'offering-1',
     teacherId: 'teacher-1',
     studentId: 'student-1',
     createdAt: new Date('2026-01-01T00:00:00Z'),
@@ -20,7 +19,7 @@ describe('ChatService', () => {
   };
 
   const mockPrisma = {
-    class: { findUnique: jest.fn() },
+    courseOffering: { findUnique: jest.fn() },
     enrollment: { findUnique: jest.fn() },
     chatThread: {
       upsert: jest.fn(),
@@ -50,8 +49,9 @@ describe('ChatService', () => {
 
   describe('createThreadOrGet', () => {
     it('creates a thread when the student is APPROVED in the class', async () => {
-      mockPrisma.class.findUnique.mockResolvedValue({
-        id: 'class-1',
+      mockPrisma.courseOffering.findUnique.mockResolvedValue({
+        id: 'offering-1',
+        sectionId: 'section-1',
         teacherId: 'teacher-1',
       });
       mockPrisma.enrollment.findUnique.mockResolvedValue({
@@ -59,50 +59,52 @@ describe('ChatService', () => {
       });
       mockPrisma.chatThread.upsert.mockResolvedValue(threadRow);
 
-      const result = await service.createThreadOrGet(student, 'class-1');
+      const result = await service.createThreadOrGet(student, 'offering-1');
 
       expect(mockPrisma.chatThread.upsert).toHaveBeenCalledWith({
         where: {
-          teacherId_studentId_classId: {
+          teacherId_studentId_courseOfferingId: {
             teacherId: 'teacher-1',
             studentId: 'student-1',
-            classId: 'class-1',
+            courseOfferingId: 'offering-1',
           },
         },
         update: {},
         create: {
           teacherId: 'teacher-1',
           studentId: 'student-1',
-          classId: 'class-1',
+          courseOfferingId: 'offering-1',
         },
       });
       expect(result.id).toBe('thread-1');
     });
 
     it('rejects when enrollment is not APPROVED', async () => {
-      mockPrisma.class.findUnique.mockResolvedValue({
-        id: 'class-1',
+      mockPrisma.courseOffering.findUnique.mockResolvedValue({
+        id: 'offering-1',
+        sectionId: 'section-1',
         teacherId: 'teacher-1',
       });
       mockPrisma.enrollment.findUnique.mockResolvedValue({ status: 'PENDING' });
 
       await expect(
-        service.createThreadOrGet(student, 'class-1'),
-      ).rejects.toThrow(ForbiddenException);
+        service.createThreadOrGet(student, 'offering-1'),
+      ).rejects.toMatchObject({ code: 'CHAT_FORBIDDEN' });
       expect(mockPrisma.chatThread.upsert).not.toHaveBeenCalled();
     });
 
     it('throws NotFound when the class does not exist', async () => {
-      mockPrisma.class.findUnique.mockResolvedValue(null);
+      mockPrisma.courseOffering.findUnique.mockResolvedValue(null);
 
       await expect(
-        service.createThreadOrGet(student, 'class-1'),
-      ).rejects.toThrow(NotFoundException);
+        service.createThreadOrGet(student, 'offering-1'),
+      ).rejects.toMatchObject({ code: 'OFFERING_NOT_FOUND' });
     });
 
     it('creates a thread when the class teacher initiates with an approved student', async () => {
-      mockPrisma.class.findUnique.mockResolvedValue({
-        id: 'class-1',
+      mockPrisma.courseOffering.findUnique.mockResolvedValue({
+        id: 'offering-1',
+        sectionId: 'section-1',
         teacherId: 'teacher-1',
       });
       mockPrisma.enrollment.findUnique.mockResolvedValue({
@@ -112,62 +114,65 @@ describe('ChatService', () => {
 
       const result = await service.createThreadOrGet(
         teacher,
-        'class-1',
+        'offering-1',
         'student-1',
       );
 
       expect(mockPrisma.chatThread.upsert).toHaveBeenCalledWith({
         where: {
-          teacherId_studentId_classId: {
+          teacherId_studentId_courseOfferingId: {
             teacherId: 'teacher-1',
             studentId: 'student-1',
-            classId: 'class-1',
+            courseOfferingId: 'offering-1',
           },
         },
         update: {},
         create: {
           teacherId: 'teacher-1',
           studentId: 'student-1',
-          classId: 'class-1',
+          courseOfferingId: 'offering-1',
         },
       });
       expect(result.id).toBe('thread-1');
     });
 
     it('rejects a teacher who does not own the class', async () => {
-      mockPrisma.class.findUnique.mockResolvedValue({
-        id: 'class-1',
+      mockPrisma.courseOffering.findUnique.mockResolvedValue({
+        id: 'offering-1',
+        sectionId: 'section-1',
         teacherId: 'teacher-other',
       });
 
       await expect(
-        service.createThreadOrGet(teacher, 'class-1', 'student-1'),
-      ).rejects.toThrow(ForbiddenException);
+        service.createThreadOrGet(teacher, 'offering-1', 'student-1'),
+      ).rejects.toMatchObject({ code: 'CHAT_FORBIDDEN' });
       expect(mockPrisma.chatThread.upsert).not.toHaveBeenCalled();
     });
 
     it('rejects a teacher initiating with a non-approved student', async () => {
-      mockPrisma.class.findUnique.mockResolvedValue({
-        id: 'class-1',
+      mockPrisma.courseOffering.findUnique.mockResolvedValue({
+        id: 'offering-1',
+        sectionId: 'section-1',
         teacherId: 'teacher-1',
       });
       mockPrisma.enrollment.findUnique.mockResolvedValue({ status: 'PENDING' });
 
       await expect(
-        service.createThreadOrGet(teacher, 'class-1', 'student-1'),
-      ).rejects.toThrow(ForbiddenException);
+        service.createThreadOrGet(teacher, 'offering-1', 'student-1'),
+      ).rejects.toMatchObject({ code: 'CHAT_FORBIDDEN' });
       expect(mockPrisma.chatThread.upsert).not.toHaveBeenCalled();
     });
 
     it('rejects a student passing a studentId', async () => {
-      mockPrisma.class.findUnique.mockResolvedValue({
-        id: 'class-1',
+      mockPrisma.courseOffering.findUnique.mockResolvedValue({
+        id: 'offering-1',
+        sectionId: 'section-1',
         teacherId: 'teacher-1',
       });
 
       await expect(
-        service.createThreadOrGet(student, 'class-1', 'student-other'),
-      ).rejects.toThrow(ForbiddenException);
+        service.createThreadOrGet(student, 'offering-1', 'student-other'),
+      ).rejects.toMatchObject({ code: 'CHAT_FORBIDDEN' });
       expect(mockPrisma.chatThread.upsert).not.toHaveBeenCalled();
     });
   });
@@ -178,7 +183,7 @@ describe('ChatService', () => {
 
       await expect(
         service.getMessages('thread-1', 'intruder-1'),
-      ).rejects.toThrow(ForbiddenException);
+      ).rejects.toMatchObject({ code: 'THREAD_NOT_PARTICIPANT' });
     });
 
     it('returns the latest messages ascending with a next cursor when older exist', async () => {
@@ -289,7 +294,7 @@ describe('ChatService', () => {
 
       await expect(
         service.sendMessage('thread-1', 'intruder-1', 'hi'),
-      ).rejects.toThrow(ForbiddenException);
+      ).rejects.toMatchObject({ code: 'THREAD_NOT_PARTICIPANT' });
     });
 
     it('persists a message for a participant authored by the sender', async () => {
@@ -335,7 +340,11 @@ describe('ChatService', () => {
       mockPrisma.chatThread.findMany.mockResolvedValue([
         {
           ...threadRow,
-          class: { id: 'class-1', name: 'Math' },
+          offering: {
+            id: 'offering-1',
+            course: { name: 'Math' },
+            section: { name: 'Math 101' },
+          },
           teacher: { id: 'teacher-1', name: 'T' },
           student: { id: 'student-1', name: 'S' },
           messages: [{ text: 'last', authorId: 'student-1' }],

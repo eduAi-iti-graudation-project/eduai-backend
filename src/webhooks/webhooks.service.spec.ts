@@ -1,8 +1,4 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import {
-  UnauthorizedException,
-  InternalServerErrorException,
-} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { WebhooksService } from './webhooks.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -102,23 +98,23 @@ describe('WebhooksService', () => {
     return { id: `evt_${type}`, type, data: { object: data } };
   }
 
-  it('throws UnauthorizedException for an invalid signature', async () => {
+  it('throws for an invalid signature', async () => {
     mockStripe.webhooks.constructEvent.mockImplementation(() => {
       throw new Error('Signature verification failed');
     });
 
     await expect(
       service.handleStripeEvent(Buffer.from('{}'), 'bad-signature'),
-    ).rejects.toThrow(UnauthorizedException);
+    ).rejects.toMatchObject({ code: 'WEBHOOK_INVALID_SIGNATURE' });
     expect(mockPrisma.subscriptionEvent.findUnique).not.toHaveBeenCalled();
   });
 
-  it('throws InternalServerErrorException when the webhook secret is missing', async () => {
+  it('throws when the webhook secret is missing', async () => {
     delete process.env.STRIPE_WEBHOOK_SECRET;
 
     await expect(
       service.handleStripeEvent(Buffer.from('{}'), 'sig'),
-    ).rejects.toThrow(InternalServerErrorException);
+    ).rejects.toMatchObject({ code: 'WEBHOOK_UNCONFIGURED' });
   });
 
   it('is idempotent: skips already-processed events', async () => {

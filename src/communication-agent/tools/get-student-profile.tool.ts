@@ -35,7 +35,7 @@ export const createGetStudentProfileTool = (
 
     const attendance = await prisma.attendance.findMany({
       where: { studentId: input.studentId },
-      include: { class: { select: { name: true } } },
+      include: { section: { select: { name: true } } },
       orderBy: { date: 'desc' },
       take: 20,
     });
@@ -49,6 +49,7 @@ export const createGetStudentProfileTool = (
     return {
       grades: grades.map((g) => ({
         submissionId: g.submissionId,
+        criteriaId: g.criteria.id,
         pointsAwarded: g.pointsAwarded,
         maxPoints: g.criteria.maxPoints,
         percentage: Math.round((g.pointsAwarded / g.criteria.maxPoints) * 100),
@@ -58,7 +59,7 @@ export const createGetStudentProfileTool = (
       attendance: attendance.map((a) => ({
         date: a.date.toISOString(),
         status: a.status,
-        className: a.class.name,
+        className: a.section.name,
       })),
       previousAlerts: previousAlerts.map((a) => ({
         type: a.type,

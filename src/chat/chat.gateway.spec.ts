@@ -1,4 +1,4 @@
-import { ExecutionContext, UnauthorizedException } from '@nestjs/common';
+import { ExecutionContext } from '@nestjs/common';
 import type { Server, Socket } from 'socket.io';
 import { ChatGateway } from './chat.gateway';
 import { WsAuthGuard } from './ws-auth.guard';
@@ -40,9 +40,9 @@ describe('WsAuthGuard', () => {
 
   it('rejects a socket with no handshake token', async () => {
     const guard = new WsAuthGuard(supabase as never, prisma as never);
-    await expect(guard.canActivate(makeContext(makeSocket()))).rejects.toThrow(
-      UnauthorizedException,
-    );
+    await expect(
+      guard.canActivate(makeContext(makeSocket())),
+    ).rejects.toMatchObject({ code: 'AUTH_MISSING_HEADER' });
     expect(supabase.verifyToken).not.toHaveBeenCalled();
   });
 
@@ -52,7 +52,7 @@ describe('WsAuthGuard', () => {
     const guard = new WsAuthGuard(supabase as never, prisma as never);
     await expect(
       guard.canActivate(makeContext(makeSocket({ auth: { token: 'jwt' } }))),
-    ).rejects.toThrow(UnauthorizedException);
+    ).rejects.toMatchObject({ code: 'AUTH_USER_NOT_FOUND' });
   });
 
   it('authenticates a socket and stores the local user', async () => {

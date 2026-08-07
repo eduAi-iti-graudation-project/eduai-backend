@@ -1,10 +1,9 @@
-import {
-  Injectable,
-  NotFoundException,
-  ForbiddenException,
-} from '@nestjs/common';
+import { Injectable, HttpStatus, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { ApiError } from '../common/errors/api-error';
+import { ErrorCode } from '../common/errors/codes';
 import { NotificationsService } from '../notifications/notifications.service';
+import { ChatService } from '../chat/chat.service';
 import { HomeworkHelperAgent } from './homework-helper.agent';
 import type {
   HomeworkHelpRequestDto,
@@ -14,10 +13,13 @@ import type {
 
 @Injectable()
 export class HomeworkHelperService {
+  private readonly logger = new Logger(HomeworkHelperService.name);
+
   constructor(
     private readonly agent: HomeworkHelperAgent,
     private readonly prisma: PrismaService,
     private readonly notificationsService: NotificationsService,
+    private readonly chatService: ChatService,
   ) {}
 
   async help(
@@ -29,38 +31,50 @@ export class HomeworkHelperService {
       select: { id: true },
     });
     if (activeAttempt) {
-      throw new ForbiddenException(
-        'You cannot ask for help while a quiz is in progress',
+      throw new ApiError(
+        ErrorCode.HOMEWORK_FORBIDDEN,
+        HttpStatus.CONFLICT,
+        'You cannot ask for help while a quiz is in progress.',
       );
     }
 
     const result = await this.agent.help({
-      classId: dto.classId,
+      courseOfferingId: dto.courseOfferingId,
       studentId,
       question: dto.question,
       assignmentId: dto.assignmentId,
     });
 
+    let threadId: string | undefined;
     if (result.action === 'REDIRECT_TEACHER') {
-      await this.notifyTeacher(dto.classId, studentId, dto.question);
+      threadId = await this.openTeacherThread(studentId, dto.courseOfferingId);
+      await this.notifyTeacher(
+        dto.courseOfferingId,
+        studentId,
+        dto.question,
+        threadId,
+      );
     }
 
     return {
       answer: result.answer,
-      reply: result.answer,
+      reply: threadId
+        ? `${result.answer}\n\nI've opened a chat thread with your teacher — you can continue the conversation there.`
+        : result.answer,
       action: result.action,
       sources: result.sources,
       interactionId: result.interactionId,
       teacherNotified: result.action === 'REDIRECT_TEACHER',
+      ...(threadId ? { threadId } : {}),
     };
   }
 
   async getHistory(
     studentId: string,
-    classId?: string,
+    courseOfferingId?: string,
   ): Promise<HomeworkHelpHistoryResponseDto> {
     const where: Record<string, unknown> = { studentId };
-    if (classId) where.classId = classId;
+    if (courseOfferingId) where.courseOfferingId = courseOfferingId;
 
     const interactions = await this.prisma.homeworkHelpInteraction.findMany({
       where,
@@ -91,12 +105,18 @@ export class HomeworkHelperService {
     });
 
     if (!interaction) {
-      throw new NotFoundException('Interaction not found');
+      throw new ApiError(
+        ErrorCode.INTERACTION_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This interaction could not be found.',
+      );
     }
 
     if (interaction.studentId !== studentId) {
-      throw new ForbiddenException(
-        'You can only provide feedback on your own interactions',
+      throw new ApiError(
+        ErrorCode.HOMEWORK_FORBIDDEN,
+        HttpStatus.FORBIDDEN,
+        'You can only provide feedback on your own interactions.',
       );
     }
 
@@ -106,23 +126,54 @@ export class HomeworkHelperService {
     });
   }
 
+  private async openTeacherThread(
+    studentId: string,
+    courseOfferingId: string,
+  ): Promise<string | undefined> {
+    try {
+      const student = await this.prisma.user.findUnique({
+        where: { id: studentId },
+      });
+      if (!student) return undefined;
+
+      const thread = await this.chatService.createThreadOrGet(
+        student,
+        courseOfferingId,
+      );
+      return thread.id;
+    } catch (error) {
+      this.logger.warn(
+        `Could not open teacher chat thread for student ${studentId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return undefined;
+    }
+  }
+
   private async notifyTeacher(
-    classId: string,
+    courseOfferingId: string,
     studentId: string,
     question: string,
+    threadId?: string,
   ): Promise<void> {
-    const [classInfo, student] = await Promise.all([
-      this.prisma.class.findUnique({ where: { id: classId } }),
+    const [offering, student] = await Promise.all([
+      this.prisma.courseOffering.findUnique({
+        where: { id: courseOfferingId },
+      }),
       this.prisma.user.findUnique({ where: { id: studentId } }),
     ]);
 
-    if (!classInfo) return;
+    if (!offering) return;
 
     await this.notificationsService.notifyUser(
-      classInfo.teacherId,
+      offering.teacherId,
       'HOMEWORK_HELP_REDIRECT',
       `${student?.name ?? 'A student'} needs your help`,
-      `Student asked: "${question}"\n\nThe AI assistant redirected them to you because the question requires your judgment.`,
+      `Student asked: "${question}"\n\nThe AI assistant redirected them to you because the question requires your judgment.` +
+        (threadId
+          ? `\n\nYou can reply to them in the class chat thread: ${threadId}`
+          : ''),
     );
   }
 }

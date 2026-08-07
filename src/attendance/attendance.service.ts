@@ -4,7 +4,7 @@ import type { AttendanceStatus, Attendance } from '@prisma/client';
 
 interface ImportRecord {
   studentId: string;
-  classId: string;
+  sectionId: string;
   date: string;
   status: AttendanceStatus;
 }
@@ -19,15 +19,15 @@ export class AttendanceService {
     for (const record of records) {
       const result = await this.prisma.attendance.upsert({
         where: {
-          studentId_classId_date: {
+          studentId_sectionId_date: {
             studentId: record.studentId,
-            classId: record.classId,
+            sectionId: record.sectionId,
             date: new Date(record.date),
           },
         },
         create: {
           studentId: record.studentId,
-          classId: record.classId,
+          sectionId: record.sectionId,
           date: new Date(record.date),
           status: record.status,
         },
@@ -44,14 +44,14 @@ export class AttendanceService {
   getByStudent(studentId: string) {
     return this.prisma.attendance.findMany({
       where: { studentId },
-      include: { class: true },
+      include: { section: { include: { gradeLevel: true } } },
       orderBy: { date: 'desc' },
     });
   }
 
-  getByClass(classId: string) {
+  getByClass(sectionId: string) {
     return this.prisma.attendance.findMany({
-      where: { classId },
+      where: { sectionId },
       include: { student: true },
       orderBy: { date: 'desc' },
     });

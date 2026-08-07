@@ -5,7 +5,7 @@ const AttendanceStatusEnum = z.enum(['PRESENT', 'ABSENT', 'LATE', 'EXCUSED']);
 
 const AttendanceRecordSchema = z.object({
   studentId: z.string().uuid(),
-  classId: z.string().uuid(),
+  sectionId: z.string().uuid(),
   date: z.string(),
   status: AttendanceStatusEnum,
 });
@@ -17,7 +17,7 @@ export const ImportAttendanceSchema = z.object({
 const AttendanceResponseSchema = z.object({
   id: z.string().uuid(),
   studentId: z.string().uuid(),
-  classId: z.string().uuid(),
+  sectionId: z.string().uuid(),
   date: z.string(),
   status: AttendanceStatusEnum,
   createdAt: z.string(),

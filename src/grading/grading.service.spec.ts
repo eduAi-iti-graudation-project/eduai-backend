@@ -1,9 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { GradingService } from './grading.service';
+import { GradingAgent } from './grading.agent';
 import { PrismaService } from '../prisma/prisma.service';
 import { CommunicationAgentService } from '../communication-agent/communication-agent.service';
 import { FeedbackWriterService } from '../feedback-writer/feedback-writer.service';
-import { NotFoundException } from '@nestjs/common';
 
 describe('GradingService', () => {
   let service: GradingService;
@@ -20,10 +20,11 @@ describe('GradingService', () => {
       updateMany: jest.fn(),
       upsert: jest.fn(),
     },
-    rubricCriteria: {
-      findMany: jest.fn(),
-    },
     $transaction: jest.fn(),
+  };
+
+  const mockGradingAgent = {
+    grade: jest.fn(),
   };
 
   const mockCommunicationAgentService = {
@@ -39,6 +40,7 @@ describe('GradingService', () => {
       providers: [
         GradingService,
         { provide: PrismaService, useValue: mockPrisma },
+        { provide: GradingAgent, useValue: mockGradingAgent },
         {
           provide: CommunicationAgentService,
           useValue: mockCommunicationAgentService,
@@ -55,23 +57,79 @@ describe('GradingService', () => {
   });
 
   describe('gradeSubmission', () => {
-    it('should upsert scores and set status to REVIEW_READY', async () => {
-      mockPrisma.rubricCriteria.findMany.mockResolvedValue([
-        { id: 'c1', maxPoints: 10 },
-        { id: 'c2', maxPoints: 15 },
-      ]);
+    it('should upsert AI scores and set status to REVIEW_READY', async () => {
+      mockGradingAgent.grade.mockResolvedValue({
+        scores: [
+          { criterionId: 'c1', pointsAwarded: 8, feedback: 'Clear thesis' },
+          { criterionId: 'c2', pointsAwarded: 12, feedback: 'Good evidence' },
+        ],
+        overallFeedback: 'Well done',
+      });
 
       await service.gradeSubmission('submission-id');
 
+      expect(mockGradingAgent.grade).toHaveBeenCalledWith('submission-id');
       expect(mockPrisma.gradingScore.upsert).toHaveBeenCalledTimes(2);
+      expect(mockPrisma.gradingScore.upsert).toHaveBeenCalledWith({
+        where: {
+          submissionId_criteriaId: {
+            submissionId: 'submission-id',
+            criteriaId: 'c1',
+          },
+        },
+        create: {
+          submissionId: 'submission-id',
+          criteriaId: 'c1',
+          pointsAwarded: 8,
+          aiFeedback: 'Clear thesis',
+        },
+        update: { pointsAwarded: 8, aiFeedback: 'Clear thesis' },
+      });
+      expect(mockPrisma.submission.update).toHaveBeenLastCalledWith({
+        where: { id: 'submission-id' },
+        data: { status: 'REVIEW_READY', aiOverallFeedback: 'Well done' },
+      });
+    });
+
+    it('should not persist an overall summary when the agent omits it', async () => {
+      mockGradingAgent.grade.mockResolvedValue({ scores: [] });
+
+      await service.gradeSubmission('submission-id');
+
       expect(mockPrisma.submission.update).toHaveBeenLastCalledWith({
         where: { id: 'submission-id' },
         data: { status: 'REVIEW_READY' },
       });
     });
 
+    it('should not upsert scores when the agent returns none', async () => {
+      mockGradingAgent.grade.mockResolvedValue({ scores: [] });
+
+      await service.gradeSubmission('submission-id');
+
+      expect(mockPrisma.gradingScore.upsert).not.toHaveBeenCalled();
+      expect(mockPrisma.submission.update).toHaveBeenLastCalledWith({
+        where: { id: 'submission-id' },
+        data: { status: 'REVIEW_READY' },
+      });
+    });
+
+    it('should leave the submission reviewable and rethrow when AI grading fails', async () => {
+      mockGradingAgent.grade.mockRejectedValue(new Error('LLM down'));
+
+      await expect(service.gradeSubmission('submission-id')).rejects.toThrow(
+        'LLM down',
+      );
+
+      expect(mockPrisma.submission.update).toHaveBeenLastCalledWith({
+        where: { id: 'submission-id' },
+        data: { status: 'REVIEW_READY' },
+      });
+      expect(mockPrisma.gradingScore.upsert).not.toHaveBeenCalled();
+    });
+
     it('should not call FeedbackWriterService during gradeSubmission', async () => {
-      mockPrisma.rubricCriteria.findMany.mockResolvedValue([]);
+      mockGradingAgent.grade.mockResolvedValue({ scores: [] });
 
       await service.gradeSubmission('submission-id');
 
@@ -153,12 +211,12 @@ describe('GradingService', () => {
       );
     });
 
-    it('should throw NotFoundException for missing submission', async () => {
+    it('should throw for missing submission', async () => {
       mockPrisma.submission.findUnique.mockResolvedValue(null);
 
-      await expect(service.confirmAll('bad-id')).rejects.toThrow(
-        NotFoundException,
-      );
+      await expect(service.confirmAll('bad-id')).rejects.toMatchObject({
+        code: 'SUBMISSION_NOT_FOUND',
+      });
     });
   });
 
@@ -182,12 +240,12 @@ describe('GradingService', () => {
       expect(result).toHaveLength(1);
     });
 
-    it('should throw NotFoundException for missing submission', async () => {
+    it('should throw for missing submission', async () => {
       mockPrisma.submission.findUnique.mockResolvedValue(null);
 
-      await expect(service.getScores('bad-id')).rejects.toThrow(
-        NotFoundException,
-      );
+      await expect(service.getScores('bad-id')).rejects.toMatchObject({
+        code: 'SUBMISSION_NOT_FOUND',
+      });
     });
   });
 
@@ -220,17 +278,17 @@ describe('GradingService', () => {
         isConfirmed: true,
       });
 
-      await expect(service.updateScore('score-1', 10)).rejects.toThrow(
-        'Cannot edit a confirmed score',
-      );
+      await expect(service.updateScore('score-1', 10)).rejects.toMatchObject({
+        code: 'CONFLICT',
+      });
     });
 
-    it('should throw NotFoundException for missing score', async () => {
+    it('should throw for missing score', async () => {
       mockPrisma.gradingScore.findUnique.mockResolvedValue(null);
 
-      await expect(service.updateScore('bad-id', 5)).rejects.toThrow(
-        NotFoundException,
-      );
+      await expect(service.updateScore('bad-id', 5)).rejects.toMatchObject({
+        code: 'SCORE_NOT_FOUND',
+      });
     });
   });
 });

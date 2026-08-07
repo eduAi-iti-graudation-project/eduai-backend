@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { PrismaService } from '../../prisma/prisma.service';
 
 export const LookupAssignmentInputSchema = z.object({
-  classId: z.string().uuid(),
+  courseOfferingId: z.string().uuid(),
   query: z.string(),
   assignmentId: z.string().uuid().optional(),
 });
@@ -55,7 +55,9 @@ export function createLookupAssignmentTool(prisma: PrismaService) {
     execute: async (
       input: LookupAssignmentInput,
     ): Promise<z.infer<typeof LookupAssignmentOutputSchema>> => {
-      const where: Record<string, unknown> = { classId: input.classId };
+      const where: Record<string, unknown> = {
+        courseOfferingId: input.courseOfferingId,
+      };
       if (input.assignmentId) {
         where.id = input.assignmentId;
       } else {

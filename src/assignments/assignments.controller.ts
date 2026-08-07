@@ -35,11 +35,13 @@ export class AssignmentsController {
 
   @Roles('TEACHER', 'STUDENT')
   @Get()
-  @ApiOperation({ summary: 'List assignments, optionally filtered by class' })
-  @ApiQuery({ name: 'classId', required: false })
+  @ApiOperation({
+    summary: 'List assignments, optionally filtered by course offering',
+  })
+  @ApiQuery({ name: 'courseOfferingId', required: false })
   @ApiOkResponse({ type: AssignmentDto, isArray: true })
-  findAll(@Query('classId') classId?: string) {
-    return this.assignmentsService.findAll(classId);
+  findAll(@Query('courseOfferingId') courseOfferingId?: string) {
+    return this.assignmentsService.findAll(courseOfferingId);
   }
 
   @Roles('TEACHER', 'STUDENT')
