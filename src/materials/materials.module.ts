@@ -1,10 +1,10 @@
 import { Module } from '@nestjs/common';
 import { MaterialsService } from './materials.service';
 import { MaterialsController } from './materials.controller';
-import { MulterModule } from '@nestjs/platform-express';
+import { AuthModule } from '../auth/auth.module';
 
 @Module({
-  imports: [MulterModule.register({ dest: './uploads' })],
+  imports: [AuthModule],
   providers: [MaterialsService],
   controllers: [MaterialsController],
   exports: [MaterialsService],

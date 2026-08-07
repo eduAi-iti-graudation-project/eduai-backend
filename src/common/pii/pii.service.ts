@@ -13,10 +13,10 @@ export class PiiService {
   private readonly uuidPattern =
     /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
 
-  redact(text: string): RedactionResult {
+  redact(text: string, startIndex = 0): RedactionResult {
     const replacements = new Map<string, string>();
     let redacted = text;
-    let index = 0;
+    let index = startIndex;
 
     const replaceWithPlaceholder = (match: string): string => {
       const placeholder = `[REDACTED_${index++}]`;

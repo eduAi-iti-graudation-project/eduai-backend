@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { LlmService } from '../../../common/llm/llm.service';
-import { QuestionTypeEnum } from '../../dto';
+import { QuestionTypeEnum, QuizDifficultyEnum } from '../../dto';
 
 const GeneratedQuestionSchema = z.object({
   type: QuestionTypeEnum,
@@ -25,6 +25,7 @@ export const GenerateQuestionsInputSchema = z.object({
   count: z.number().int().min(1).max(20).default(5),
   topic: z.string().nullish(),
   avoidTopics: z.array(z.string()).nullish(),
+  difficulty: QuizDifficultyEnum.nullish(),
 });
 
 export const GenerateQuestionsOutputSchema = z.object({
@@ -51,6 +52,12 @@ For SHORT_ANSWER and ESSAY questions:
 Grounding:
 - Base every question ONLY on the provided curriculum context. Never use outside knowledge.
 - If the context says no material was found, return an empty questions array ([]).
+
+Difficulty:
+- Match the requested difficulty for every question:
+  EASY — recall-level: definitions, facts, and basic comprehension.
+  MEDIUM — application-level: questions that require understanding and applying concepts.
+  HARD — analysis/evaluation-level: questions that require reasoning, synthesizing, or evaluating ideas.
 
 Return valid JSON with EXACTLY these fields:
 {
@@ -81,6 +88,7 @@ export function createGenerateQuestionsTool(llmService: LlmService) {
         `Topic: ${input.topic ?? 'General'}`,
         `Number of questions: ${input.count}`,
         `Question types: ${types.join(', ')}`,
+        `Difficulty: ${input.difficulty ?? 'MEDIUM'}`,
         input.avoidTopics?.length
           ? `Avoid these topics: ${input.avoidTopics.join(', ')}`
           : null,

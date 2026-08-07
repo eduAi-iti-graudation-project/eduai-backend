@@ -12,6 +12,7 @@ import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { QuizzesService } from './quizzes.service';
 import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
+import { RequiresTier } from '../auth/requires-tier.decorator';
 import {
   CreateQuizDto,
   UpdateQuizDto,
@@ -28,6 +29,7 @@ export class QuizzesController {
 
   // ─── AI Generation ────────────────────────────────────
   @Roles('TEACHER')
+  @RequiresTier('PRO', 'ENTERPRISE')
   @Post('generate')
   @ApiOperation({ summary: 'AI-generate a quiz from class materials' })
   generate(@Body() dto: GenerateQuizDto, @CurrentUser('id') teacherId: string) {

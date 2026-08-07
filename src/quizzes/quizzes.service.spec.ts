@@ -1,10 +1,4 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import {
-  BadRequestException,
-  ForbiddenException,
-  GoneException,
-  NotFoundException,
-} from '@nestjs/common';
 import { QuizzesService } from './quizzes.service';
 import { QuizzesGradingService } from './quizzes-grading.service';
 import { QuizGenerationAgent } from './agents/quiz-generation.agent';
@@ -72,7 +66,7 @@ describe('QuizzesService', () => {
   it('should create a quiz with questions', async () => {
     const dto = {
       title: 'Test Quiz',
-      classId: 'class-1',
+      courseOfferingId: 'offering-1',
       teacherId: 'teacher-1',
       questions: [
         {
@@ -134,7 +128,7 @@ describe('QuizzesService', () => {
         id: 'quiz-1',
         title: 'Quiz 1',
         description: null,
-        classId: 'class-1',
+        courseOfferingId: 'offering-1',
         teacherId: 'teacher-1',
         timeLimit: null,
         passingScore: null,
@@ -145,7 +139,7 @@ describe('QuizzesService', () => {
       },
     ]);
 
-    const result = await service.findAll('class-1');
+    const result = await service.findAll('offering-1');
     expect(result).toHaveLength(1);
     expect(result[0].questionCount).toBe(3);
   });
@@ -156,7 +150,7 @@ describe('QuizzesService', () => {
       id: 'quiz-1',
       title: 'Quiz 1',
       description: null,
-      classId: 'class-1',
+      courseOfferingId: 'offering-1',
       teacherId: 'teacher-1',
       timeLimit: null,
       passingScore: null,
@@ -203,9 +197,9 @@ describe('QuizzesService', () => {
       status: 'PUBLISHED',
     });
 
-    await expect(service.publish('quiz-1')).rejects.toThrow(
-      BadRequestException,
-    );
+    await expect(service.publish('quiz-1')).rejects.toMatchObject({
+      code: 'QUIZ_DRAFT_ONLY',
+    });
   });
 
   // ─── Delete ──────────────────────────────────────────
@@ -247,9 +241,9 @@ describe('QuizzesService', () => {
       id: 'attempt-1',
     });
 
-    await expect(service.startAttempt('quiz-1', 'student-1')).rejects.toThrow(
-      BadRequestException,
-    );
+    await expect(
+      service.startAttempt('quiz-1', 'student-1'),
+    ).rejects.toMatchObject({ code: 'QUIZ_ALREADY_ATTEMPTED' });
   });
 
   it('should reject starting on non-published quiz', async () => {
@@ -258,9 +252,9 @@ describe('QuizzesService', () => {
       status: 'DRAFT',
     });
 
-    await expect(service.startAttempt('quiz-1', 'student-1')).rejects.toThrow(
-      BadRequestException,
-    );
+    await expect(
+      service.startAttempt('quiz-1', 'student-1'),
+    ).rejects.toMatchObject({ code: 'QUIZ_NOT_PUBLISHED' });
   });
 
   it('should return expiresAt when the quiz has a time limit', async () => {
@@ -278,7 +272,10 @@ describe('QuizzesService', () => {
       status: 'IN_PROGRESS',
     });
 
-    const result = await service.startAttempt('quiz-1', 'student-1');
+    const result = (await service.startAttempt('quiz-1', 'student-1')) as {
+      expiresAt: Date;
+      serverNow: string;
+    };
     expect(result.expiresAt).toEqual(new Date('2026-07-31T10:10:00.000Z'));
     expect(result.serverNow).toEqual(expect.any(String));
   });
@@ -366,9 +363,9 @@ describe('QuizzesService', () => {
         ],
       });
 
-    const result = await service.submitAttempt('quiz-1', 'student-1', [
+    const result = (await service.submitAttempt('quiz-1', 'student-1', [
       { questionId: 'q-1', answer: '4' },
-    ]);
+    ])) as { status: string };
 
     expect(result.status).toBe('COMPLETED');
     expect(mockGradingService.gradeMcq).toHaveBeenCalledWith('4', [
@@ -442,7 +439,7 @@ describe('QuizzesService', () => {
 
     await expect(
       service.submitAttempt('quiz-1', 'student-1', []),
-    ).rejects.toThrow(BadRequestException);
+    ).rejects.toMatchObject({ code: 'ATTEMPT_ALREADY_SUBMITTED' });
   });
 
   it('should reject submission after the time limit expires', async () => {
@@ -463,7 +460,7 @@ describe('QuizzesService', () => {
       service.submitAttempt('quiz-1', 'student-1', [
         { questionId: 'q-1', answer: '4' },
       ]),
-    ).rejects.toThrow(GoneException);
+    ).rejects.toMatchObject({ code: 'ATTEMPT_NOT_IN_PROGRESS' });
   });
 
   it('should accept submission within the grace period after the deadline', async () => {
@@ -490,7 +487,9 @@ describe('QuizzesService', () => {
       id: 'attempt-1',
     });
 
-    const result = await service.submitAttempt('quiz-1', 'student-1', []);
+    const result = (await service.submitAttempt('quiz-1', 'student-1', [])) as {
+      status: string;
+    };
 
     expect(result.status).toBe('COMPLETED');
     expect(mockPrisma.quizAttempt.update).toHaveBeenCalled();
@@ -549,7 +548,7 @@ describe('QuizzesService', () => {
 
     await expect(
       service.reportViolation('attempt-1', 'student-1', 'TAB_SWITCH'),
-    ).rejects.toThrow(ForbiddenException);
+    ).rejects.toMatchObject({ code: 'ATTEMPT_FORBIDDEN' });
   });
 
   it('should reject violation reports on completed attempts', async () => {
@@ -562,7 +561,7 @@ describe('QuizzesService', () => {
 
     await expect(
       service.reportViolation('attempt-1', 'student-1', 'TAB_SWITCH'),
-    ).rejects.toThrow(BadRequestException);
+    ).rejects.toMatchObject({ code: 'ATTEMPT_NOT_IN_PROGRESS' });
   });
 
   it('should reject violation reports for missing attempts', async () => {
@@ -570,7 +569,7 @@ describe('QuizzesService', () => {
 
     await expect(
       service.reportViolation('missing', 'student-1', 'TAB_SWITCH'),
-    ).rejects.toThrow(NotFoundException);
+    ).rejects.toMatchObject({ code: 'ATTEMPT_NOT_FOUND' });
   });
 
   // ─── Confirm Attempt ─────────────────────────────────
@@ -596,7 +595,7 @@ describe('QuizzesService', () => {
           id: 'quiz-1',
           title: 'Test Quiz',
           description: null,
-          classId: 'class-1',
+          courseOfferingId: 'offering-1',
           teacherId: 'teacher-1',
           timeLimit: null,
           passingScore: null,
@@ -676,7 +675,7 @@ describe('QuizzesService', () => {
           id: 'quiz-1',
           title: 'Test Quiz',
           description: null,
-          classId: 'class-1',
+          courseOfferingId: 'offering-1',
           teacherId: 'teacher-1',
           timeLimit: 15,
           passingScore: 5,
@@ -707,7 +706,7 @@ describe('QuizzesService', () => {
 
       const result = await service.getAttempt('attempt-1');
 
-      expect(result.quizTitle).toBeUndefined();
+      expect((result as { quizTitle?: unknown }).quizTitle).toBeUndefined();
       expect(result.quiz.title).toBe('Test Quiz');
       expect(result.quiz.questions).toEqual([
         { id: 'q-1', question: 'Q1', points: 5, order: 0 },
@@ -725,9 +724,9 @@ describe('QuizzesService', () => {
     it('should throw NotFound for missing attempt', async () => {
       mockPrisma.quizAttempt.findUnique.mockResolvedValue(null);
 
-      await expect(service.getAttempt('missing')).rejects.toThrow(
-        NotFoundException,
-      );
+      await expect(service.getAttempt('missing')).rejects.toMatchObject({
+        code: 'ATTEMPT_NOT_FOUND',
+      });
     });
   });
 
@@ -753,8 +752,14 @@ describe('QuizzesService', () => {
 
       const result = await service.getAttemptsByQuiz('quiz-1');
 
-      expect(result[0].studentName).toBeUndefined();
-      expect(result[0].violationCount).toBeUndefined();
+      expect(
+        (result[0] as { studentName?: unknown; violationCount?: unknown })
+          .studentName,
+      ).toBeUndefined();
+      expect(
+        (result[0] as { studentName?: unknown; violationCount?: unknown })
+          .violationCount,
+      ).toBeUndefined();
       expect(result[0].student).toEqual({
         id: 'student-1',
         name: 'Test Student',

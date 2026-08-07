@@ -48,6 +48,7 @@ export class ProviderService {
               Authorization: `Bearer ${this.apiKey}`,
               'Content-Type': 'application/json',
             },
+            timeout: 60000,
           },
         ),
       );
@@ -56,7 +57,18 @@ export class ProviderService {
         '[ProviderService] response data:',
         JSON.stringify(data, null, 2),
       );
-      return (data.output_text || '').trim();
+
+      const output = (data.output_text || '').trim();
+      if (!output) {
+        console.error(
+          '[ProviderService] empty output_text, body:',
+          JSON.stringify(data, null, 2),
+        );
+        throw new Error(
+          'Provider returned empty output_text — the model generated tokens but the gateway did not deliver them',
+        );
+      }
+      return output;
     } catch (err: unknown) {
       if (err && typeof err === 'object' && 'isAxiosError' in err) {
         const axiosErr = err as {

@@ -1,15 +1,10 @@
-import {
-  Injectable,
-  Logger,
-  NotFoundException,
-  BadRequestException,
-  ForbiddenException,
-  GoneException,
-} from '@nestjs/common';
+import { Injectable, Logger, HttpStatus } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { QuizzesGradingService } from './quizzes-grading.service';
 import { QuizGenerationAgent } from './agents/quiz-generation.agent';
+import { ApiError } from '../common/errors/api-error';
+import { ErrorCode } from '../common/errors/codes';
 
 const SUBMIT_GRACE_PERIOD_MS = 30_000;
 
@@ -32,11 +27,12 @@ export class QuizzesService {
 
   // ─── AI Generation ────────────────────────────────────
   async generate(params: {
-    classId: string;
+    courseOfferingId: string;
     teacherId: string;
     topic?: string;
     questionCount?: number;
     types?: ('MCQ' | 'TRUE_FALSE' | 'SHORT_ANSWER' | 'ESSAY')[];
+    difficulty?: 'EASY' | 'MEDIUM' | 'HARD';
   }) {
     return this.generationAgent.generate(params);
   }
@@ -45,7 +41,7 @@ export class QuizzesService {
   async create(data: {
     title: string;
     description?: string;
-    classId: string;
+    courseOfferingId: string;
     teacherId: string;
     timeLimit?: number;
     passingScore?: number;
@@ -61,7 +57,7 @@ export class QuizzesService {
       data: {
         title: data.title,
         description: data.description ?? null,
-        classId: data.classId,
+        courseOfferingId: data.courseOfferingId,
         teacherId: data.teacherId,
         timeLimit: data.timeLimit ?? null,
         passingScore: data.passingScore ?? null,
@@ -81,9 +77,9 @@ export class QuizzesService {
     return quiz;
   }
 
-  async findAll(classId?: string, teacherId?: string) {
+  async findAll(courseOfferingId?: string, teacherId?: string) {
     const where: Prisma.QuizWhereInput = {};
-    if (classId) where.classId = classId;
+    if (courseOfferingId) where.courseOfferingId = courseOfferingId;
     if (teacherId) where.teacherId = teacherId;
 
     const quizzes = await this.prisma.quiz.findMany({
@@ -96,7 +92,7 @@ export class QuizzesService {
       id: q.id,
       title: q.title,
       description: q.description,
-      classId: q.classId,
+      courseOfferingId: q.courseOfferingId,
       teacherId: q.teacherId,
       timeLimit: q.timeLimit,
       passingScore: q.passingScore,
@@ -115,7 +111,13 @@ export class QuizzesService {
       },
     });
 
-    if (!quiz) throw new NotFoundException('Quiz not found');
+    if (!quiz) {
+      throw new ApiError(
+        ErrorCode.QUIZ_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This quiz could not be found.',
+      );
+    }
 
     if (studentView) {
       return {
@@ -163,7 +165,13 @@ export class QuizzesService {
     },
   ) {
     const existing = await this.prisma.quiz.findUnique({ where: { id } });
-    if (!existing) throw new NotFoundException('Quiz not found');
+    if (!existing) {
+      throw new ApiError(
+        ErrorCode.QUIZ_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This quiz could not be found.',
+      );
+    }
 
     if (data.questions) {
       await this.prisma.$transaction([
@@ -206,9 +214,19 @@ export class QuizzesService {
 
   async publish(id: string) {
     const quiz = await this.prisma.quiz.findUnique({ where: { id } });
-    if (!quiz) throw new NotFoundException('Quiz not found');
+    if (!quiz) {
+      throw new ApiError(
+        ErrorCode.QUIZ_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This quiz could not be found.',
+      );
+    }
     if (quiz.status !== 'DRAFT')
-      throw new BadRequestException('Only DRAFT quizzes can be published');
+      throw new ApiError(
+        ErrorCode.QUIZ_DRAFT_ONLY,
+        HttpStatus.BAD_REQUEST,
+        'Only draft quizzes can be published.',
+      );
 
     return this.prisma.quiz.update({
       where: { id },
@@ -218,7 +236,13 @@ export class QuizzesService {
 
   async remove(id: string) {
     const quiz = await this.prisma.quiz.findUnique({ where: { id } });
-    if (!quiz) throw new NotFoundException('Quiz not found');
+    if (!quiz) {
+      throw new ApiError(
+        ErrorCode.QUIZ_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This quiz could not be found.',
+      );
+    }
 
     await this.prisma.quiz.delete({ where: { id } });
   }
@@ -226,15 +250,29 @@ export class QuizzesService {
   // ─── Attempts ─────────────────────────────────────────
   async startAttempt(quizId: string, studentId: string) {
     const quiz = await this.prisma.quiz.findUnique({ where: { id: quizId } });
-    if (!quiz) throw new NotFoundException('Quiz not found');
+    if (!quiz) {
+      throw new ApiError(
+        ErrorCode.QUIZ_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This quiz could not be found.',
+      );
+    }
     if (quiz.status !== 'PUBLISHED')
-      throw new BadRequestException('Quiz is not published');
+      throw new ApiError(
+        ErrorCode.QUIZ_NOT_PUBLISHED,
+        HttpStatus.BAD_REQUEST,
+        'This quiz is not published yet.',
+      );
 
     const existing = await this.prisma.quizAttempt.findUnique({
       where: { quizId_studentId: { quizId, studentId } },
     });
     if (existing)
-      throw new BadRequestException('You already attempted this quiz');
+      throw new ApiError(
+        ErrorCode.QUIZ_ALREADY_ATTEMPTED,
+        HttpStatus.CONFLICT,
+        'You have already taken this quiz.',
+      );
 
     const attempt = await this.prisma.quizAttempt.create({
       data: { quizId, studentId },
@@ -268,9 +306,19 @@ export class QuizzesService {
       },
     });
 
-    if (!attempt) throw new NotFoundException('Attempt not found');
+    if (!attempt) {
+      throw new ApiError(
+        ErrorCode.ATTEMPT_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This quiz attempt could not be found.',
+      );
+    }
     if (attempt.status === 'COMPLETED')
-      throw new BadRequestException('Already submitted');
+      throw new ApiError(
+        ErrorCode.ATTEMPT_ALREADY_SUBMITTED,
+        HttpStatus.CONFLICT,
+        'This attempt has already been submitted.',
+      );
 
     if (attempt.quiz.timeLimit) {
       const deadline =
@@ -278,7 +326,11 @@ export class QuizzesService {
         attempt.quiz.timeLimit * 60_000 +
         SUBMIT_GRACE_PERIOD_MS;
       if (Date.now() > deadline) {
-        throw new GoneException('Quiz time expired');
+        throw new ApiError(
+          ErrorCode.ATTEMPT_NOT_IN_PROGRESS,
+          HttpStatus.GONE,
+          'The quiz time has expired.',
+        );
       }
     }
 
@@ -378,13 +430,25 @@ export class QuizzesService {
       where: { id: attemptId },
     });
 
-    if (!attempt) throw new NotFoundException('Attempt not found');
+    if (!attempt) {
+      throw new ApiError(
+        ErrorCode.ATTEMPT_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This quiz attempt could not be found.',
+      );
+    }
     if (attempt.studentId !== studentId)
-      throw new ForbiddenException(
-        'You can only report violations on your own attempt',
+      throw new ApiError(
+        ErrorCode.ATTEMPT_FORBIDDEN,
+        HttpStatus.FORBIDDEN,
+        'You can only access your own quiz attempts.',
       );
     if (attempt.status !== 'IN_PROGRESS')
-      throw new BadRequestException('Attempt is not in progress');
+      throw new ApiError(
+        ErrorCode.ATTEMPT_NOT_IN_PROGRESS,
+        HttpStatus.CONFLICT,
+        'This attempt is no longer in progress.',
+      );
 
     const violations = toViolations(attempt.violations);
 
@@ -423,7 +487,13 @@ export class QuizzesService {
       },
     });
 
-    if (!attempt) throw new NotFoundException('Attempt not found');
+    if (!attempt) {
+      throw new ApiError(
+        ErrorCode.ATTEMPT_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This quiz attempt could not be found.',
+      );
+    }
 
     return {
       id: attempt.id,
@@ -482,7 +552,13 @@ export class QuizzesService {
       include: { answers: true },
     });
 
-    if (!attempt) throw new NotFoundException('Attempt not found');
+    if (!attempt) {
+      throw new ApiError(
+        ErrorCode.ATTEMPT_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This quiz attempt could not be found.',
+      );
+    }
 
     await this.prisma.quizAnswer.updateMany({
       where: { attemptId, isConfirmed: false },
@@ -511,7 +587,13 @@ export class QuizzesService {
       where: { id: answerId },
     });
 
-    if (!answer) throw new NotFoundException('Answer not found');
+    if (!answer) {
+      throw new ApiError(
+        ErrorCode.QUIZ_ANSWER_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This quiz answer could not be found.',
+      );
+    }
 
     const updated = await this.prisma.quizAnswer.update({
       where: { id: answerId },

@@ -3,7 +3,6 @@ import { SubmissionsService } from './submissions.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { GradingService } from '../grading/grading.service';
 import { NotificationsService } from '../notifications/notifications.service';
-import { NotFoundException, BadRequestException } from '@nestjs/common';
 import pdfParse from 'pdf-parse';
 
 jest.mock('pdf-parse');
@@ -12,10 +11,15 @@ const mockPdfParse = pdfParse as jest.Mock;
 describe('SubmissionsService', () => {
   let service: SubmissionsService;
 
+  const organizationId = 'org-1';
+
   const mockPrisma = {
+    assignment: {
+      findFirst: jest.fn(),
+    },
     submission: {
       create: jest.fn(),
-      findUnique: jest.fn(),
+      findFirst: jest.fn(),
       findMany: jest.fn(),
     },
     submissionChunk: {
@@ -66,10 +70,13 @@ describe('SubmissionsService', () => {
         status: 'SUBMITTED',
       };
 
+      mockPrisma.assignment.findFirst.mockResolvedValue({
+        id: dto.assignmentId,
+      });
       mockPrisma.submission.create.mockResolvedValue(createdSubmission);
       mockPrisma.submissionChunk.createMany.mockResolvedValue({ count: 1 });
 
-      const result = await service.create(dto, studentId);
+      const result = await service.create(dto, studentId, organizationId);
 
       expect(mockPrisma.submission.create).toHaveBeenCalledWith({
         data: {
@@ -109,19 +116,49 @@ describe('SubmissionsService', () => {
         status: 'SUBMITTED',
       };
 
+      mockPrisma.assignment.findFirst.mockResolvedValue({
+        id: dto.assignmentId,
+      });
       mockPrisma.submission.create.mockResolvedValue(createdSubmission);
       mockPrisma.submissionChunk.createMany.mockResolvedValue({ count: 1 });
 
-      const result = await service.create(dto, studentId);
+      const result = await service.create(dto, studentId, organizationId);
 
       expect(mockGradingService.gradeSubmission).toHaveBeenCalled();
       expect(result).not.toHaveProperty('scores');
+    });
+
+    it('should reject a duplicate submission for the same assignment', async () => {
+      const dto = {
+        assignmentId: 'assignment-id',
+        content: 'A second attempt.',
+      };
+
+      mockPrisma.assignment.findFirst.mockResolvedValue({
+        id: dto.assignmentId,
+      });
+      mockPrisma.submission.findFirst.mockResolvedValue({
+        id: 'existing-submission',
+        assignmentId: dto.assignmentId,
+        studentId,
+        status: 'SUBMITTED',
+      });
+
+      await expect(
+        service.create(dto, studentId, organizationId),
+      ).rejects.toMatchObject({ code: 'SUBMISSION_ALREADY_EXISTS' });
+
+      expect(mockPrisma.submission.findFirst).toHaveBeenCalledWith({
+        where: { assignmentId: dto.assignmentId, studentId },
+      });
+      expect(mockPrisma.submission.create).not.toHaveBeenCalled();
     });
   });
 
   describe('createFromPdf', () => {
     beforeEach(() => {
       mockPdfParse.mockReset();
+      mockPrisma.submission.findFirst.mockReset();
     });
 
     it('should parse PDF and create submission with extracted text', async () => {
@@ -130,6 +167,7 @@ describe('SubmissionsService', () => {
       const pdfText = 'Extracted PDF content for grading.';
       mockPdfParse.mockResolvedValue({ text: pdfText });
 
+      mockPrisma.assignment.findFirst.mockResolvedValue({ id: assignmentId });
       mockPrisma.submission.create.mockResolvedValue({
         id: 'sub-id',
         assignmentId,
@@ -142,6 +180,7 @@ describe('SubmissionsService', () => {
         Buffer.from('fake pdf'),
         assignmentId,
         studentId,
+        organizationId,
       );
 
       expect(mockPdfParse).toHaveBeenCalledWith(Buffer.from('fake pdf'));
@@ -157,8 +196,13 @@ describe('SubmissionsService', () => {
       mockPdfParse.mockResolvedValue({ text: '' });
 
       await expect(
-        service.createFromPdf(Buffer.from('empty'), 'assign-1', studentId),
-      ).rejects.toThrow(BadRequestException);
+        service.createFromPdf(
+          Buffer.from('empty'),
+          'assign-1',
+          studentId,
+          organizationId,
+        ),
+      ).rejects.toMatchObject({ code: 'PDF_NO_TEXT' });
     });
 
     it('should throw BadRequestException when pdf-parse fails', async () => {
@@ -166,8 +210,13 @@ describe('SubmissionsService', () => {
       mockPdfParse.mockRejectedValue(new Error('Corrupt PDF'));
 
       await expect(
-        service.createFromPdf(Buffer.from('bad'), 'assign-1', studentId),
-      ).rejects.toThrow(BadRequestException);
+        service.createFromPdf(
+          Buffer.from('bad'),
+          'assign-1',
+          studentId,
+          organizationId,
+        ),
+      ).rejects.toMatchObject({ code: 'PDF_NO_TEXT' });
     });
   });
 
@@ -179,21 +228,56 @@ describe('SubmissionsService', () => {
       ];
       mockPrisma.submission.findMany.mockResolvedValue(mockSubmissions);
 
-      const result = await service.findAll();
+      const result = await service.findAll(
+        undefined,
+        undefined,
+        organizationId,
+      );
       expect(result).toEqual(mockSubmissions);
       expect(mockPrisma.submission.findMany).toHaveBeenCalledWith({
-        where: {},
+        where: { assignment: { offering: { organizationId } } },
         include: { student: true, scores: { include: { criteria: true } } },
       });
     });
 
     it('should filter by status and assignmentId', async () => {
       mockPrisma.submission.findMany.mockResolvedValue([]);
-      await service.findAll('SUBMITTED', 'assignment-id');
+      await service.findAll('SUBMITTED', 'assignment-id', organizationId);
 
       expect(mockPrisma.submission.findMany).toHaveBeenCalledWith({
-        where: { status: 'SUBMITTED', assignmentId: 'assignment-id' },
+        where: {
+          status: 'SUBMITTED',
+          assignmentId: 'assignment-id',
+          assignment: { offering: { organizationId } },
+        },
         include: { student: true, scores: { include: { criteria: true } } },
+      });
+    });
+  });
+
+  describe('findMine', () => {
+    it("returns the student's submissions, optionally filtered by assignment", async () => {
+      mockPrisma.submission.findMany.mockResolvedValue([
+        { id: 's1', assignmentId: 'a1', status: 'SUBMITTED' },
+      ]);
+
+      const result = await service.findMine('student-1');
+
+      expect(result).toEqual([
+        { id: 's1', assignmentId: 'a1', status: 'SUBMITTED' },
+      ]);
+      expect(mockPrisma.submission.findMany).toHaveBeenCalledWith({
+        where: { studentId: 'student-1' },
+        select: { id: true, assignmentId: true, status: true },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      await service.findMine('student-1', 'a1');
+
+      expect(mockPrisma.submission.findMany).toHaveBeenLastCalledWith({
+        where: { studentId: 'student-1', assignmentId: 'a1' },
+        select: { id: true, assignmentId: true, status: true },
+        orderBy: { createdAt: 'desc' },
       });
     });
   });
@@ -207,17 +291,32 @@ describe('SubmissionsService', () => {
         scores: [],
         chunks: [],
       };
-      mockPrisma.submission.findUnique.mockResolvedValue(submission);
+      mockPrisma.submission.findFirst.mockResolvedValue(submission);
 
-      const result = await service.findOne('id');
+      const result = await service.findOne('id', organizationId);
       expect(result).toEqual(submission);
     });
 
     it('should throw when submission not found', async () => {
-      mockPrisma.submission.findUnique.mockResolvedValue(null);
-      await expect(service.findOne('bad-id')).rejects.toThrow(
-        NotFoundException,
-      );
+      mockPrisma.submission.findFirst.mockResolvedValue(null);
+      await expect(
+        service.findOne('bad-id', organizationId),
+      ).rejects.toMatchObject({ code: 'SUBMISSION_NOT_FOUND' });
+    });
+
+    it('should throw when the submission belongs to another organization', async () => {
+      mockPrisma.submission.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.findOne('org-b-submission', organizationId),
+      ).rejects.toMatchObject({ code: 'SUBMISSION_NOT_FOUND' });
+      expect(mockPrisma.submission.findFirst).toHaveBeenCalledWith({
+        where: {
+          id: 'org-b-submission',
+          assignment: { offering: { organizationId } },
+        },
+        include: expect.any(Object) as object,
+      });
     });
   });
 });

@@ -2,12 +2,16 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { RubricsService } from './rubrics.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { LlmService } from '../common/llm/llm.service';
-import { NotFoundException } from '@nestjs/common';
 
 describe('RubricsService', () => {
   let service: RubricsService;
 
+  const organizationId = 'org-1';
+
   const mockPrisma = {
+    assignment: {
+      findFirst: jest.fn(),
+    },
     rubric: {
       findUnique: jest.fn(),
       findFirst: jest.fn(),
@@ -52,10 +56,10 @@ describe('RubricsService', () => {
         isConfirmed: true,
         criteria: [],
       };
-      mockPrisma.rubric.findUnique.mockResolvedValue(rubric);
+      mockPrisma.rubric.findFirst.mockResolvedValue(rubric);
       mockPrisma.rubric.update.mockResolvedValue(rubric);
 
-      const result = await service.confirm(rubricId);
+      const result = await service.confirm(rubricId, organizationId);
 
       expect(mockPrisma.rubric.update).toHaveBeenCalledWith({
         where: { id: rubricId },
@@ -79,10 +83,10 @@ describe('RubricsService', () => {
         isConfirmed: true,
         criteria,
       };
-      mockPrisma.rubric.findUnique.mockResolvedValue(rubric);
+      mockPrisma.rubric.findFirst.mockResolvedValue(rubric);
       mockPrisma.rubric.update.mockResolvedValue(rubric);
 
-      await service.confirm(rubricId);
+      await service.confirm(rubricId, organizationId);
 
       expect(mockLlm.embed).toHaveBeenCalledTimes(2);
       expect(mockLlm.embed).toHaveBeenCalledWith('Thesis clarity');
@@ -119,13 +123,13 @@ describe('RubricsService', () => {
         isConfirmed: true,
         criteria,
       };
-      mockPrisma.rubric.findUnique.mockResolvedValue(rubric);
+      mockPrisma.rubric.findFirst.mockResolvedValue(rubric);
       mockPrisma.rubric.update.mockResolvedValue(rubric);
       mockLlm.embed
         .mockResolvedValueOnce(fakeEmbedding)
         .mockRejectedValueOnce(new Error('API error'));
 
-      const result = await service.confirm(rubricId);
+      const result = await service.confirm(rubricId, organizationId);
 
       expect(mockPrisma.$executeRawUnsafe).toHaveBeenCalledTimes(1);
       expect(mockPrisma.$executeRawUnsafe).toHaveBeenCalledWith(
@@ -136,12 +140,12 @@ describe('RubricsService', () => {
       expect(result.isConfirmed).toBe(true);
     });
 
-    it('should throw NotFoundException for missing rubric', async () => {
-      mockPrisma.rubric.findUnique.mockResolvedValue(null);
+    it('should throw for missing rubric', async () => {
+      mockPrisma.rubric.findFirst.mockResolvedValue(null);
 
-      await expect(service.confirm('non-existent-id')).rejects.toThrow(
-        NotFoundException,
-      );
+      await expect(
+        service.confirm('non-existent-id', organizationId),
+      ).rejects.toMatchObject({ code: 'RUBRIC_NOT_FOUND' });
     });
   });
 
@@ -153,13 +157,16 @@ describe('RubricsService', () => {
         criteria: [{ description: 'Criterion 1', maxPoints: 10 }],
       };
 
+      mockPrisma.assignment.findFirst.mockResolvedValue({
+        id: 'assignment-id',
+      });
       mockPrisma.rubric.create.mockResolvedValue({
         id: 'new-rubric-id',
         ...dto,
         criteria: dto.criteria,
       });
 
-      const result = await service.create(dto);
+      const result = await service.create(dto, organizationId);
 
       expect(mockPrisma.rubric.create).toHaveBeenCalled();
       expect(result.title).toBe(dto.title);
@@ -169,18 +176,22 @@ describe('RubricsService', () => {
   describe('findAll', () => {
     it('should return rubrics without filter', async () => {
       mockPrisma.rubric.findMany.mockResolvedValue([]);
-      const result = await service.findAll();
+      const result = await service.findAll(undefined, organizationId);
       expect(result).toEqual([]);
       expect(mockPrisma.rubric.findMany).toHaveBeenCalledWith({
+        where: { assignment: { offering: { organizationId } } },
         include: { criteria: true },
       });
     });
 
     it('should filter by assignmentId', async () => {
       mockPrisma.rubric.findMany.mockResolvedValue([]);
-      await service.findAll('assignment-id');
+      await service.findAll('assignment-id', organizationId);
       expect(mockPrisma.rubric.findMany).toHaveBeenCalledWith({
-        where: { assignmentId: 'assignment-id' },
+        where: {
+          assignmentId: 'assignment-id',
+          assignment: { offering: { organizationId } },
+        },
         include: { criteria: true },
       });
     });
@@ -189,16 +200,16 @@ describe('RubricsService', () => {
   describe('findOne', () => {
     it('should return rubric by id', async () => {
       const rubric = { id: 'id', title: 'Test', criteria: [], assignment: {} };
-      mockPrisma.rubric.findUnique.mockResolvedValue(rubric);
-      const result = await service.findOne('id');
+      mockPrisma.rubric.findFirst.mockResolvedValue(rubric);
+      const result = await service.findOne('id', organizationId);
       expect(result).toEqual(rubric);
     });
 
     it('should throw when rubric not found', async () => {
-      mockPrisma.rubric.findUnique.mockResolvedValue(null);
-      await expect(service.findOne('bad-id')).rejects.toThrow(
-        NotFoundException,
-      );
+      mockPrisma.rubric.findFirst.mockResolvedValue(null);
+      await expect(
+        service.findOne('bad-id', organizationId),
+      ).rejects.toMatchObject({ code: 'RUBRIC_NOT_FOUND' });
     });
   });
 
@@ -212,10 +223,17 @@ describe('RubricsService', () => {
       };
       mockPrisma.rubric.findFirst.mockResolvedValue(rubric);
 
-      const result = await service.findConfirmedRubric('assignment-id');
+      const result = await service.findConfirmedRubric(
+        'assignment-id',
+        organizationId,
+      );
 
       expect(mockPrisma.rubric.findFirst).toHaveBeenCalledWith({
-        where: { assignmentId: 'assignment-id', isConfirmed: true },
+        where: {
+          assignmentId: 'assignment-id',
+          isConfirmed: true,
+          assignment: { offering: { organizationId } },
+        },
         include: { criteria: true },
       });
       expect(result).toEqual(rubric);
@@ -225,8 +243,8 @@ describe('RubricsService', () => {
       mockPrisma.rubric.findFirst.mockResolvedValue(null);
 
       await expect(
-        service.findConfirmedRubric('assignment-id'),
-      ).rejects.toThrow(NotFoundException);
+        service.findConfirmedRubric('assignment-id', organizationId),
+      ).rejects.toMatchObject({ code: 'RUBRIC_NOT_FOUND' });
     });
   });
 
@@ -244,12 +262,15 @@ describe('RubricsService', () => {
       const result = await service.findSimilarCriteria(
         fakeEmbedding,
         assignmentId,
+        organizationId,
       );
 
       expect(mockPrisma.$queryRaw).toHaveBeenCalled();
       expect(result).toHaveLength(2);
       expect(result[0].id).toBe('c1');
-      expect(result[0].distance).toBeLessThan(result[1].distance);
+      expect(
+        (result[0] as { id: string; distance: number }).distance,
+      ).toBeLessThan((result[1] as { id: string; distance: number }).distance);
     });
 
     it('should fall back to findConfirmedRubric when no embeddings exist', async () => {
@@ -265,10 +286,15 @@ describe('RubricsService', () => {
       const result = await service.findSimilarCriteria(
         fakeEmbedding,
         assignmentId,
+        organizationId,
       );
 
       expect(mockPrisma.rubric.findFirst).toHaveBeenCalledWith({
-        where: { assignmentId, isConfirmed: true },
+        where: {
+          assignmentId,
+          isConfirmed: true,
+          assignment: { offering: { organizationId } },
+        },
         include: { criteria: true },
       });
       expect(result).toEqual(rubric.criteria);

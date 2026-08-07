@@ -45,7 +45,7 @@ describe('QuizGenerationAgent', () => {
     materials.searchChunks.mockResolvedValue([]);
 
     const result = await agent.generate({
-      classId: '00000000-0000-0000-0000-000000000001',
+      courseOfferingId: '00000000-0000-0000-0000-000000000001',
       teacherId: '00000000-0000-0000-0000-000000000002',
       topic: 'ancient egypt',
     });
@@ -55,5 +55,54 @@ describe('QuizGenerationAgent', () => {
     expect(result.message).toContain('No curriculum material');
     expect(llm.generateStructured).toHaveBeenCalledTimes(1);
     expect(materials.searchChunks).toHaveBeenCalledTimes(1);
+  });
+
+  it('should default difficulty to MEDIUM in the initial prompt', async () => {
+    let capturedPrompt = '';
+    llm.generateStructured.mockImplementation(
+      (args: { userPrompt: string }) => {
+        capturedPrompt = args.userPrompt;
+        return {
+          action: 'search_curriculum',
+          query: 'ancient egypt',
+          topK: 5,
+        };
+      },
+    );
+
+    materials.searchChunks.mockResolvedValue([]);
+
+    await agent.generate({
+      courseOfferingId: '00000000-0000-0000-0000-000000000001',
+      teacherId: '00000000-0000-0000-0000-000000000002',
+      topic: 'ancient egypt',
+    });
+
+    expect(capturedPrompt).toContain('Difficulty: MEDIUM');
+  });
+
+  it('should forward the requested difficulty into the initial prompt', async () => {
+    let capturedPrompt = '';
+    llm.generateStructured.mockImplementation(
+      (args: { userPrompt: string }) => {
+        capturedPrompt = args.userPrompt;
+        return {
+          action: 'search_curriculum',
+          query: 'ancient egypt',
+          topK: 5,
+        };
+      },
+    );
+
+    materials.searchChunks.mockResolvedValue([]);
+
+    await agent.generate({
+      courseOfferingId: '00000000-0000-0000-0000-000000000001',
+      teacherId: '00000000-0000-0000-0000-000000000002',
+      topic: 'ancient egypt',
+      difficulty: 'HARD',
+    });
+
+    expect(capturedPrompt).toContain('Difficulty: HARD');
   });
 });

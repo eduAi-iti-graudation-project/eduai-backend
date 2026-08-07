@@ -1,5 +1,7 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, HttpStatus } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { ApiError } from '../common/errors/api-error';
+import { ErrorCode } from '../common/errors/codes';
 
 @Injectable()
 export class AssignmentsService {
@@ -10,29 +12,46 @@ export class AssignmentsService {
     description?: string;
     dueDate: string;
     totalPoints: number;
-    classId: string;
+    courseOfferingId: string;
   }) {
-    const cls = await this.prisma.class.findUnique({
-      where: { id: dto.classId },
+    const offering = await this.prisma.courseOffering.findUnique({
+      where: { id: dto.courseOfferingId },
     });
-    if (!cls) throw new NotFoundException('Class not found');
+    if (!offering) {
+      throw new ApiError(
+        ErrorCode.OFFERING_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This class could not be found.',
+      );
+    }
     return this.prisma.assignment.create({
       data: { ...dto, dueDate: new Date(dto.dueDate) },
     });
   }
 
-  findAll(classId?: string) {
-    return classId
-      ? this.prisma.assignment.findMany({ where: { classId } })
+  findAll(courseOfferingId?: string) {
+    return courseOfferingId
+      ? this.prisma.assignment.findMany({ where: { courseOfferingId } })
       : this.prisma.assignment.findMany();
   }
 
   async findOne(id: string) {
     const assignment = await this.prisma.assignment.findUnique({
       where: { id },
-      include: { class: true, rubrics: { include: { criteria: true } } },
+      include: {
+        offering: {
+          include: { course: true, section: true, teacher: true },
+        },
+        rubrics: { include: { criteria: true } },
+      },
     });
-    if (!assignment) throw new NotFoundException('Assignment not found');
+    if (!assignment) {
+      throw new ApiError(
+        ErrorCode.ASSIGNMENT_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This assignment could not be found.',
+      );
+    }
     return assignment;
   }
 
@@ -46,7 +65,13 @@ export class AssignmentsService {
     },
   ) {
     const existing = await this.prisma.assignment.findUnique({ where: { id } });
-    if (!existing) throw new NotFoundException('Assignment not found');
+    if (!existing) {
+      throw new ApiError(
+        ErrorCode.ASSIGNMENT_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This assignment could not be found.',
+      );
+    }
     return this.prisma.assignment.update({
       where: { id },
       data: {
@@ -60,7 +85,13 @@ export class AssignmentsService {
 
   async remove(id: string) {
     const existing = await this.prisma.assignment.findUnique({ where: { id } });
-    if (!existing) throw new NotFoundException('Assignment not found');
+    if (!existing) {
+      throw new ApiError(
+        ErrorCode.ASSIGNMENT_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This assignment could not be found.',
+      );
+    }
     return this.prisma.assignment.delete({ where: { id } });
   }
 }

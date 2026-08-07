@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { AssistantService } from './assistant.service';
 import { LlmService } from '../common/llm/llm.service';
 import { MaterialsService } from '../materials/materials.service';
+import { PrismaService } from '../prisma/prisma.service';
 
 describe('AssistantService', () => {
   let service: AssistantService;
@@ -16,12 +17,19 @@ describe('AssistantService', () => {
     searchChunks: jest.fn(),
   };
 
+  const mockPrisma = {
+    courseOffering: { findUnique: jest.fn() },
+    quiz: { create: jest.fn() },
+    gradingScore: { findMany: jest.fn() },
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AssistantService,
         { provide: LlmService, useValue: mockLlm },
         { provide: MaterialsService, useValue: mockMaterials },
+        { provide: PrismaService, useValue: mockPrisma },
       ],
     }).compile();
 
@@ -37,7 +45,7 @@ describe('AssistantService', () => {
   });
 
   describe('chat', () => {
-    const classId = '00000000-0000-0000-0000-000000000001';
+    const courseOfferingId = '00000000-0000-0000-0000-000000000001';
 
     it('should respond directly without tool calls', async () => {
       llm.generateStructured.mockResolvedValue({
@@ -46,7 +54,7 @@ describe('AssistantService', () => {
       });
 
       const result = await service.chat({
-        classId,
+        courseOfferingId,
         messages: [],
         newMessage: 'Hello!',
       });
@@ -81,7 +89,7 @@ describe('AssistantService', () => {
       ]);
 
       const result = await service.chat({
-        classId,
+        courseOfferingId,
         messages: [],
         newMessage: 'Create a summary of the water cycle',
       });
@@ -90,7 +98,7 @@ describe('AssistantService', () => {
       expect(result.quiz).toBeUndefined();
       expect(llm.generateStructured).toHaveBeenCalledTimes(2);
       expect(materials.searchChunks).toHaveBeenCalledWith(
-        classId,
+        courseOfferingId,
         'water cycle',
         3,
       );
@@ -111,7 +119,7 @@ describe('AssistantService', () => {
       materials.searchChunks.mockResolvedValue([]);
 
       const result = await service.chat({
-        classId,
+        courseOfferingId,
         messages: [],
         newMessage: 'Explain quantum physics',
       });
@@ -130,7 +138,7 @@ describe('AssistantService', () => {
       }
 
       const result = await service.chat({
-        classId,
+        courseOfferingId,
         messages: [],
         newMessage: 'Do something',
       });
@@ -147,7 +155,7 @@ describe('AssistantService', () => {
       });
 
       const result = await service.chat({
-        classId,
+        courseOfferingId,
         messages: [
           { role: 'user', content: 'What is algebra?' },
           { role: 'assistant', content: 'Algebra is a branch of mathematics.' },
@@ -202,7 +210,7 @@ describe('AssistantService', () => {
       llm.generateStructured.mockResolvedValueOnce(quizResult);
 
       const result = await service.chat({
-        classId,
+        courseOfferingId,
         messages: [],
         newMessage: 'Create a quiz about photosynthesis',
       });
@@ -216,36 +224,352 @@ describe('AssistantService', () => {
       expect(llm.generateStructured).toHaveBeenCalledTimes(3);
     });
 
-    it('should generate quiz without prior search when no search needed', async () => {
+    it('should refuse to generate quiz when search found no material', async () => {
+      llm.generateStructured
+        .mockResolvedValueOnce({
+          action: 'search_curriculum',
+          query: 'quantum mechanics',
+        })
+        .mockResolvedValueOnce({
+          action: 'create_quiz',
+          topic: 'quantum mechanics',
+          questionCount: 3,
+          types: ['mcq', 'short_answer'],
+        });
+
+      materials.searchChunks.mockResolvedValue([]);
+
+      const result = await service.chat({
+        courseOfferingId,
+        messages: [],
+        newMessage: 'Create a quiz about quantum mechanics',
+      });
+
+      expect(result.reply).toContain('not covered');
+      expect(result.quiz).toBeUndefined();
+      expect(llm.generateStructured).toHaveBeenCalledTimes(2);
+    });
+
+    it('should refuse to generate quiz without any search context', async () => {
       llm.generateStructured.mockResolvedValueOnce({
         action: 'create_quiz',
         topic: 'basic math',
         questionCount: 2,
       });
 
-      const quizResult = {
-        title: 'Basic Math Quiz',
-        questions: [
-          {
-            type: 'mcq' as const,
-            question: 'What is 2+2?',
-            options: ['3', '4', '5', '6'],
-            correctAnswer: '4',
-          },
-        ],
-      };
-
-      llm.generateStructured.mockResolvedValueOnce(quizResult);
-
       const result = await service.chat({
-        classId,
+        courseOfferingId,
         messages: [],
         newMessage: 'Give me a math quiz',
       });
 
-      expect(result.reply).toContain('Basic Math Quiz');
-      expect(result.quiz).toEqual(quizResult);
-      expect(llm.generateStructured).toHaveBeenCalledTimes(2);
+      expect(result.reply).toContain('not covered');
+      expect(result.quiz).toBeUndefined();
+      expect(llm.generateStructured).toHaveBeenCalledTimes(1);
+      expect(materials.searchChunks).not.toHaveBeenCalled();
+    });
+
+    it('should persist the generated quiz as a draft when the class exists', async () => {
+      llm.generateStructured
+        .mockResolvedValueOnce({
+          action: 'search_curriculum',
+          query: 'photosynthesis',
+        })
+        .mockResolvedValueOnce({
+          action: 'create_quiz',
+          topic: 'photosynthesis',
+          questionCount: 2,
+        })
+        .mockResolvedValueOnce({
+          title: 'Photosynthesis Quiz',
+          questions: [
+            {
+              type: 'mcq' as const,
+              question: 'Which gas is absorbed?',
+              options: ['Oxygen', 'Carbon dioxide', 'Nitrogen', 'Hydrogen'],
+              correctAnswer: 'Carbon dioxide',
+            },
+            {
+              type: 'short_answer' as const,
+              question: 'Name the main pigment.',
+              correctAnswer: 'Chlorophyll',
+            },
+          ],
+        });
+
+      materials.searchChunks.mockResolvedValue([
+        {
+          id: 'c1',
+          content: 'Photosynthesis converts sunlight into chemical energy.',
+          distance: 0.1,
+          materialId: 'm1',
+          materialTitle: 'Biology Chapter 4',
+        },
+      ]);
+      mockPrisma.courseOffering.findUnique.mockResolvedValue({
+        teacherId: 'teacher-1',
+      });
+      mockPrisma.quiz.create.mockResolvedValue({
+        id: 'quiz-1',
+        title: 'Photosynthesis Quiz',
+      });
+
+      const result = await service.chat({
+        courseOfferingId,
+        messages: [],
+        newMessage: 'Create a quiz about photosynthesis',
+      });
+
+      expect(result.savedQuiz).toEqual({
+        quizId: 'quiz-1',
+        title: 'Photosynthesis Quiz',
+        questionCount: 2,
+      });
+      expect(result.reply).toContain('quiz-1');
+      expect(mockPrisma.courseOffering.findUnique).toHaveBeenCalledWith({
+        where: { id: courseOfferingId },
+        select: { teacherId: true },
+      });
+      const quizCreateMock = mockPrisma.quiz.create as any as jest.Mock<
+        Promise<{ id: string; title: string }>,
+        [
+          {
+            data: {
+              teacherId: string;
+              status: string;
+              questions: { create: unknown[] };
+            };
+          },
+        ]
+      >;
+      const saved = quizCreateMock.mock.calls[0][0];
+      expect(saved.data.teacherId).toBe('teacher-1');
+      expect(saved.data.status).toBe('DRAFT');
+      expect(saved.data.questions.create).toHaveLength(2);
+      expect(saved.data.questions.create[0]).toEqual(
+        expect.objectContaining({
+          type: 'MCQ',
+          options: [
+            { text: 'Oxygen', isCorrect: false },
+            { text: 'Carbon dioxide', isCorrect: true },
+            { text: 'Nitrogen', isCorrect: false },
+            { text: 'Hydrogen', isCorrect: false },
+          ],
+        }),
+      );
+      expect(saved.data.questions.create[1]).toEqual({
+        type: 'SHORT_ANSWER',
+        question: 'Name the main pigment.',
+        options: undefined,
+        points: 1,
+        order: 1,
+      });
+    });
+
+    it('should draft a rubric and return formatted text plus structured data', async () => {
+      llm.generateStructured.mockResolvedValueOnce({
+        action: 'draft_rubric',
+        topic: 'persuasive essay',
+      });
+      llm.generateStructured.mockResolvedValueOnce({
+        title: 'Persuasive Essay Rubric',
+        criteria: [
+          { description: 'Thesis clarity', maxPoints: 5 },
+          { description: 'Use of evidence', maxPoints: 5 },
+        ],
+      });
+
+      const result = await service.chat({
+        courseOfferingId,
+        messages: [],
+        newMessage: 'Draft a rubric for the persuasive essay',
+      });
+
+      expect(result.rubric).toEqual({
+        title: 'Persuasive Essay Rubric',
+        criteria: [
+          { description: 'Thesis clarity', maxPoints: 5 },
+          { description: 'Use of evidence', maxPoints: 5 },
+        ],
+      });
+      expect(result.reply).toContain('Thesis clarity (5 pts)');
+      expect(result.reply).toContain('Total: 10 pts');
+    });
+
+    it('should summarize a lesson from search context', async () => {
+      llm.generateStructured
+        .mockResolvedValueOnce({
+          action: 'search_curriculum',
+          query: 'the water cycle',
+        })
+        .mockResolvedValueOnce({
+          action: 'summarize_lesson',
+          topic: 'the water cycle',
+        })
+        .mockResolvedValueOnce({
+          title: 'The Water Cycle',
+          summary: 'Water moves between the atmosphere, land, and ocean.',
+          keyPoints: ['Evaporation', 'Condensation', 'Precipitation'],
+        });
+
+      materials.searchChunks.mockResolvedValue([
+        {
+          id: 'c1',
+          content: 'The water cycle describes evaporation and condensation.',
+          distance: 0.1,
+          materialId: 'm1',
+          materialTitle: 'Science Chapter 3',
+        },
+      ]);
+
+      const result = await service.chat({
+        courseOfferingId,
+        messages: [],
+        newMessage: 'Summarize the water cycle lesson',
+      });
+
+      expect(result.lesson).toEqual(
+        expect.objectContaining({ title: 'The Water Cycle' }),
+      );
+      expect(result.reply).toContain('Key points:');
+      expect(result.reply).toContain('- Evaporation');
+    });
+
+    it('should refuse to summarize without curriculum material', async () => {
+      llm.generateStructured
+        .mockResolvedValueOnce({
+          action: 'search_curriculum',
+          query: 'algebra',
+        })
+        .mockResolvedValueOnce({
+          action: 'summarize_lesson',
+          topic: 'algebra',
+        });
+
+      materials.searchChunks.mockResolvedValue([]);
+
+      const result = await service.chat({
+        courseOfferingId,
+        messages: [],
+        newMessage: 'Summarize the algebra lesson',
+      });
+
+      expect(result.reply).toContain('no curriculum material');
+      expect(result.lesson).toBeUndefined();
+    });
+
+    it('should plan a lesson from search context', async () => {
+      llm.generateStructured
+        .mockResolvedValueOnce({
+          action: 'search_curriculum',
+          query: 'plant cells',
+        })
+        .mockResolvedValueOnce({
+          action: 'plan_lesson',
+          topic: 'plant cells',
+        })
+        .mockResolvedValueOnce({
+          title: 'Plant Cells',
+          objectives: ['Describe cell wall function'],
+          activities: ['Label a plant cell diagram'],
+          assessmentHint: 'Exit ticket quiz',
+        });
+
+      materials.searchChunks.mockResolvedValue([
+        {
+          id: 'c1',
+          content: 'Plant cells have cell walls and chloroplasts.',
+          distance: 0.2,
+          materialId: 'm1',
+          materialTitle: 'Biology Chapter 2',
+        },
+      ]);
+
+      const result = await service.chat({
+        courseOfferingId,
+        messages: [],
+        newMessage: 'Plan a lesson on plant cells',
+      });
+
+      expect(result.lesson).toEqual(
+        expect.objectContaining({ title: 'Plant Cells' }),
+      );
+      expect(result.reply).toContain('Objectives:');
+    });
+
+    it('should answer class analytics from real grade data', async () => {
+      mockPrisma.gradingScore.findMany.mockResolvedValue([
+        {
+          pointsAwarded: 40,
+          criteria: { maxPoints: 100, description: 'Overall' },
+          submission: {
+            id: 'sub-1',
+            createdAt: new Date('2026-01-01'),
+            student: { id: 'student-1', name: 'Sam Learner' },
+          },
+        },
+        {
+          pointsAwarded: 80,
+          criteria: { maxPoints: 100, description: 'Overall' },
+          submission: {
+            id: 'sub-2',
+            createdAt: new Date('2026-01-02'),
+            student: { id: 'student-2', name: 'Alex Student' },
+          },
+        },
+      ]);
+      llm.generateStructured
+        .mockResolvedValueOnce({
+          action: 'class_analytics',
+          question: 'How is the class doing?',
+        })
+        .mockResolvedValueOnce({
+          overall: 'The class average is 60 with two students assessed.',
+          strugglingAreas: ['Below 60% mastery'],
+          recommendations: ['Offset targeted support'],
+        });
+
+      const result = await service.chat({
+        courseOfferingId,
+        messages: [],
+        newMessage: 'How is the class doing?',
+      });
+
+      expect(result.analytics).toEqual(
+        expect.objectContaining({
+          recommendations: ['Offset targeted support'],
+        }),
+      );
+      expect(result.reply).toContain('Class analytics');
+      const genMock = llm.generateStructured as any as jest.Mock<
+        Promise<Record<string, unknown>>,
+        [{ userPrompt: string }]
+      >;
+      const callArg = genMock.mock.calls[1][0];
+      expect(callArg.userPrompt).toContain('"classAvgPct":60');
+    });
+
+    it('should draft an assignment', async () => {
+      llm.generateStructured.mockResolvedValueOnce({
+        action: 'draft_assignment',
+        topic: 'ecosystems report',
+      });
+      llm.generateStructured.mockResolvedValueOnce({
+        title: 'Ecosystems Report',
+        description: 'Research a local ecosystem.',
+        instructions: 'Pick an ecosystem\nDescribe its producers and consumers',
+      });
+
+      const result = await service.chat({
+        courseOfferingId,
+        messages: [],
+        newMessage: 'Draft an assignment on ecosystems',
+      });
+
+      expect(result.assignment).toEqual(
+        expect.objectContaining({ title: 'Ecosystems Report' }),
+      );
+      expect(result.reply).toContain('Describe its producers and consumers');
     });
   });
 });

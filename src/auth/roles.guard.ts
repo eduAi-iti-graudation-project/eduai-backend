@@ -1,6 +1,13 @@
-import { Injectable, CanActivate, ExecutionContext } from '@nestjs/common';
+import {
+  Injectable,
+  CanActivate,
+  ExecutionContext,
+  HttpStatus,
+} from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { ROLES_KEY } from './roles.decorator';
+import { ApiError } from '../common/errors/api-error';
+import { ErrorCode } from '../common/errors/codes';
 
 @Injectable()
 export class RolesGuard implements CanActivate {
@@ -19,7 +26,20 @@ export class RolesGuard implements CanActivate {
       .switchToHttp()
       .getRequest<{ user?: { role: string } }>();
     const user = request.user;
-    if (!user) return false;
-    return requiredRoles.includes(user.role);
+    if (!user) {
+      throw new ApiError(
+        ErrorCode.UNAUTHORIZED,
+        HttpStatus.UNAUTHORIZED,
+        'Please log in to continue.',
+      );
+    }
+    if (!requiredRoles.includes(user.role)) {
+      throw new ApiError(
+        ErrorCode.FORBIDDEN,
+        HttpStatus.FORBIDDEN,
+        "You don't have permission to do that.",
+      );
+    }
+    return true;
   }
 }
