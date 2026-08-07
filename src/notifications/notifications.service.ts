@@ -1,5 +1,7 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { Injectable, Logger, HttpStatus } from '@nestjs/common';
+import { ApiError } from '../common/errors/api-error';
+import { ErrorCode } from '../common/errors/codes';
 import * as nodemailer from 'nodemailer';
 
 @Injectable()
@@ -31,11 +33,11 @@ export class NotificationsService {
   ): Promise<void> {
     const assignment = await this.prisma.assignment.findUnique({
       where: { id: submission.assignmentId },
-      include: { class: true },
+      include: { offering: true },
     });
-    if (assignment?.class) {
+    if (assignment?.offering) {
       await this.notifyUser(
-        assignment.class.teacherId,
+        assignment.offering.teacherId,
         event,
         'Grading complete',
         `Submission ${submission.id} has been graded and is ready for review.`,
@@ -69,20 +71,20 @@ export class NotificationsService {
   }
 
   async notifyTeachers(
-    classId: string,
+    courseOfferingId: string,
     type: string,
     title: string,
     body?: string,
   ): Promise<void> {
-    const classEntity = await this.prisma.class.findUnique({
-      where: { id: classId },
+    const offering = await this.prisma.courseOffering.findUnique({
+      where: { id: courseOfferingId },
       include: { teacher: true },
     });
-    if (!classEntity) {
-      this.logger.warn(`Class ${classId} not found for notification`);
+    if (!offering) {
+      this.logger.warn(`Class ${courseOfferingId} not found for notification`);
       return;
     }
-    await this.notifyUser(classEntity.teacherId, type, title, body);
+    await this.notifyUser(offering.teacherId, type, title, body);
   }
 
   async findAll(userId?: string): Promise<unknown[]> {
@@ -98,7 +100,13 @@ export class NotificationsService {
     const notification = await this.prisma.notification.findUnique({
       where: { id },
     });
-    if (!notification) throw new NotFoundException('Notification not found');
+    if (!notification) {
+      throw new ApiError(
+        ErrorCode.NOTIFICATION_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This notification could not be found.',
+      );
+    }
     await this.prisma.notification.update({
       where: { id },
       data: { readAt: new Date() },

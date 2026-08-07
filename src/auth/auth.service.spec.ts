@@ -1,9 +1,34 @@
-import { BadRequestException, UnauthorizedException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { Test, TestingModule } from '@nestjs/testing';
 import { AuthService } from './auth.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SupabaseService } from './supabase.service';
+import { ApiError } from '../common/errors/api-error';
+import { ErrorCode } from '../common/errors/codes';
+
+async function expectApiError(
+  promise: Promise<unknown>,
+  code: string,
+  status: number,
+) {
+  try {
+    await promise;
+    fail('expected an ApiError to be thrown');
+  } catch (err) {
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).code).toBe(code);
+    expect((err as ApiError).getStatus()).toBe(status);
+  }
+}
+
+function callArgs<T>(mock: jest.Mock): T {
+  const calls = mock.mock.calls as T[][];
+  return calls[0][0];
+}
+
+function orgCreateArgs(mock: { create: jest.Mock }) {
+  return callArgs<{ data: { name: string; joinCode: string } }>(mock.create);
+}
 
 describe('AuthService', () => {
   let service: AuthService;
@@ -11,10 +36,16 @@ describe('AuthService', () => {
   const mockPrisma = {
     user: {
       findUnique: jest.fn(),
+      findFirst: jest.fn(),
       create: jest.fn(),
       update: jest.fn(),
     },
     organization: {
+      findUnique: jest.fn(),
+      create: jest.fn(),
+    },
+    membershipRequest: {
+      findFirst: jest.fn(),
       create: jest.fn(),
     },
     $transaction: jest.fn(),
@@ -124,8 +155,10 @@ describe('AuthService', () => {
     it('throws a 400 when the provider is not in the allowlist', async () => {
       process.env.OAUTH_PROVIDERS = 'google';
 
-      await expect(service.getOauthAuthorizeUrl('microsoft')).rejects.toThrow(
-        BadRequestException,
+      await expectApiError(
+        service.getOauthAuthorizeUrl('microsoft'),
+        ErrorCode.AUTH_PROVIDER_DISABLED,
+        400,
       );
       expect(mockSupabase.signInWithOAuth).not.toHaveBeenCalled();
     });
@@ -148,23 +181,29 @@ describe('AuthService', () => {
     it('throws a 500 when neither API_URL nor an origin is available', async () => {
       delete process.env.API_URL;
 
-      await expect(service.getOauthAuthorizeUrl('google')).rejects.toThrow(
-        'API_URL is not set',
+      await expectApiError(
+        service.getOauthAuthorizeUrl('google'),
+        ErrorCode.INTERNAL_ERROR,
+        500,
       );
     });
   });
 
   describe('handleOauthCallback', () => {
     it('throws a 400 when the provider returns an error param', async () => {
-      await expect(
+      await expectApiError(
         service.handleOauthCallback({ error: 'access_denied' }),
-      ).rejects.toThrow(BadRequestException);
+        ErrorCode.AUTH_OAUTH_REJECTED,
+        400,
+      );
       expect(mockSupabase.exchangeCodeForSession).not.toHaveBeenCalled();
     });
 
     it('throws a 400 when neither code nor error is present', async () => {
-      await expect(service.handleOauthCallback({})).rejects.toThrow(
-        BadRequestException,
+      await expectApiError(
+        service.handleOauthCallback({}),
+        ErrorCode.AUTH_MISSING_CODE,
+        400,
       );
     });
 
@@ -174,9 +213,11 @@ describe('AuthService', () => {
         error: { message: 'Invalid authorization code' },
       });
 
-      await expect(
+      await expectApiError(
         service.handleOauthCallback({ code: 'bad-code' }),
-      ).rejects.toThrow(UnauthorizedException);
+        ErrorCode.AUTH_OAUTH_EXCHANGE_FAILED,
+        401,
+      );
     });
 
     it('links an existing user by authId and returns the session tokens', async () => {
@@ -241,9 +282,10 @@ describe('AuthService', () => {
 
       await service.handleOauthCallback({ code: 'code-123' });
 
-      expect(mockPrisma.organization.create).toHaveBeenCalledWith({
-        data: { name: "John Doe's School" },
-      });
+      expect(mockPrisma.organization.create).toHaveBeenCalledTimes(1);
+      const orgArgs = orgCreateArgs(mockPrisma.organization);
+      expect(orgArgs.data.name).toBe("John Doe's School");
+      expect(orgArgs.data.joinCode).toMatch(/^[A-Z0-9]{8}$/);
       expect(mockPrisma.user.create).toHaveBeenCalledWith({
         data: {
           authId: 'supabase-auth-id-1',
@@ -274,9 +316,10 @@ describe('AuthService', () => {
 
       await service.handleOauthCallback({ code: 'code-123' });
 
-      expect(mockPrisma.organization.create).toHaveBeenCalledWith({
-        data: { name: "Jane Doe's School" },
-      });
+      expect(mockPrisma.organization.create).toHaveBeenCalledTimes(1);
+      const orgArgs = orgCreateArgs(mockPrisma.organization);
+      expect(orgArgs.data.name).toBe("Jane Doe's School");
+      expect(orgArgs.data.joinCode).toMatch(/^[A-Z0-9]{8}$/);
       expect(mockPrisma.user.create).toHaveBeenCalledWith({
         data: {
           authId: 'supabase-auth-id-1',
@@ -312,6 +355,258 @@ describe('AuthService', () => {
         accessToken: 'access-token-123',
         refreshToken: 'refresh-token-123',
       });
+    });
+  });
+
+  describe('signup', () => {
+    const credentials = {
+      email: 'new.teacher@eduai.test',
+      password: 'password123',
+      name: 'New Teacher',
+    };
+
+    beforeEach(() => {
+      mockAuthClient.auth.admin.createUser.mockReset();
+      mockPrisma.organization.findUnique.mockReset();
+      mockPrisma.user.findFirst.mockReset();
+      mockPrisma.membershipRequest.findFirst.mockReset();
+      mockPrisma.membershipRequest.create.mockReset();
+    });
+
+    function supabaseUser(id = 'supabase-auth-new') {
+      return { data: { user: { id } }, error: null };
+    }
+
+    it('creates a new organization and ADMIN on the create path', async () => {
+      mockAuthClient.auth.admin.createUser.mockResolvedValue(supabaseUser());
+      mockPrisma.organization.create.mockResolvedValue({ id: 'org-1' });
+      mockPrisma.user.create.mockResolvedValue({ id: 'local-new' });
+      mockPrisma.$transaction.mockImplementation(
+        (
+          cb: (tx: {
+            organization: typeof mockPrisma.organization;
+            user: typeof mockPrisma.user;
+          }) => Promise<unknown>,
+        ) =>
+          cb({ organization: mockPrisma.organization, user: mockPrisma.user }),
+      );
+      mockAuthClient.auth.signInWithPassword.mockResolvedValue({
+        data: { session: { access_token: 'access-token-new' } },
+        error: null,
+      });
+
+      const result = await service.signup({
+        ...credentials,
+        organizationName: 'Sunrise Academy',
+      });
+
+      expect(mockPrisma.organization.create).toHaveBeenCalledTimes(1);
+      const orgArgs = orgCreateArgs(mockPrisma.organization);
+      expect(orgArgs.data.name).toBe('Sunrise Academy');
+      expect(orgArgs.data.joinCode).toMatch(/^[A-Z0-9]{8}$/);
+      expect(mockPrisma.user.create).toHaveBeenCalledWith({
+        data: {
+          authId: 'supabase-auth-new',
+          email: credentials.email,
+          name: credentials.name,
+          role: 'ADMIN',
+          organizationId: 'org-1',
+        },
+      });
+      expect(result).toMatchObject({
+        accessToken: 'access-token-new',
+        user: { id: 'local-new' },
+      });
+      expect(mockPrisma.membershipRequest.create).not.toHaveBeenCalled();
+    });
+
+    it('throws AUTH_EMAIL_TAKEN on the create path when the email is registered', async () => {
+      mockAuthClient.auth.admin.createUser.mockResolvedValue({
+        data: { user: null },
+        error: { status: 409, message: 'already registered' },
+      });
+
+      await expectApiError(
+        service.signup({
+          ...credentials,
+          organizationName: 'Sunrise Academy',
+        }),
+        ErrorCode.AUTH_EMAIL_TAKEN,
+        409,
+      );
+    });
+
+    it('creates a PENDING membership request on the join path without a session', async () => {
+      mockPrisma.organization.findUnique.mockResolvedValue({
+        id: 'org-1',
+        joinCode: 'TEAM2026',
+      });
+      mockPrisma.user.findFirst.mockResolvedValue(null);
+      mockPrisma.membershipRequest.findFirst.mockResolvedValue(null);
+      mockAuthClient.auth.admin.createUser.mockResolvedValue(supabaseUser());
+
+      const result = await service.signup({
+        ...credentials,
+        joinCode: 'team2026',
+        role: 'TEACHER',
+      });
+
+      expect(mockPrisma.organization.findUnique).toHaveBeenCalledWith({
+        where: { joinCode: 'TEAM2026' },
+      });
+      expect(mockPrisma.membershipRequest.create).toHaveBeenCalledWith({
+        data: {
+          organizationId: 'org-1',
+          email: credentials.email,
+          name: credentials.name,
+          role: 'TEACHER',
+          authId: 'supabase-auth-new',
+        },
+      });
+      const pending = result as { status: string; message: string };
+      expect(pending.status).toBe('PENDING');
+      expect(pending.message).toContain('request has been submitted');
+      expect(mockAuthClient.auth.signInWithPassword).not.toHaveBeenCalled();
+      expect(mockPrisma.organization.create).not.toHaveBeenCalled();
+    });
+
+    it('throws JOIN_CODE_INVALID when the join code does not match an org', async () => {
+      mockPrisma.organization.findUnique.mockResolvedValue(null);
+
+      await expectApiError(
+        service.signup({
+          ...credentials,
+          joinCode: 'NOPE1234',
+          role: 'STUDENT',
+        }),
+        ErrorCode.JOIN_CODE_INVALID,
+        404,
+      );
+      expect(mockAuthClient.auth.admin.createUser).not.toHaveBeenCalled();
+    });
+
+    it('throws INVITE_EMAIL_TAKEN when the email is already a member', async () => {
+      mockPrisma.organization.findUnique.mockResolvedValue({
+        id: 'org-1',
+        joinCode: 'TEAM2026',
+      });
+      mockPrisma.user.findFirst.mockResolvedValue({ id: 'existing' });
+
+      await expectApiError(
+        service.signup({
+          ...credentials,
+          joinCode: 'TEAM2026',
+          role: 'TEACHER',
+        }),
+        ErrorCode.INVITE_EMAIL_TAKEN,
+        409,
+      );
+      expect(mockAuthClient.auth.admin.createUser).not.toHaveBeenCalled();
+    });
+
+    it('throws REQUEST_ALREADY_EXISTS when a pending request exists', async () => {
+      mockPrisma.organization.findUnique.mockResolvedValue({
+        id: 'org-1',
+        joinCode: 'TEAM2026',
+      });
+      mockPrisma.user.findFirst.mockResolvedValue(null);
+      mockPrisma.membershipRequest.findFirst.mockResolvedValue({
+        id: 'request-1',
+      });
+
+      await expectApiError(
+        service.signup({
+          ...credentials,
+          joinCode: 'TEAM2026',
+          role: 'STUDENT',
+          gradeLevel: 10,
+        }),
+        ErrorCode.REQUEST_ALREADY_EXISTS,
+        409,
+      );
+      expect(mockAuthClient.auth.admin.createUser).not.toHaveBeenCalled();
+    });
+
+    it('reuses an existing Supabase account on the join path via sign-in', async () => {
+      mockPrisma.organization.findUnique.mockResolvedValue({
+        id: 'org-1',
+        joinCode: 'TEAM2026',
+      });
+      mockPrisma.user.findFirst.mockResolvedValue(null);
+      mockPrisma.membershipRequest.findFirst.mockResolvedValue(null);
+      mockAuthClient.auth.admin.createUser.mockResolvedValue({
+        data: { user: null },
+        error: { status: 409, message: 'already registered' },
+      });
+      mockAuthClient.auth.signInWithPassword.mockResolvedValue({
+        data: { user: { id: 'supabase-auth-existing' } },
+        error: null,
+      });
+
+      const result = await service.signup({
+        ...credentials,
+        joinCode: 'TEAM2026',
+        role: 'TEACHER',
+      });
+
+      expect(mockPrisma.membershipRequest.create).toHaveBeenCalledWith({
+        data: {
+          organizationId: 'org-1',
+          email: credentials.email,
+          name: credentials.name,
+          role: 'TEACHER',
+          authId: 'supabase-auth-existing',
+        },
+      });
+      const pending = result as { status: string };
+      expect(pending.status).toBe('PENDING');
+    });
+
+    it('persists the grade level on a STUDENT join request', async () => {
+      mockPrisma.organization.findUnique.mockResolvedValue({
+        id: 'org-1',
+        joinCode: 'TEAM2026',
+      });
+      mockPrisma.user.findFirst.mockResolvedValue(null);
+      mockPrisma.membershipRequest.findFirst.mockResolvedValue(null);
+      mockAuthClient.auth.admin.createUser.mockResolvedValue(supabaseUser());
+
+      await service.signup({
+        ...credentials,
+        joinCode: 'TEAM2026',
+        role: 'STUDENT',
+        gradeLevel: 10,
+      });
+
+      expect(mockPrisma.membershipRequest.create).toHaveBeenCalledWith({
+        data: {
+          organizationId: 'org-1',
+          email: credentials.email,
+          name: credentials.name,
+          role: 'STUDENT',
+          authId: 'supabase-auth-new',
+          gradeLevel: 10,
+        },
+      });
+    });
+
+    it('rejects a STUDENT join request without a grade level', async () => {
+      mockPrisma.organization.findUnique.mockResolvedValue({
+        id: 'org-1',
+        joinCode: 'TEAM2026',
+      });
+
+      await expectApiError(
+        service.signup({
+          ...credentials,
+          joinCode: 'TEAM2026',
+          role: 'STUDENT',
+        }),
+        ErrorCode.VALIDATION_FAILED,
+        400,
+      );
+      expect(mockAuthClient.auth.admin.createUser).not.toHaveBeenCalled();
+      expect(mockPrisma.membershipRequest.create).not.toHaveBeenCalled();
     });
   });
 
@@ -387,8 +682,10 @@ describe('AuthService', () => {
       );
       mockPrisma.user.findUnique.mockResolvedValue(null);
 
-      await expect(service.login(credentials)).rejects.toThrow(
-        UnauthorizedException,
+      await expectApiError(
+        service.login(credentials),
+        ErrorCode.AUTH_USER_NOT_FOUND,
+        401,
       );
     });
 
@@ -398,8 +695,10 @@ describe('AuthService', () => {
         error: { message: 'Invalid login credentials' },
       });
 
-      await expect(service.login(credentials)).rejects.toThrow(
-        UnauthorizedException,
+      await expectApiError(
+        service.login(credentials),
+        ErrorCode.AUTH_INVALID_CREDENTIALS,
+        401,
       );
     });
   });
@@ -434,8 +733,10 @@ describe('AuthService', () => {
         error: { message: 'Invalid Refresh Token' },
       });
 
-      await expect(service.refresh('bad-token')).rejects.toThrow(
-        UnauthorizedException,
+      await expectApiError(
+        service.refresh('bad-token'),
+        ErrorCode.AUTH_TOKEN_INVALID,
+        401,
       );
     });
   });

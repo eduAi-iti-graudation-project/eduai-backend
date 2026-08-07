@@ -1,12 +1,32 @@
 import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
 
-export const SignupSchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(8),
-  name: z.string().min(1),
-  organizationName: z.string().min(1).optional(),
-});
+export const SignupSchema = z
+  .object({
+    email: z.string().email(),
+    password: z.string().min(8),
+    name: z.string().min(1),
+    organizationName: z.string().min(1).optional(),
+    joinCode: z.string().min(4).max(12).optional(),
+    role: z.enum(['TEACHER', 'STUDENT']).optional(),
+    gradeLevel: z.number().int().min(1).max(12).optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (data.joinCode && !data.role) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['role'],
+        message: 'A role is required when joining an organization.',
+      });
+    }
+    if (data.role === 'STUDENT' && !data.gradeLevel) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['gradeLevel'],
+        message: 'A grade level is required for students.',
+      });
+    }
+  });
 
 export const LoginSchema = z.object({
   email: z.string().email(),

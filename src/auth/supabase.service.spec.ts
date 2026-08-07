@@ -1,6 +1,6 @@
 import * as crypto from 'node:crypto';
 import type { KeyObject } from 'node:crypto';
-import { UnauthorizedException } from '@nestjs/common';
+import { ApiError } from '../common/errors/api-error';
 import { SupabaseService } from './supabase.service';
 
 const PROJECT_URL = 'https://test-project.supabase.co';
@@ -150,7 +150,7 @@ describe('SupabaseService', () => {
     };
 
     await expect(service.verifyToken(createJwt(expired))).rejects.toThrow(
-      UnauthorizedException,
+      ApiError,
     );
   });
 
@@ -161,17 +161,13 @@ describe('SupabaseService', () => {
       'base64url',
     )}`;
 
-    await expect(service.verifyToken(tampered)).rejects.toThrow(
-      UnauthorizedException,
-    );
+    await expect(service.verifyToken(tampered)).rejects.toThrow(ApiError);
   });
 
   it('should reject a token signed by a different key', async () => {
     const token = createJwt(validPayload(), OTHER_KEYPAIR.privateKey);
 
-    await expect(service.verifyToken(token)).rejects.toThrow(
-      UnauthorizedException,
-    );
+    await expect(service.verifyToken(token)).rejects.toThrow(ApiError);
   });
 
   it('should reject an unknown kid', async () => {
@@ -180,9 +176,7 @@ describe('SupabaseService', () => {
       kid: 'unknown-key',
     });
 
-    await expect(service.verifyToken(token)).rejects.toThrow(
-      UnauthorizedException,
-    );
+    await expect(service.verifyToken(token)).rejects.toThrow(ApiError);
   });
 
   it('should reject alg none', async () => {
@@ -191,9 +185,7 @@ describe('SupabaseService', () => {
       kid: KID,
     });
 
-    await expect(service.verifyToken(token)).rejects.toThrow(
-      UnauthorizedException,
-    );
+    await expect(service.verifyToken(token)).rejects.toThrow(ApiError);
   });
 
   it('should verify an ES256 token signed with a P-256 key', async () => {
@@ -217,7 +209,7 @@ describe('SupabaseService', () => {
   it('should reject an ES256 token when the JWKS only has RSA keys', async () => {
     await expect(
       service.verifyToken(createEs256Jwt(validPayload(), 'ec-key-1')),
-    ).rejects.toThrow(UnauthorizedException);
+    ).rejects.toThrow(ApiError);
   });
 
   it('should reject an RS256 token when the JWKS only has EC keys', async () => {
@@ -237,9 +229,7 @@ describe('SupabaseService', () => {
       kid: 'ec-key-1',
     });
 
-    await expect(service.verifyToken(token)).rejects.toThrow(
-      UnauthorizedException,
-    );
+    await expect(service.verifyToken(token)).rejects.toThrow(ApiError);
   });
 
   it('should reject an ES256 token with a tampered signature', async () => {
@@ -260,21 +250,13 @@ describe('SupabaseService', () => {
       'base64url',
     )}`;
 
-    await expect(service.verifyToken(tampered)).rejects.toThrow(
-      UnauthorizedException,
-    );
+    await expect(service.verifyToken(tampered)).rejects.toThrow(ApiError);
   });
 
   it('should reject malformed tokens', async () => {
-    await expect(service.verifyToken('not-a-jwt')).rejects.toThrow(
-      UnauthorizedException,
-    );
-    await expect(service.verifyToken('a.b')).rejects.toThrow(
-      UnauthorizedException,
-    );
-    await expect(service.verifyToken('!!!.!!!.!!!')).rejects.toThrow(
-      UnauthorizedException,
-    );
+    await expect(service.verifyToken('not-a-jwt')).rejects.toThrow(ApiError);
+    await expect(service.verifyToken('a.b')).rejects.toThrow(ApiError);
+    await expect(service.verifyToken('!!!.!!!.!!!')).rejects.toThrow(ApiError);
   });
 
   it('should reject a token with a wrong issuer', async () => {
@@ -284,7 +266,7 @@ describe('SupabaseService', () => {
     };
 
     await expect(service.verifyToken(createJwt(wrongIss))).rejects.toThrow(
-      UnauthorizedException,
+      ApiError,
     );
   });
 

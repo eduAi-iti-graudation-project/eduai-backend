@@ -1,15 +1,24 @@
-import {
-  Injectable,
-  UnauthorizedException,
-  BadRequestException,
-  InternalServerErrorException,
-} from '@nestjs/common';
+import { Injectable, HttpStatus } from '@nestjs/common';
+import { randomBytes } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { SupabaseService, OAuthProvider } from './supabase.service';
+import { ApiError } from '../common/errors/api-error';
+import { ErrorCode } from '../common/errors/codes';
+import { ErrorHint } from '../common/errors/hints';
 
 const DEFAULT_OAUTH_PROVIDERS: OAuthProvider[] = ['google', 'microsoft'];
 const DEFAULT_OAUTH_ROLE = 'ADMIN';
+const JOIN_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+function generateJoinCode(): string {
+  const bytes = randomBytes(8);
+  let code = '';
+  for (let i = 0; i < 8; i++) {
+    code += JOIN_CODE_ALPHABET[bytes[i] % JOIN_CODE_ALPHABET.length];
+  }
+  return code;
+}
 
 @Injectable()
 export class AuthService {
@@ -23,30 +32,36 @@ export class AuthService {
     password: string;
     name: string;
     organizationName?: string;
+    joinCode?: string;
+    role?: 'TEACHER' | 'STUDENT';
+    gradeLevel?: number;
   }) {
-    const { data, error } = await this.supabaseService
-      .getClient()
-      .auth.admin.createUser({
+    if (dto.joinCode) {
+      return this.submitMembershipRequest({
         email: dto.email,
         password: dto.password,
-        email_confirm: true,
+        name: dto.name,
+        joinCode: dto.joinCode,
+        role: dto.role!,
+        gradeLevel: dto.gradeLevel,
       });
-
-    if (error || !data.user) {
-      throw new UnauthorizedException(error?.message || 'Signup failed');
     }
 
+    const supabaseUserId = await this.createSupabaseUser(
+      dto.email,
+      dto.password,
+    );
+
     const user = await this.prisma.$transaction(async (tx) => {
-      const organization = await tx.organization.create({
-        data: {
-          name: dto.organizationName ?? `${dto.name}'s School`,
-        },
-      });
+      const organization = await this.createOrganization(
+        tx,
+        dto.organizationName ?? `${dto.name}'s School`,
+      );
 
       return tx.user.create({
         data: {
-          authId: data.user.id,
-          email: dto.email,
+          authId: supabaseUserId,
+          email: dto.email.toLowerCase(),
           name: dto.name,
           role: 'ADMIN',
           organizationId: organization.id,
@@ -66,6 +81,158 @@ export class AuthService {
     };
   }
 
+  private async createSupabaseUser(
+    email: string,
+    password: string,
+  ): Promise<string> {
+    const { data, error } = await this.supabaseService
+      .getClient()
+      .auth.admin.createUser({
+        email,
+        password,
+        email_confirm: true,
+      });
+
+    if (data?.user?.id) return data.user.id;
+
+    if (error?.message?.toLowerCase().includes('already registered')) {
+      throw new ApiError(
+        ErrorCode.AUTH_EMAIL_TAKEN,
+        HttpStatus.CONFLICT,
+        'An account with this email already exists.',
+        { cause: error },
+      );
+    }
+    throw new ApiError(
+      ErrorCode.AUTH_SIGNUP_FAILED,
+      HttpStatus.BAD_REQUEST,
+      'We could not create your account. Please try again.',
+      { hint: ErrorHint.RETRY, cause: error },
+    );
+  }
+
+  private async createOrganization(tx: Prisma.TransactionClient, name: string) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        return await tx.organization.create({
+          data: { name, joinCode: generateJoinCode() },
+        });
+      } catch (err) {
+        if (
+          !(err instanceof Prisma.PrismaClientKnownRequestError) ||
+          err.code !== 'P2002'
+        ) {
+          throw err;
+        }
+      }
+    }
+    throw new Error('Could not allocate a unique join code');
+  }
+
+  private async submitMembershipRequest(dto: {
+    email: string;
+    password: string;
+    name: string;
+    joinCode: string;
+    role: 'TEACHER' | 'STUDENT';
+    gradeLevel?: number;
+  }): Promise<{ status: 'PENDING'; message: string }> {
+    const email = dto.email.toLowerCase();
+    const organization = await this.prisma.organization.findUnique({
+      where: { joinCode: dto.joinCode.trim().toUpperCase() },
+    });
+    if (!organization) {
+      throw new ApiError(
+        ErrorCode.JOIN_CODE_INVALID,
+        HttpStatus.NOT_FOUND,
+        'This join code is not valid. Please check it with your school administrator.',
+      );
+    }
+
+    if (dto.role === 'STUDENT' && !dto.gradeLevel) {
+      throw new ApiError(
+        ErrorCode.VALIDATION_FAILED,
+        HttpStatus.BAD_REQUEST,
+        'A grade level is required for students.',
+      );
+    }
+
+    const existingMember = await this.prisma.user.findFirst({
+      where: { email, organizationId: organization.id },
+    });
+    if (existingMember) {
+      throw new ApiError(
+        ErrorCode.INVITE_EMAIL_TAKEN,
+        HttpStatus.CONFLICT,
+        'An account with this email already belongs to this organization.',
+      );
+    }
+
+    const existingRequest = await this.prisma.membershipRequest.findFirst({
+      where: { email, organizationId: organization.id, status: 'PENDING' },
+    });
+    if (existingRequest) {
+      throw new ApiError(
+        ErrorCode.REQUEST_ALREADY_EXISTS,
+        HttpStatus.CONFLICT,
+        'A request for this account is already awaiting review.',
+      );
+    }
+
+    const { data, error } = await this.supabaseService
+      .getClient()
+      .auth.admin.createUser({
+        email,
+        password: dto.password,
+        email_confirm: true,
+      });
+
+    let authId = data?.user?.id ?? null;
+    if (
+      !authId &&
+      error?.message?.toLowerCase().includes('already registered')
+    ) {
+      const { data: signIn } = await this.supabaseService
+        .getClient()
+        .auth.signInWithPassword({ email, password: dto.password });
+      authId = signIn?.user?.id ?? null;
+      if (!authId) {
+        throw new ApiError(
+          ErrorCode.AUTH_EMAIL_TAKEN,
+          HttpStatus.CONFLICT,
+          'An account with this email already exists.',
+          { cause: error },
+        );
+      }
+    }
+
+    if (!authId) {
+      throw new ApiError(
+        ErrorCode.AUTH_SIGNUP_FAILED,
+        HttpStatus.BAD_REQUEST,
+        'We could not create your account. Please try again.',
+        { hint: ErrorHint.RETRY, cause: error },
+      );
+    }
+
+    await this.prisma.membershipRequest.create({
+      data: {
+        organizationId: organization.id,
+        email,
+        name: dto.name,
+        role: dto.role,
+        authId,
+        ...(dto.gradeLevel !== undefined ? { gradeLevel: dto.gradeLevel } : {}),
+      },
+    });
+
+    return {
+      status: 'PENDING',
+      message:
+        'Your request has been submitted. An administrator will review it shortly.',
+    };
+  }
+
   async login(dto: { email: string; password: string }) {
     const {
       data: { session },
@@ -75,7 +242,12 @@ export class AuthService {
       .auth.signInWithPassword({ email: dto.email, password: dto.password });
 
     if (error || !session) {
-      throw new UnauthorizedException(error?.message || 'Login failed');
+      throw new ApiError(
+        ErrorCode.AUTH_INVALID_CREDENTIALS,
+        HttpStatus.UNAUTHORIZED,
+        'The email or password is incorrect.',
+        { hint: ErrorHint.RE_LOGIN, cause: error },
+      );
     }
 
     const user =
@@ -87,7 +259,12 @@ export class AuthService {
       }));
 
     if (!user) {
-      throw new UnauthorizedException('User not found');
+      throw new ApiError(
+        ErrorCode.AUTH_USER_NOT_FOUND,
+        HttpStatus.UNAUTHORIZED,
+        'This account could not be found. Please contact your administrator.',
+        { hint: ErrorHint.RE_LOGIN },
+      );
     }
 
     if (user.authId !== session.user.id) {
@@ -106,10 +283,16 @@ export class AuthService {
   async me(userId: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
+      include: { grade: true },
     });
 
     if (!user) {
-      throw new UnauthorizedException('User not found');
+      throw new ApiError(
+        ErrorCode.AUTH_USER_NOT_FOUND,
+        HttpStatus.UNAUTHORIZED,
+        'This account could not be found. Please contact your administrator.',
+        { hint: ErrorHint.RE_LOGIN },
+      );
     }
 
     return user;
@@ -139,12 +322,21 @@ export class AuthService {
       (entry) => entry.provider === provider,
     );
     if (!enabled) {
-      throw new BadRequestException(`Provider '${provider}' is not enabled`);
+      throw new ApiError(
+        ErrorCode.AUTH_PROVIDER_DISABLED,
+        HttpStatus.BAD_REQUEST,
+        'This sign-in option is not enabled.',
+      );
     }
 
     const apiUrl = process.env.API_URL ?? origin;
     if (!apiUrl) {
-      throw new InternalServerErrorException('API_URL is not set');
+      throw new ApiError(
+        ErrorCode.INTERNAL_ERROR,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+        'Something went wrong on our side. Please try again in a moment.',
+        { hint: ErrorHint.RETRY, cause: new Error('API_URL is not set') },
+      );
     }
 
     const { data, error } = await this.supabaseService.signInWithOAuth(
@@ -152,8 +344,11 @@ export class AuthService {
       `${apiUrl}/auth/oauth/callback`,
     );
     if (error || !data.url) {
-      throw new BadRequestException(
-        error?.message || 'Failed to build OAuth authorization URL',
+      throw new ApiError(
+        ErrorCode.AUTH_OAUTH_EXCHANGE_FAILED,
+        HttpStatus.BAD_REQUEST,
+        'We could not complete the sign-in. Please try again.',
+        { hint: ErrorHint.RETRY, cause: error },
       );
     }
     return { url: data.url };
@@ -164,27 +359,40 @@ export class AuthService {
     error?: string;
   }): Promise<{ accessToken: string; refreshToken: string }> {
     if (params.error) {
-      throw new BadRequestException(
-        'OAuth provider rejected the authorization request',
+      throw new ApiError(
+        ErrorCode.AUTH_OAUTH_REJECTED,
+        HttpStatus.BAD_REQUEST,
+        'The sign-in provider did not complete the sign-in. Please try again.',
       );
     }
     if (!params.code) {
-      throw new BadRequestException('Missing authorization code');
+      throw new ApiError(
+        ErrorCode.AUTH_MISSING_CODE,
+        HttpStatus.BAD_REQUEST,
+        'The sign-in link was incomplete. Please try again.',
+      );
     }
 
     const { data, error } = await this.supabaseService.exchangeCodeForSession(
       params.code,
     );
     if (error || !data.session) {
-      throw new UnauthorizedException(
-        error?.message || 'Failed to exchange authorization code',
+      throw new ApiError(
+        ErrorCode.AUTH_OAUTH_EXCHANGE_FAILED,
+        HttpStatus.UNAUTHORIZED,
+        'We could not complete the sign-in. Please try again.',
+        { hint: ErrorHint.RE_LOGIN, cause: error },
       );
     }
 
     const { session } = data;
     const email = session.user.email;
     if (!email) {
-      throw new BadRequestException('OAuth provider did not return an email');
+      throw new ApiError(
+        ErrorCode.AUTH_OAUTH_EMAIL_MISSING,
+        HttpStatus.BAD_REQUEST,
+        'The sign-in provider did not return an email address.',
+      );
     }
     const metadata = (session.user.user_metadata ?? {}) as {
       full_name?: string;
@@ -211,8 +419,11 @@ export class AuthService {
     const { data, error } =
       await this.supabaseService.refreshSession(refreshToken);
     if (error || !data.session) {
-      throw new UnauthorizedException(
-        error?.message || 'Invalid or expired refresh token',
+      throw new ApiError(
+        ErrorCode.AUTH_TOKEN_INVALID,
+        HttpStatus.UNAUTHORIZED,
+        'Your session is no longer valid. Please log in again.',
+        { hint: ErrorHint.RE_LOGIN, cause: error },
       );
     }
     return {
@@ -244,11 +455,10 @@ export class AuthService {
 
     try {
       await this.prisma.$transaction(async (tx) => {
-        const organization = await tx.organization.create({
-          data: {
-            name: `${name}'s School`,
-          },
-        });
+        const organization = await this.createOrganization(
+          tx,
+          `${name}'s School`,
+        );
         await tx.user.create({
           data: {
             authId,

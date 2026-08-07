@@ -1,8 +1,24 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { BillingService } from './billing.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { STRIPE_CLIENT } from './stripe-client';
+import { ApiError } from '../common/errors/api-error';
+import { ErrorCode } from '../common/errors/codes';
+
+async function expectApiError(
+  promise: Promise<unknown>,
+  code: string,
+  status: number,
+) {
+  try {
+    await promise;
+    fail('expected an ApiError to be thrown');
+  } catch (err) {
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).code).toBe(code);
+    expect((err as ApiError).getStatus()).toBe(status);
+  }
+}
 
 describe('BillingService', () => {
   let service: BillingService;
@@ -131,12 +147,14 @@ describe('BillingService', () => {
   });
 
   it('throws BadRequest for a plan outside the catalog', async () => {
-    await expect(
+    await expectApiError(
       service.createCheckoutSession({
         ...input,
         planId: 'gold' as unknown as 'basic',
       }),
-    ).rejects.toThrow(BadRequestException);
+      ErrorCode.PLAN_NOT_AVAILABLE,
+      400,
+    );
     expect(mockPrisma.organization.findUnique).not.toHaveBeenCalled();
   });
 
@@ -147,16 +165,20 @@ describe('BillingService', () => {
       mockStripe as never,
     );
 
-    await expect(service.createCheckoutSession(input)).rejects.toThrow(
-      BadRequestException,
+    await expectApiError(
+      service.createCheckoutSession(input),
+      ErrorCode.PLAN_NOT_AVAILABLE,
+      400,
     );
   });
 
   it('throws NotFound for a missing organization', async () => {
     mockPrisma.organization.findUnique.mockResolvedValue(null);
 
-    await expect(service.createCheckoutSession(input)).rejects.toThrow(
-      NotFoundException,
+    await expectApiError(
+      service.createCheckoutSession(input),
+      ErrorCode.ORG_NOT_FOUND,
+      404,
     );
   });
 
@@ -174,8 +196,10 @@ describe('BillingService', () => {
         stripeSubscriptionId: null,
       });
 
-      await expect(service.changePlan(changeInput)).rejects.toThrow(
-        BadRequestException,
+      await expectApiError(
+        service.changePlan(changeInput),
+        ErrorCode.BILLING_NO_SUBSCRIPTION,
+        400,
       );
       expect(mockStripe.subscriptions.retrieve).not.toHaveBeenCalled();
     });
@@ -245,8 +269,10 @@ describe('BillingService', () => {
         mockStripe as never,
       );
 
-      await expect(fresh.changePlan(changeInput)).rejects.toThrow(
-        BadRequestException,
+      await expectApiError(
+        fresh.changePlan(changeInput),
+        ErrorCode.PLAN_NOT_AVAILABLE,
+        400,
       );
       expect(mockPrisma.organization.findUnique).not.toHaveBeenCalled();
     });
@@ -262,8 +288,10 @@ describe('BillingService', () => {
         items: { data: [] },
       });
 
-      await expect(service.changePlan(changeInput)).rejects.toThrow(
-        BadRequestException,
+      await expectApiError(
+        service.changePlan(changeInput),
+        ErrorCode.BILLING_NO_ITEMS,
+        400,
       );
     });
   });
@@ -324,9 +352,11 @@ describe('BillingService', () => {
     it('throws NotFound for a missing organization', async () => {
       mockPrisma.organization.findUnique.mockResolvedValue(null);
 
-      await expect(
+      await expectApiError(
         service.createBillingPortalSession(portalInput),
-      ).rejects.toThrow(NotFoundException);
+        ErrorCode.ORG_NOT_FOUND,
+        404,
+      );
     });
   });
 });
