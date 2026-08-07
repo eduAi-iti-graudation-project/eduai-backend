@@ -7,7 +7,7 @@ describe('DashboardService', () => {
   let service: DashboardService;
 
   const mockPrisma = {
-    class: { count: jest.fn() },
+    courseOffering: { count: jest.fn() },
     gradingScore: { count: jest.fn(), findMany: jest.fn() },
     alert: { findMany: jest.fn(), count: jest.fn() },
     submission: { findMany: jest.fn() },
@@ -16,6 +16,7 @@ describe('DashboardService', () => {
     attendance: { findMany: jest.fn() },
     user: { count: jest.fn(), findUnique: jest.fn(), findMany: jest.fn() },
     studentReport: { count: jest.fn() },
+    gradeLevel: { findUnique: jest.fn() },
   };
 
   beforeEach(async () => {
@@ -48,7 +49,7 @@ describe('DashboardService', () => {
     const teacherUser = mockUser({ id: 'teacher-1', role: 'TEACHER' });
 
     it('should return teacher dashboard shape', async () => {
-      mockPrisma.class.count.mockResolvedValue(3);
+      mockPrisma.courseOffering.count.mockResolvedValue(3);
       mockPrisma.gradingScore.count.mockResolvedValue(5);
       mockPrisma.alert.findMany.mockResolvedValue([
         {
@@ -99,7 +100,11 @@ describe('DashboardService', () => {
   });
 
   describe('studentDashboard', () => {
-    const studentUser = mockUser({ id: 'student-1', role: 'STUDENT' });
+    const studentUser = mockUser({
+      id: 'student-1',
+      role: 'STUDENT',
+      gradeId: 'grade-1',
+    });
 
     it('should return student dashboard shape', async () => {
       const futureDate = new Date();
@@ -107,12 +112,17 @@ describe('DashboardService', () => {
 
       mockPrisma.enrollment.findMany.mockResolvedValue([
         {
-          class: {
+          section: {
             name: 'Math 101',
-            assignments: [
+            offerings: [
               {
-                title: 'Homework 1',
-                dueDate: futureDate,
+                course: { name: 'Math 101' },
+                assignments: [
+                  {
+                    title: 'Homework 1',
+                    dueDate: futureDate,
+                  },
+                ],
               },
             ],
           },
@@ -142,18 +152,49 @@ describe('DashboardService', () => {
       ]);
       mockPrisma.alert.findMany.mockResolvedValue([]);
       mockPrisma.notification.count.mockResolvedValue(1);
+      mockPrisma.gradeLevel.findUnique.mockResolvedValue({
+        id: 'grade-1',
+        level: 10,
+        name: 'Grade 10',
+      });
 
       const result = (await service.getOverview(studentUser)) as {
         recentGrades: unknown[];
+        grade: { id: string; level: number; name: string } | null;
       };
 
+      expect(mockPrisma.gradeLevel.findUnique).toHaveBeenCalledWith({
+        where: { id: 'grade-1' },
+      });
       expect(result).toMatchObject({
         upcomingAssignments: [{ title: 'Homework 1', className: 'Math 101' }],
         attendanceRate: 0.75,
         activeAlerts: [],
         unreadNotifications: 1,
+        grade: { id: 'grade-1', level: 10, name: 'Grade 10' },
       });
       expect(result.recentGrades).toHaveLength(2);
+    });
+
+    it('should return grade null when the student has no grade', async () => {
+      const ungraded = mockUser({ id: 'student-2', role: 'STUDENT' });
+      mockPrisma.enrollment.findMany.mockResolvedValue([]);
+      mockPrisma.gradingScore.findMany.mockResolvedValue([]);
+      mockPrisma.attendance.findMany.mockResolvedValue([]);
+      mockPrisma.alert.findMany.mockResolvedValue([]);
+      mockPrisma.notification.count.mockResolvedValue(0);
+
+      const result = await service.getOverview(ungraded);
+
+      expect(mockPrisma.gradeLevel.findUnique).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        upcomingAssignments: [],
+        recentGrades: [],
+        attendanceRate: 0,
+        activeAlerts: [],
+        unreadNotifications: 0,
+        grade: null,
+      });
     });
 
     it('should handle empty enrollments', async () => {
@@ -185,7 +226,9 @@ describe('DashboardService', () => {
           {
             id: 'ward-1',
             name: 'Child A',
-            enrollments: [{ class: { name: 'Science' } }],
+            enrollments: [
+              { section: { offerings: [{ course: { name: 'Science' } }] } },
+            ],
           },
         ],
       });
@@ -245,14 +288,14 @@ describe('DashboardService', () => {
         .mockResolvedValueOnce(5) // teacherCount
         .mockResolvedValueOnce(100) // studentCount
         .mockResolvedValueOnce(3); // flaggedStudentCount
-      mockPrisma.class.count.mockResolvedValue(15);
+      mockPrisma.courseOffering.count.mockResolvedValue(15);
       mockPrisma.studentReport.count.mockResolvedValue(2);
       mockPrisma.notification.count.mockResolvedValue(0);
       mockPrisma.user.findMany.mockResolvedValue([
         {
           id: 't1',
           name: 'Teacher A',
-          taughtClasses: [
+          teacherOfferings: [
             {
               assignments: [
                 {

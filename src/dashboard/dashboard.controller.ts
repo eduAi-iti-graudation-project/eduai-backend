@@ -1,10 +1,4 @@
-import {
-  BadRequestException,
-  Controller,
-  Get,
-  Param,
-  Query,
-} from '@nestjs/common';
+import { Controller, Get, Param, Query, HttpStatus } from '@nestjs/common';
 import {
   ApiTags,
   ApiOperation,
@@ -12,6 +6,8 @@ import {
   ApiQuery,
 } from '@nestjs/swagger';
 import { DashboardService } from './dashboard.service';
+import { ApiError } from '../common/errors/api-error';
+import { ErrorCode } from '../common/errors/codes';
 import { InsightsService } from './insights.service';
 import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
@@ -54,7 +50,11 @@ export class DashboardController {
   getInsights(@CurrentUser() user: User, @Query('interval') interval?: string) {
     const parsed = InsightsQuerySchema.safeParse({ interval });
     if (!parsed.success) {
-      throw new BadRequestException('interval must be "week" or "month"');
+      throw new ApiError(
+        ErrorCode.VALIDATION_FAILED,
+        HttpStatus.BAD_REQUEST,
+        'The interval must be "week" or "month".',
+      );
     }
     return this.insightsService.getInsights(user, parsed.data.interval);
   }
@@ -80,7 +80,11 @@ export class DashboardController {
   ) {
     const parsed = InsightsQuerySchema.safeParse({ interval });
     if (!parsed.success) {
-      throw new BadRequestException('interval must be "week" or "month"');
+      throw new ApiError(
+        ErrorCode.VALIDATION_FAILED,
+        HttpStatus.BAD_REQUEST,
+        'The interval must be "week" or "month".',
+      );
     }
     return this.insightsService.getStudentInsights(
       user,
