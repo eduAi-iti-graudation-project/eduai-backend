@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 export const UploadMaterialSchema = z.object({
   title: z.string().min(1),
-  classId: z.string().uuid(),
+  courseOfferingId: z.string().uuid(),
 });
 
 export const ChunkSearchResultSchema = z.object({
@@ -18,7 +18,7 @@ const MaterialSchema = z.object({
   id: z.string().uuid(),
   title: z.string(),
   fileUrl: z.string().nullable(),
-  classId: z.string().uuid(),
+  courseOfferingId: z.string().uuid(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });

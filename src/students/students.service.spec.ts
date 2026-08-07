@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { ApiError } from '../common/errors/api-error';
 import { Test, TestingModule } from '@nestjs/testing';
 import { StudentsService } from './students.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -71,7 +71,7 @@ describe('StudentsService', () => {
       });
     });
 
-    it('should throw NotFoundException if submission does not belong to student', async () => {
+    it('should throw if submission does not belong to student', async () => {
       mockPrisma.submission.findFirst.mockResolvedValue(null);
 
       try {
@@ -82,7 +82,8 @@ describe('StudentsService', () => {
         );
         expect('should have thrown').toBe('but did not');
       } catch (err) {
-        expect(err).toBeInstanceOf(NotFoundException);
+        expect(err).toBeInstanceOf(ApiError);
+        expect((err as ApiError).code).toBe('SUBMISSION_NOT_FOUND');
       }
 
       expect(mockPrisma.submission.findFirst).toHaveBeenCalledWith({
@@ -90,7 +91,7 @@ describe('StudentsService', () => {
       });
     });
 
-    it('should throw NotFoundException if submission does not exist', async () => {
+    it('should throw if submission does not exist', async () => {
       mockPrisma.submission.findFirst.mockResolvedValue(null);
 
       try {
@@ -101,7 +102,8 @@ describe('StudentsService', () => {
         );
         expect('should have thrown').toBe('but did not');
       } catch (err) {
-        expect(err).toBeInstanceOf(NotFoundException);
+        expect(err).toBeInstanceOf(ApiError);
+        expect((err as ApiError).code).toBe('SUBMISSION_NOT_FOUND');
       }
     });
   });

@@ -67,10 +67,11 @@ async function main() {
 
   const organization = await prisma.organization.upsert({
     where: { id: '00000000-0000-0000-0000-00000000a001' },
-    update: {},
+    update: { joinCode: 'DEMO2026' },
     create: {
       id: '00000000-0000-0000-0000-00000000a001',
       name: 'Demo School',
+      joinCode: 'DEMO2026',
       seatLimit: 50,
     },
   });
@@ -89,15 +90,17 @@ async function main() {
   console.log(`  Admin: ${adminUser.name} (${adminUser.id})`);
 
   for (let level = 1; level <= 12; level++) {
-    await prisma.grade.upsert({
-      where: { level },
-      update: {},
-      create: { level },
+    await prisma.gradeLevel.upsert({
+      where: { organizationId_level: { organizationId: organization.id, level } },
+      update: { name: `Grade ${level}` },
+      create: { organizationId: organization.id, level, name: `Grade ${level}` },
     });
   }
   console.log('  Grades 1–12 created');
 
-  const grade10 = await prisma.grade.findUniqueOrThrow({ where: { level: 10 } });
+  const grade10 = await prisma.gradeLevel.findUniqueOrThrow({
+    where: { organizationId_level: { organizationId: organization.id, level: 10 } },
+  });
 
   const teacher = await prisma.user.upsert({
     where: { email: 'teacher@eduai.test' },
@@ -155,91 +158,169 @@ async function main() {
   });
   console.log(`  Placeholder: ${placeholder.name} (${placeholder.id})`);
 
-  const englishClass = await prisma.class.upsert({
+  const englishSection = await prisma.section.upsert({
     where: { id: '00000000-0000-0000-0000-000000000001' },
-    update: { teacherId: teacher.id },
+    update: { gradeLevelId: grade10.id },
     create: {
       id: '00000000-0000-0000-0000-000000000001',
       name: 'English 101 — Essay Writing',
       description: 'Foundational course on academic essay writing, thesis development, and argumentation.',
+      gradeLevelId: grade10.id,
+      organizationId: organization.id,
+    },
+  });
+
+  const englishCourse = await prisma.course.upsert({
+    where: { id: '00000000-0000-0000-0000-000000000011' },
+    update: { gradeLevelId: grade10.id },
+    create: {
+      id: '00000000-0000-0000-0000-000000000011',
+      name: 'English 101 — Essay Writing',
+      description: 'Foundational course on academic essay writing, thesis development, and argumentation.',
+      gradeLevelId: grade10.id,
+      organizationId: organization.id,
+    },
+  });
+
+  const englishOffering = await prisma.courseOffering.upsert({
+    where: {
+      courseId_sectionId: { courseId: englishCourse.id, sectionId: englishSection.id },
+    },
+    update: { teacherId: teacher.id },
+    create: {
+      id: '00000000-0000-0000-0000-000000000021',
+      courseId: englishCourse.id,
+      sectionId: englishSection.id,
       teacherId: teacher.id,
       organizationId: organization.id,
     },
   });
 
-  const historyClass = await prisma.class.upsert({
+  const historySection = await prisma.section.upsert({
     where: { id: '00000000-0000-0000-0000-000000000002' },
-    update: { teacherId: teacher.id },
+    update: { gradeLevelId: grade10.id },
     create: {
       id: '00000000-0000-0000-0000-000000000002',
       name: 'History 201 — Research Methods',
       description: 'Intermediate course on historical research, source evaluation, and analytical writing.',
+      gradeLevelId: grade10.id,
+      organizationId: organization.id,
+    },
+  });
+
+  const historyCourse = await prisma.course.upsert({
+    where: { id: '00000000-0000-0000-0000-000000000012' },
+    update: { gradeLevelId: grade10.id },
+    create: {
+      id: '00000000-0000-0000-0000-000000000012',
+      name: 'History 201 — Research Methods',
+      description: 'Intermediate course on historical research, source evaluation, and analytical writing.',
+      gradeLevelId: grade10.id,
+      organizationId: organization.id,
+    },
+  });
+
+  const historyOffering = await prisma.courseOffering.upsert({
+    where: {
+      courseId_sectionId: { courseId: historyCourse.id, sectionId: historySection.id },
+    },
+    update: { teacherId: teacher.id },
+    create: {
+      id: '00000000-0000-0000-0000-000000000022',
+      courseId: historyCourse.id,
+      sectionId: historySection.id,
       teacherId: teacher.id,
       organizationId: organization.id,
     },
   });
 
-  const scienceClass = await prisma.class.upsert({
+  const scienceSection = await prisma.section.upsert({
     where: { id: '00000000-0000-0000-0000-000000000003' },
-    update: { teacherId: teacher.id },
+    update: { gradeLevelId: grade10.id },
     create: {
       id: '00000000-0000-0000-0000-000000000003',
       name: 'Science 301 — Lab Reports',
       description: 'Advanced course on scientific writing, experimental methodology, and data presentation.',
+      gradeLevelId: grade10.id,
+      organizationId: organization.id,
+    },
+  });
+
+  const scienceCourse = await prisma.course.upsert({
+    where: { id: '00000000-0000-0000-0000-000000000013' },
+    update: { gradeLevelId: grade10.id },
+    create: {
+      id: '00000000-0000-0000-0000-000000000013',
+      name: 'Science 301 — Lab Reports',
+      description: 'Advanced course on scientific writing, experimental methodology, and data presentation.',
+      gradeLevelId: grade10.id,
+      organizationId: organization.id,
+    },
+  });
+
+  const scienceOffering = await prisma.courseOffering.upsert({
+    where: {
+      courseId_sectionId: { courseId: scienceCourse.id, sectionId: scienceSection.id },
+    },
+    update: { teacherId: teacher.id },
+    create: {
+      id: '00000000-0000-0000-0000-000000000023',
+      courseId: scienceCourse.id,
+      sectionId: scienceSection.id,
       teacherId: teacher.id,
       organizationId: organization.id,
     },
   });
 
-  console.log(`  Classes: ${englishClass.name}, ${historyClass.name}, ${scienceClass.name}`);
+  console.log(`  Classes: ${englishSection.name}, ${historySection.name}, ${scienceSection.name}`);
 
   await prisma.enrollment.upsert({
-    where: { classId_studentId: { classId: englishClass.id, studentId: student.id } },
+    where: { sectionId_studentId: { sectionId: englishSection.id, studentId: student.id } },
     update: {},
     create: {
-      classId: englishClass.id,
+      sectionId: englishSection.id,
       studentId: student.id,
       status: 'APPROVED',
     },
   });
-  console.log(`  Enrollment: ${student.name} → ${englishClass.name}`);
+  console.log(`  Enrollment: ${student.name} → ${englishSection.name}`);
 
   const essayAssignment = await prisma.assignment.upsert({
     where: { id: '00000000-0000-0000-0000-000000000101' },
-    update: { classId: englishClass.id },
+    update: { courseOfferingId: englishOffering.id },
     create: {
       id: '00000000-0000-0000-0000-000000000101',
       title: 'Persuasive Essay — AI in Education',
       description: 'Write a 500-800 word persuasive essay arguing for or against the use of AI in education.',
       dueDate: new Date('2026-08-15'),
       totalPoints: 40,
-      classId: englishClass.id,
+      courseOfferingId: englishOffering.id,
     },
   });
 
   const researchAssignment = await prisma.assignment.upsert({
     where: { id: '00000000-0000-0000-0000-000000000102' },
-    update: { classId: historyClass.id },
+    update: { courseOfferingId: historyOffering.id },
     create: {
       id: '00000000-0000-0000-0000-000000000102',
       title: 'Research Proposal — Historical Event Analysis',
       description: 'Submit a research proposal for analyzing a historical event using primary and secondary sources.',
       dueDate: new Date('2026-09-01'),
       totalPoints: 50,
-      classId: historyClass.id,
+      courseOfferingId: historyOffering.id,
     },
   });
 
   const labAssignment = await prisma.assignment.upsert({
     where: { id: '00000000-0000-0000-0000-000000000103' },
-    update: { classId: scienceClass.id },
+    update: { courseOfferingId: scienceOffering.id },
     create: {
       id: '00000000-0000-0000-0000-000000000103',
       title: 'Lab Report — Enzyme Kinetics Experiment',
       description: 'Write a full lab report following the standard scientific format with abstract, methods, results, and discussion.',
       dueDate: new Date('2026-09-15'),
       totalPoints: 60,
-      classId: scienceClass.id,
+      courseOfferingId: scienceOffering.id,
     },
   });
 
@@ -301,13 +382,21 @@ async function main() {
 
   console.log('  3 rubrics created');
 
+  await prisma.rubric.update({
+    where: { id: '00000000-0000-0000-0000-000000000201' },
+    data: { isConfirmed: true },
+  });
+  console.log('  Essay rubric confirmed');
+
   const submission = await prisma.submission.upsert({
     where: { id: '00000000-0000-0000-0000-000000000301' },
-    update: { studentId: student.id },
+    update: { studentId: student.id, status: 'CONFIRMED', finalScore: 29 },
     create: {
       id: '00000000-0000-0000-0000-000000000301',
       assignmentId: essayAssignment.id,
       studentId: student.id,
+      status: 'CONFIRMED',
+      finalScore: 29,
     },
   });
 
@@ -326,42 +415,156 @@ async function main() {
 
   console.log(`  Submission created for "${essayAssignment.title}" (${chunks.length} chunks)`);
 
-  const grade6 = await prisma.grade.findUniqueOrThrow({ where: { level: 6 } });
-  const grade8 = await prisma.grade.findUniqueOrThrow({ where: { level: 8 } });
+  const secondStudent = await prisma.user.upsert({
+    where: { email: 'maya@eduai.test' },
+    update: {},
+    create: {
+      email: 'maya@eduai.test',
+      name: 'Maya Chen',
+      role: 'STUDENT',
+      gradeId: grade10.id,
+      organizationId: organization.id,
+    },
+  });
+  console.log(`  Student: ${secondStudent.name} (${secondStudent.id})`);
 
-  await prisma.teacherGrade.upsert({
-    where: { teacherId_gradeId: { teacherId: teacher.id, gradeId: grade6.id } },
+  await prisma.enrollment.upsert({
+    where: {
+      sectionId_studentId: { sectionId: englishSection.id, studentId: secondStudent.id },
+    },
     update: {},
-    create: { teacherId: teacher.id, gradeId: grade6.id },
+    create: {
+      sectionId: englishSection.id,
+      studentId: secondStudent.id,
+      status: 'APPROVED',
+    },
   });
-  await prisma.teacherGrade.upsert({
-    where: { teacherId_gradeId: { teacherId: teacher.id, gradeId: grade8.id } },
-    update: {},
-    create: { teacherId: teacher.id, gradeId: grade8.id },
-  });
-  await prisma.teacherGrade.upsert({
-    where: { teacherId_gradeId: { teacherId: teacher.id, gradeId: grade10.id } },
-    update: {},
-    create: { teacherId: teacher.id, gradeId: grade10.id },
-  });
-  console.log('  Teacher assigned to grades 6, 8, 10');
+  console.log(`  Enrollment: ${secondStudent.name} → ${englishSection.name}`);
 
-  await prisma.gradeClass.upsert({
-    where: { gradeId_classId: { gradeId: grade10.id, classId: englishClass.id } },
-    update: {},
-    create: { gradeId: grade10.id, classId: englishClass.id },
+  const essayRubric = await prisma.rubric.findUnique({
+    where: { id: '00000000-0000-0000-0000-000000000201' },
+    include: { criteria: true },
   });
-  await prisma.gradeClass.upsert({
-    where: { gradeId_classId: { gradeId: grade10.id, classId: historyClass.id } },
-    update: {},
-    create: { gradeId: grade10.id, classId: historyClass.id },
+  const essayCriteria = essayRubric?.criteria ?? [];
+
+  await prisma.gradingScore.createMany({
+    data: essayCriteria.map((c) => ({
+      submissionId: submission.id,
+      criteriaId: c.id,
+      pointsAwarded: Math.max(1, Math.round((c.maxPoints * 0.72) / 100)),
+      isConfirmed: true,
+      createdAt: new Date('2026-06-20'),
+    })),
+    skipDuplicates: true,
   });
-  await prisma.gradeClass.upsert({
-    where: { gradeId_classId: { gradeId: grade10.id, classId: scienceClass.id } },
-    update: {},
-    create: { gradeId: grade10.id, classId: scienceClass.id },
+
+  const seedSubmission = async (
+    submissionId: string,
+    assignmentId: string,
+    studentId: string,
+    pct: number,
+    status: 'SUBMITTED' | 'CONFIRMED',
+    createdAt: Date,
+  ) => {
+    const sub = await prisma.submission.upsert({
+      where: { id: submissionId },
+      update: {
+        assignmentId,
+        studentId,
+        status,
+        finalScore: status === 'CONFIRMED' ? Math.round(pct) : null,
+      },
+      create: {
+        id: submissionId,
+        assignmentId,
+        studentId,
+        status,
+        finalScore: status === 'CONFIRMED' ? Math.round(pct) : null,
+        createdAt,
+      },
+    });
+
+    const essayChunks = chunkText(SAMPLE_ESSAY);
+    if (essayChunks.length > 0) {
+      await prisma.submissionChunk.deleteMany({
+        where: { submissionId },
+      });
+      await prisma.submissionChunk.createMany({
+        data: essayChunks.map((content) => ({ submissionId, content })),
+      });
+    }
+
+    const confirmed = status === 'CONFIRMED';
+    await prisma.gradingScore.createMany({
+      data: essayCriteria.map((c) => ({
+        submissionId,
+        criteriaId: c.id,
+        pointsAwarded: Math.max(1, Math.round((c.maxPoints * pct) / 100)),
+        isConfirmed: confirmed,
+        createdAt,
+      })),
+      skipDuplicates: true,
+    });
+    return sub;
+  };
+
+  await seedSubmission(
+    '00000000-0000-0000-0000-000000000302',
+    researchAssignment.id,
+    student.id,
+    72,
+    'CONFIRMED',
+    new Date('2026-07-01'),
+  );
+  await seedSubmission(
+    '00000000-0000-0000-0000-000000000303',
+    labAssignment.id,
+    student.id,
+    57,
+    'CONFIRMED',
+    new Date('2026-07-10'),
+  );
+  await seedSubmission(
+    '00000000-0000-0000-0000-000000000304',
+    labAssignment.id,
+    secondStudent.id,
+    45,
+    'SUBMITTED',
+    new Date('2026-07-20'),
+  );
+  await seedSubmission(
+    '00000000-0000-0000-0000-000000000305',
+    essayAssignment.id,
+    secondStudent.id,
+    80,
+    'CONFIRMED',
+    new Date('2026-07-02'),
+  );
+  await seedSubmission(
+    '00000000-0000-0000-0000-000000000306',
+    researchAssignment.id,
+    secondStudent.id,
+    77,
+    'CONFIRMED',
+    new Date('2026-07-12'),
+  );
+  console.log(
+    '  Demo grades seeded: Sam (essay 29%, research 72%, lab 57%), Maya (essay 80%, research 77%, lab 45% pending)',
+  );
+
+  const offerings = [englishOffering, historyOffering, scienceOffering];
+
+  await prisma.classTeacherLog.deleteMany({
+    where: { courseOfferingId: { in: offerings.map((o) => o.id) } },
   });
-  console.log('  Classes linked to Grade 10');
+  await prisma.classTeacherLog.createMany({
+    data: offerings.map((offering) => ({
+      courseOfferingId: offering.id,
+      teacherId: teacher.id,
+      startedAt: offering.createdAt,
+    })),
+  });
+  console.log(`  Teacher assigned to ${offerings.length} course offerings (grade 10)`);
 
   const adminAuthId = await createAuthUser('admin@eduai.test', 'password123', 'Admin User');
   if (adminAuthId) {
@@ -387,6 +590,14 @@ async function main() {
     });
   }
 
+  const mayaAuthId = await createAuthUser('maya@eduai.test', 'password123', 'Maya Chen');
+  if (mayaAuthId) {
+    await prisma.user.update({
+      where: { email: 'maya@eduai.test' },
+      data: { authId: mayaAuthId },
+    });
+  }
+
   const guardianAuthId = await createAuthUser('guardian@eduai.test', 'password123', 'Guardian User');
   if (guardianAuthId) {
     await prisma.user.update({
@@ -398,16 +609,19 @@ async function main() {
   console.log('\n✅ Seed complete! IDs for Swagger testing:');
   console.log(`  Admin ID:         ${adminUser.id}`);
   console.log(`  Student ID:       ${student.id}`);
-  console.log(`  Class (English):  ${englishClass.id}`);
-  console.log(`  Class (History):  ${historyClass.id}`);
-  console.log(`  Class (Science):  ${scienceClass.id}`);
+  console.log(`  Student 2 ID:     ${secondStudent.id}`);
+  console.log(`  Section (English):  ${englishSection.id}`);
+  console.log(`  Section (History):  ${historySection.id}`);
+  console.log(`  Section (Science):  ${scienceSection.id}`);
   console.log(`  Assignment (Essay):      ${essayAssignment.id}`);
   console.log(`  Assignment (Research):   ${researchAssignment.id}`);
   console.log(`  Assignment (Lab):        ${labAssignment.id}`);
   console.log(`  Rubric (Essay):         00000000-0000-0000-0000-000000000201`);
   console.log(`  Rubric (Research):      00000000-0000-0000-0000-000000000202`);
   console.log(`  Rubric (Lab):           00000000-0000-0000-0000-000000000203`);
-  console.log(`  Submission:             00000000-0000-0000-0000-000000000301`);
+  console.log('  Submissions:');
+  console.log('    Sam:  301 essay (CONFIRMED 29), 302 research (CONFIRMED 72), 303 lab (CONFIRMED 57)');
+  console.log('    Maya: 305 essay (CONFIRMED 80), 306 research (CONFIRMED 77), 304 lab (SUBMITTED 45 — confirm me)');
 }
 
 main()

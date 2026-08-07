@@ -1,7 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { AlertsService } from './alerts.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { NotFoundException } from '@nestjs/common';
 
 describe('AlertsService', () => {
   let service: AlertsService;
@@ -38,9 +37,18 @@ describe('AlertsService', () => {
           status: 'ACTIVE',
           studentId: 's1',
           createdAt: new Date('2026-07-30'),
+          offering: { id: 'o1', teacher: { id: 't1', name: 'Ms. Lee' } },
           student: {
             name: 'Jamie S.',
-            enrollments: [{ class: { name: 'Biology 101' } }],
+            grade: { id: 'g1', level: 10, name: 'Grade 10' },
+            enrollments: [
+              {
+                section: {
+                  name: 'Biology 101',
+                  gradeLevel: { id: 'g1', level: 10, name: 'Grade 10' },
+                },
+              },
+            ],
           },
           analyses: [
             {
@@ -76,6 +84,9 @@ describe('AlertsService', () => {
           createdAt: '2026-07-30T00:00:00.000Z',
           studentName: 'Jamie S.',
           className: 'Biology 101',
+          grade: { id: 'g1', level: 10, name: 'Grade 10' },
+          teacherName: 'Ms. Lee',
+          teacherId: 't1',
           severity: 'HIGH',
           skillGapCount: 3,
         },
@@ -88,6 +99,9 @@ describe('AlertsService', () => {
           createdAt: '2026-07-28T00:00:00.000Z',
           studentName: 'Sam L.',
           className: null,
+          grade: null,
+          teacherName: null,
+          teacherId: null,
           severity: null,
           skillGapCount: 0,
         },
@@ -151,20 +165,20 @@ describe('AlertsService', () => {
       expect(result.status).toBe('DISMISSED');
     });
 
-    it('should throw NotFoundException for non-existent alert', async () => {
+    it('should throw for non-existent alert', async () => {
       mockPrisma.alert.findFirst.mockResolvedValue(null);
 
       await expect(
         service.resolve('bad-id', 'RESOLVED', organizationId),
-      ).rejects.toThrow(NotFoundException);
+      ).rejects.toMatchObject({ code: 'ALERT_NOT_FOUND' });
     });
 
-    it('should throw NotFoundException when the alert belongs to another organization', async () => {
+    it('should throw when the alert belongs to another organization', async () => {
       mockPrisma.alert.findFirst.mockResolvedValue(null);
 
       await expect(
         service.resolve('org-b-alert', 'RESOLVED', organizationId),
-      ).rejects.toThrow(NotFoundException);
+      ).rejects.toMatchObject({ code: 'ALERT_NOT_FOUND' });
       expect(mockPrisma.alert.findFirst).toHaveBeenCalledWith({
         where: { id: 'org-b-alert', student: { organizationId } },
       });

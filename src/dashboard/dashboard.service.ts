@@ -13,7 +13,7 @@ export class DashboardService {
       case 'TEACHER':
         return this.teacherDashboard(user.id);
       case 'STUDENT':
-        return this.studentDashboard(user.id);
+        return this.studentDashboard(user);
       case 'GUARDIAN':
         return this.guardianDashboard(user.id);
       case 'ADMIN':
@@ -31,13 +31,13 @@ export class DashboardService {
       submissionsNeedingReview,
       unreadNotifications,
     ] = await Promise.all([
-      this.prisma.class.count({ where: { teacherId } }),
+      this.prisma.courseOffering.count({ where: { teacherId } }),
 
       this.prisma.gradingScore.count({
         where: {
           isConfirmed: false,
           submission: {
-            assignment: { class: { teacherId } },
+            assignment: { offering: { teacherId } },
           },
         },
       }),
@@ -45,21 +45,31 @@ export class DashboardService {
       this.prisma.alert.count({
         where: {
           status: 'ACTIVE',
-          student: { enrollments: { some: { class: { teacherId } } } },
+          student: {
+            enrollments: {
+              some: { section: { offerings: { some: { teacherId } } } },
+            },
+          },
         },
       }),
 
       this.prisma.alert.count({
         where: {
           status: { in: ['RESOLVED', 'DISMISSED'] },
-          student: { enrollments: { some: { class: { teacherId } } } },
+          student: {
+            enrollments: {
+              some: { section: { offerings: { some: { teacherId } } } },
+            },
+          },
         },
       }),
 
       this.prisma.alert.findMany({
         where: {
           student: {
-            enrollments: { some: { class: { teacherId } } },
+            enrollments: {
+              some: { section: { offerings: { some: { teacherId } } } },
+            },
           },
         },
         include: { student: true },
@@ -70,7 +80,7 @@ export class DashboardService {
       this.prisma.submission.findMany({
         where: {
           status: 'REVIEW_READY',
-          assignment: { class: { teacherId } },
+          assignment: { offering: { teacherId } },
         },
         include: {
           student: true,
@@ -114,23 +124,30 @@ export class DashboardService {
     };
   }
 
-  private async studentDashboard(studentId: string) {
+  private async studentDashboard(student: User) {
+    const studentId = student.id;
     const [
       enrollments,
       confirmedScores,
       attendanceRecords,
       activeAlerts,
       unreadNotifications,
+      grade,
     ] = await Promise.all([
       this.prisma.enrollment.findMany({
         where: { studentId },
         include: {
-          class: {
+          section: {
             include: {
-              assignments: {
-                where: { dueDate: { gte: new Date() } },
-                orderBy: { dueDate: 'asc' },
-                take: 10,
+              offerings: {
+                include: {
+                  course: true,
+                  assignments: {
+                    where: { dueDate: { gte: new Date() } },
+                    orderBy: { dueDate: 'asc' },
+                    take: 10,
+                  },
+                },
               },
             },
           },
@@ -161,6 +178,12 @@ export class DashboardService {
       this.prisma.notification.count({
         where: { userId: studentId, readAt: null },
       }),
+
+      student.gradeId
+        ? this.prisma.gradeLevel.findUnique({
+            where: { id: student.gradeId },
+          })
+        : Promise.resolve(null),
     ]);
 
     const totalAttendance = attendanceRecords.length;
@@ -190,11 +213,13 @@ export class DashboardService {
     }
 
     const upcomingAssignments = enrollments.flatMap((e) =>
-      e.class.assignments.map((a) => ({
-        title: a.title,
-        dueDate: a.dueDate.toISOString(),
-        className: e.class.name,
-      })),
+      e.section.offerings.flatMap((o) =>
+        o.assignments.map((a) => ({
+          title: a.title,
+          dueDate: a.dueDate.toISOString(),
+          className: o.course.name ?? e.section.name,
+        })),
+      ),
     );
 
     const recentGrades = Array.from(gradesByAssignment.values()).map((g) => ({
@@ -214,6 +239,9 @@ export class DashboardService {
         reason: a.reason,
       })),
       unreadNotifications,
+      grade: grade
+        ? { id: grade.id, level: grade.level, name: grade.name }
+        : null,
     };
   }
 
@@ -224,7 +252,11 @@ export class DashboardService {
         wards: {
           include: {
             enrollments: {
-              include: { class: true },
+              include: {
+                section: {
+                  include: { offerings: { include: { course: true } } },
+                },
+              },
               take: 1,
             },
           },
@@ -268,7 +300,10 @@ export class DashboardService {
         const overallAverage =
           confirmedScores.length > 0 ? totalEarned / confirmedScores.length : 0;
 
-        const className = ward.enrollments[0]?.class.name ?? '';
+        const className =
+          ward.enrollments[0]?.section.offerings[0]?.course.name ??
+          ward.enrollments[0]?.section.name ??
+          '';
 
         return {
           id: ward.id,
@@ -305,7 +340,7 @@ export class DashboardService {
       this.prisma.user.count({
         where: { role: 'STUDENT', organizationId },
       }),
-      this.prisma.class.count({ where: { organizationId } }),
+      this.prisma.courseOffering.count({ where: { organizationId } }),
       this.prisma.user.count({
         where: {
           role: 'STUDENT',
@@ -322,7 +357,7 @@ export class DashboardService {
       this.prisma.user.findMany({
         where: { role: 'TEACHER', organizationId },
         include: {
-          taughtClasses: {
+          teacherOfferings: {
             include: {
               assignments: {
                 include: {
@@ -341,8 +376,8 @@ export class DashboardService {
       let totalEarned = 0;
       const totalMax = 0;
       const studentIds = new Set<string>();
-      for (const cls of t.taughtClasses) {
-        for (const a of cls.assignments) {
+      for (const offering of t.teacherOfferings) {
+        for (const a of offering.assignments) {
           for (const sub of a.submissions) {
             studentIds.add(sub.studentId);
             for (const score of sub.scores) {
@@ -378,7 +413,7 @@ export class DashboardService {
     const scores = await this.prisma.gradingScore.findMany({
       where: {
         isConfirmed: true,
-        submission: { assignment: { class: { organizationId } } },
+        submission: { assignment: { offering: { organizationId } } },
       },
       include: { criteria: true },
     });

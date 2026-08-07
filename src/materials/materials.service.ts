@@ -1,3 +1,4 @@
+import { Injectable, HttpStatus } from '@nestjs/common';
 import {
   Injectable,
   NotFoundException,
@@ -12,6 +13,8 @@ import { LlmService } from '../common/llm/llm.service';
 import { chunkText } from '../common/chunker';
 import { SupabaseService } from '../auth/supabase.service';
 import pdfParse from 'pdf-parse';
+import { ApiError } from '../common/errors/api-error';
+import { ErrorCode } from '../common/errors/codes';
 
 const DEFAULT_BUCKET = 'materials';
 
@@ -33,14 +36,21 @@ export class MaterialsService {
 
   async upload(
     title: string,
-    classId: string,
+    courseOfferingId: string,
     buffer: Buffer,
     filename: string,
     organizationId: string,
   ) {
-    const cls = await this.prisma.class.findFirst({
-      where: { id: classId, organizationId },
+    const offering = await this.prisma.courseOffering.findFirst({
+      where: { id: courseOfferingId, organizationId },
     });
+    if (!offering) {
+      throw new ApiError(
+        ErrorCode.OFFERING_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This class could not be found.',
+      );
+    }
     if (!cls) throw new NotFoundException('Class not found');
     const isPdf = filename.toLowerCase().endsWith('.pdf');
     let rawText: string;
@@ -49,8 +59,11 @@ export class MaterialsService {
         const pdfData = await pdfParse(buffer);
         rawText = pdfData.text;
       } catch (err) {
-        throw new BadRequestException(
-          `Failed to parse PDF: ${err instanceof Error ? err.message : String(err)}`,
+        throw new ApiError(
+          ErrorCode.FILE_NO_TEXT,
+          HttpStatus.BAD_REQUEST,
+          'This PDF could not be read. Please try another file.',
+          { cause: err },
         );
       }
     } else {
@@ -58,21 +71,27 @@ export class MaterialsService {
     }
 
     if (!rawText || rawText.trim().length === 0) {
-      throw new BadRequestException('File contained no extractable text');
+      throw new ApiError(
+        ErrorCode.FILE_NO_TEXT,
+        HttpStatus.BAD_REQUEST,
+        'The uploaded file contained no extractable text.',
+      );
     }
 
     const chunks = chunkText(rawText);
     if (chunks.length === 0) {
-      throw new BadRequestException(
-        'No chunks could be extracted from the file',
+      throw new ApiError(
+        ErrorCode.FILE_NO_TEXT,
+        HttpStatus.BAD_REQUEST,
+        'The uploaded file contained no readable content.',
       );
     }
 
     const material = await this.prisma.material.create({
       data: {
         title,
-        classId,
-        fileUrl: isPdf ? null : filename,
+        courseOfferingId,
+        fileUrl: filename,
         chunks: {
           create: chunks.map((content) => ({ content })),
         },
@@ -121,15 +140,15 @@ export class MaterialsService {
     return {
       id: material.id,
       title: material.title,
-      classId: material.classId,
+      courseOfferingId: material.courseOfferingId,
       chunkCount: material.chunks.length,
       embedErrors: errors.length > 0 ? errors : undefined,
     };
   }
 
-  async findByClass(classId: string, organizationId: string) {
+  async findByClass(courseOfferingId: string, organizationId: string) {
     return this.prisma.material.findMany({
-      where: { classId, class: { organizationId } },
+      where: { courseOfferingId, offering: { organizationId } },
       include: { _count: { select: { chunks: true } } },
       orderBy: { createdAt: 'desc' },
     });
@@ -137,14 +156,20 @@ export class MaterialsService {
 
   async findOne(id: string, organizationId: string) {
     const material = await this.prisma.material.findFirst({
-      where: { id, class: { organizationId } },
+      where: { id, offering: { organizationId } },
       include: { chunks: true },
     });
-    if (!material) throw new NotFoundException('Material not found');
+    if (!material) {
+      throw new ApiError(
+        ErrorCode.MATERIAL_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This material could not be found.',
+      );
+    }
     return material;
   }
 
-  async searchChunks(classId: string, query: string, topK = 5) {
+  async searchChunks(courseOfferingId: string, query: string, topK = 5) {
     const embedding = await this.llm.embed(query);
     const vectorStr = `[${embedding.join(',')}]`;
     const chunks = await this.prisma.$queryRaw<
@@ -160,7 +185,7 @@ export class MaterialsService {
              m.id AS "materialId", m.title AS "materialTitle"
       FROM material_chunks mc
       JOIN materials m ON m.id = mc."materialId"
-      WHERE m."classId" = ${classId}::uuid
+      WHERE m."courseOfferingId" = ${courseOfferingId}::uuid
         AND mc.embedding IS NOT NULL
         AND mc.embedding <=> ${vectorStr}::vector < ${this.maxSearchDistance}
       ORDER BY distance ASC
@@ -171,8 +196,15 @@ export class MaterialsService {
 
   async delete(id: string, organizationId: string) {
     const material = await this.prisma.material.findFirst({
-      where: { id, class: { organizationId } },
+      where: { id, offering: { organizationId } },
     });
+    if (!material) {
+      throw new ApiError(
+        ErrorCode.MATERIAL_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This material could not be found.',
+      );
+    }
   async getMaterialFileUrl(id: string, user: User) {
     const material = await this.prisma.material.findUnique({
       where: { id },

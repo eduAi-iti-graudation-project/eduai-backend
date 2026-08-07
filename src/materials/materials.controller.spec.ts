@@ -6,7 +6,7 @@ import { MulterModule } from '@nestjs/platform-express';
 import { MaterialsController } from './materials.controller';
 import { MaterialsService } from './materials.service';
 
-const CLASS_ID = '00000000-0000-0000-0000-000000000001';
+const COURSE_OFFERING_ID = '00000000-0000-0000-0000-000000000001';
 const ORGANIZATION_ID = 'org-1';
 
 describe('MaterialsController (upload)', () => {
@@ -65,12 +65,12 @@ describe('MaterialsController (upload)', () => {
       .post('/materials/upload')
       .attach('file', pdfBytes, 'sample.pdf')
       .field('title', 'Sample')
-      .field('classId', CLASS_ID)
+      .field('courseOfferingId', COURSE_OFFERING_ID)
       .expect(201);
 
     expect(mockMaterialsService.upload).toHaveBeenCalledWith(
       'Sample',
-      CLASS_ID,
+      COURSE_OFFERING_ID,
       expect.any(Buffer),
       'sample.pdf',
       ORGANIZATION_ID,
@@ -85,12 +85,12 @@ describe('MaterialsController (upload)', () => {
       .post('/materials/upload')
       .attach('file', Buffer.from('hello world'), 'notes.txt')
       .field('title', 'Notes')
-      .field('classId', CLASS_ID)
+      .field('courseOfferingId', COURSE_OFFERING_ID)
       .expect(201);
 
     expect(mockMaterialsService.upload).toHaveBeenCalledWith(
       'Notes',
-      CLASS_ID,
+      COURSE_OFFERING_ID,
       expect.any(Buffer),
       'notes.txt',
       ORGANIZATION_ID,

@@ -115,9 +115,21 @@ const InsightSectionSchema = z.object({
     .optional(),
 });
 
+const AgentBriefSchema = z.object({
+  kind: z.literal('alert'),
+  type: z.string(),
+  severity: z.string().nullable().optional(),
+  headline: z.string(),
+  highlights: z.array(z.string()),
+  strengths: z.array(z.string()),
+  concerns: z.array(z.string()),
+  recommendation: z.string(),
+});
+
 const AgentInsightSchema = z.object({
   title: z.string(),
   summary: z.string(),
+  breakdown: AgentBriefSchema.optional(),
 });
 
 const InsightsResponseSchema = z.object({

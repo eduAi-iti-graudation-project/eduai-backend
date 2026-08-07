@@ -1,5 +1,4 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import type { User } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { InsightsService } from './insights.service';
@@ -21,7 +20,11 @@ describe('InsightsService', () => {
     alerts: {
       created: [] as { createdAt: Date }[],
       resolved: [] as { updatedAt: Date }[],
-      active: [] as { type: string; reason: string }[],
+      active: [] as {
+        type: string;
+        reason: string;
+        analyses: { diagnosis: unknown }[];
+      }[],
       all: [] as { status: string }[],
     },
     attendance: [] as { date: Date; status: string }[],
@@ -60,7 +63,7 @@ describe('InsightsService', () => {
       findFirst: jest.fn(),
       findMany: jest.fn(),
     },
-    class: { findFirst: jest.fn() },
+    courseOffering: { findFirst: jest.fn() },
   };
 
   beforeEach(async () => {
@@ -136,7 +139,7 @@ describe('InsightsService', () => {
     mockPrisma.user.findFirst.mockImplementation(() =>
       Promise.resolve(fixtures.guardianMatch),
     );
-    mockPrisma.class.findFirst.mockImplementation(() =>
+    mockPrisma.courseOffering.findFirst.mockImplementation(() =>
       Promise.resolve(fixtures.teacherClass),
     );
 
@@ -171,12 +174,20 @@ describe('InsightsService', () => {
         {
           pointsAwarded: 8,
           criteria: { maxPoints: 10, description: 'Clarity' },
-          submission: { assignment: { class: { name: 'Math' } } },
+          submission: {
+            assignment: {
+              offering: { course: { name: 'Math' }, section: { name: 'Math' } },
+            },
+          },
         },
         {
           pointsAwarded: 4,
           criteria: { maxPoints: 10, description: 'Clarity' },
-          submission: { assignment: { class: { name: 'Math' } } },
+          submission: {
+            assignment: {
+              offering: { course: { name: 'Math' }, section: { name: 'Math' } },
+            },
+          },
         },
       ];
       fixtures.alerts.created = [
@@ -304,7 +315,9 @@ describe('InsightsService', () => {
         { action: 'REDIRECT_TEACHER' },
         { action: 'REDIRECT_TEACHER' },
       ];
-      fixtures.alerts.active = [{ type: 'FAILING', reason: 'Low score' }];
+      fixtures.alerts.active = [
+        { type: 'FAILING', reason: 'Low score', analyses: [] },
+      ];
       fixtures.reports = [{ teacherSection: 'Report text' }];
     });
 
@@ -420,9 +433,9 @@ describe('InsightsService', () => {
         {
           id: 't1',
           name: 'T1',
-          taughtClasses: [
+          teacherOfferings: [
             {
-              enrollments: [{ id: 'e1' }, { id: 'e2' }],
+              section: { enrollments: [{ id: 'e1' }, { id: 'e2' }] },
               assignments: [
                 {
                   submissions: [
@@ -523,8 +536,11 @@ describe('InsightsService', () => {
 
       expect(result.sections.some((s) => s.key === 'grade_trend')).toBe(true);
       expect(
-        (argsOf(mockPrisma.class.findFirst).where as { teacherId: string })
-          .teacherId,
+        (
+          argsOf(mockPrisma.courseOffering.findFirst).where as {
+            teacherId: string;
+          }
+        ).teacherId,
       ).toBe('t1');
     });
 
@@ -532,13 +548,13 @@ describe('InsightsService', () => {
       fixtures.teacherClass = null;
       await expect(
         service.getStudentInsights(teacherUser, 's1', 'week'),
-      ).rejects.toThrow(ForbiddenException);
+      ).rejects.toMatchObject({ code: 'INSIGHTS_FORBIDDEN' });
     });
 
     it('forbids a student viewing someone else', async () => {
       await expect(
         service.getStudentInsights(studentUser, 's2', 'week'),
-      ).rejects.toThrow(ForbiddenException);
+      ).rejects.toMatchObject({ code: 'INSIGHTS_FORBIDDEN' });
     });
 
     it('allows a student viewing themselves', async () => {
@@ -554,7 +570,7 @@ describe('InsightsService', () => {
       fixtures.guardianMatch = null;
       await expect(
         service.getStudentInsights(guardianUser, 's1', 'week'),
-      ).rejects.toThrow(ForbiddenException);
+      ).rejects.toMatchObject({ code: 'INSIGHTS_FORBIDDEN' });
     });
 
     it('allows admins', async () => {
@@ -566,7 +582,7 @@ describe('InsightsService', () => {
       fixtures.targetStudent = null;
       await expect(
         service.getStudentInsights(adminUser, 'missing', 'week'),
-      ).rejects.toThrow(NotFoundException);
+      ).rejects.toMatchObject({ code: 'INSIGHTS_STUDENT_NOT_FOUND' });
     });
   });
 });

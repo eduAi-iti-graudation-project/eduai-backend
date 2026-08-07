@@ -1,9 +1,7 @@
-import {
-  ForbiddenException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { Injectable, HttpStatus } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { ApiError } from '../common/errors/api-error';
+import { ErrorCode } from '../common/errors/codes';
 import type { User } from '@prisma/client';
 import {
   avgPercentage,
@@ -21,6 +19,16 @@ import {
 export interface AgentInsight {
   title: string;
   summary: string;
+  breakdown?: {
+    kind: 'alert';
+    type: string;
+    severity?: string | null;
+    headline: string;
+    highlights: string[];
+    strengths: string[];
+    concerns: string[];
+    recommendation: string;
+  };
 }
 
 export interface InsightSection {
@@ -95,26 +103,38 @@ export class InsightsService {
       where: { id: studentId },
     });
     if (!target) {
-      throw new NotFoundException('Student not found');
+      throw new ApiError(
+        ErrorCode.INSIGHTS_STUDENT_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This student could not be found.',
+      );
     }
 
     switch (user.role) {
       case 'STUDENT':
         if (user.id !== studentId) {
-          throw new ForbiddenException('You can only view your own insights');
+          throw new ApiError(
+            ErrorCode.INSIGHTS_FORBIDDEN,
+            HttpStatus.FORBIDDEN,
+            'You can only view your own insights.',
+          );
         }
         break;
       case 'TEACHER': {
-        const cls = await this.prisma.class.findFirst({
+        const cls = await this.prisma.courseOffering.findFirst({
           where: {
             teacherId: user.id,
-            enrollments: { some: { studentId, status: 'APPROVED' } },
+            section: {
+              enrollments: { some: { studentId, status: 'APPROVED' } },
+            },
           },
           select: { id: true },
         });
         if (!cls) {
-          throw new ForbiddenException(
-            'You can only view insights for students in your classes',
+          throw new ApiError(
+            ErrorCode.INSIGHTS_FORBIDDEN,
+            HttpStatus.FORBIDDEN,
+            'You can only view insights for students in your classes.',
           );
         }
         break;
@@ -125,16 +145,20 @@ export class InsightsService {
           select: { id: true },
         });
         if (!guardian) {
-          throw new ForbiddenException(
-            'You can only view insights for your children',
+          throw new ApiError(
+            ErrorCode.INSIGHTS_FORBIDDEN,
+            HttpStatus.FORBIDDEN,
+            'You can only view insights for your linked students.',
           );
         }
         break;
       }
       case 'ADMIN':
         if (target.organizationId !== user.organizationId) {
-          throw new ForbiddenException(
-            'You can only view insights for students in your organization',
+          throw new ApiError(
+            ErrorCode.INSIGHTS_FORBIDDEN,
+            HttpStatus.FORBIDDEN,
+            'You can only view insights for students in your organization.',
           );
         }
         break;
@@ -155,7 +179,11 @@ export class InsightsService {
   private async teacherInsights(teacherId: string, interval: InsightsInterval) {
     const since = bucketStarts(interval, TREND_BUCKETS)[0];
     const studentScope = {
-      student: { enrollments: { some: { class: { teacherId } } } },
+      student: {
+        enrollments: {
+          some: { section: { offerings: { some: { teacherId } } } },
+        },
+      },
     };
 
     const [
@@ -172,7 +200,7 @@ export class InsightsService {
     ] = await Promise.all([
       this.prisma.submission.findMany({
         where: {
-          assignment: { class: { teacherId } },
+          assignment: { offering: { teacherId } },
           createdAt: { gte: since },
         },
         select: { createdAt: true },
@@ -180,7 +208,7 @@ export class InsightsService {
       this.prisma.gradingScore.findMany({
         where: {
           isConfirmed: false,
-          submission: { assignment: { class: { teacherId } } },
+          submission: { assignment: { offering: { teacherId } } },
           createdAt: { gte: since },
         },
         select: { createdAt: true },
@@ -188,7 +216,7 @@ export class InsightsService {
       this.prisma.gradingScore.findMany({
         where: {
           isConfirmed: true,
-          submission: { assignment: { class: { teacherId } } },
+          submission: { assignment: { offering: { teacherId } } },
           createdAt: { gte: since },
         },
         select: { createdAt: true },
@@ -196,13 +224,22 @@ export class InsightsService {
       this.prisma.gradingScore.findMany({
         where: {
           isConfirmed: true,
-          submission: { assignment: { class: { teacherId } } },
+          submission: { assignment: { offering: { teacherId } } },
         },
         include: {
           criteria: { select: { maxPoints: true, description: true } },
           submission: {
             select: {
-              assignment: { select: { class: { select: { name: true } } } },
+              assignment: {
+                select: {
+                  offering: {
+                    select: {
+                      course: { select: { name: true } },
+                      section: { select: { name: true } },
+                    },
+                  },
+                },
+              },
             },
           },
         },
@@ -220,7 +257,10 @@ export class InsightsService {
         select: { updatedAt: true },
       }),
       this.prisma.attendance.findMany({
-        where: { date: { gte: since }, class: { teacherId } },
+        where: {
+          date: { gte: since },
+          section: { offerings: { some: { teacherId } } },
+        },
         select: { date: true, status: true },
       }),
       this.prisma.homeworkHelpInteraction.findMany({
@@ -304,7 +344,7 @@ export class InsightsService {
     }[],
     reports: {
       student: { id: string; name: string };
-      teacherSection: string;
+      teacherSection: unknown;
       createdAt: Date;
     }[],
     redirects: {
@@ -339,7 +379,7 @@ export class InsightsService {
     for (const r of latestReportByStudent.values()) {
       insights.push({
         title: `${r.student.name} — report`,
-        summary: r.teacherSection,
+        summary: this.reportSectionSummary(r.teacherSection),
       });
     }
 
@@ -377,7 +417,16 @@ export class InsightsService {
         }),
         this.prisma.alert.findMany({
           where: { studentId, status: 'ACTIVE' },
-          select: { type: true, reason: true },
+          select: {
+            id: true,
+            type: true,
+            reason: true,
+            analyses: {
+              orderBy: { createdAt: 'desc' },
+              take: 1,
+              select: { diagnosis: true },
+            },
+          },
         }),
         this.prisma.studentReport.findMany({
           where: { studentId },
@@ -409,15 +458,39 @@ export class InsightsService {
 
     const agentInsights: AgentInsight[] = [];
     for (const a of activeAlerts) {
+      const diagnosis = (a.analyses[0]?.diagnosis ?? {}) as {
+        severity?: string | null;
+        brief?: {
+          headline?: string;
+          highlights?: string[];
+          strengths?: string[];
+          concerns?: string[];
+          recommendation?: string;
+        } | null;
+      };
+      const brief = diagnosis.brief;
       agentInsights.push({
         title: `Alert: ${a.type}`,
         summary: a.reason,
+        breakdown:
+          brief && (brief.headline || brief.highlights?.length)
+            ? {
+                kind: 'alert',
+                type: a.type,
+                severity: diagnosis.severity ?? null,
+                headline: brief.headline ?? '',
+                highlights: brief.highlights ?? [],
+                strengths: brief.strengths ?? [],
+                concerns: brief.concerns ?? [],
+                recommendation: brief.recommendation ?? '',
+              }
+            : undefined,
       });
     }
     if (latestReport[0]) {
       agentInsights.push({
         title: 'Latest report',
-        summary: latestReport[0].teacherSection,
+        summary: this.reportSectionSummary(latestReport[0].teacherSection),
       });
     }
 
@@ -500,7 +573,7 @@ export class InsightsService {
       if (latestReport[0]) {
         agentInsights.push({
           title: `${ward.name} — report`,
-          summary: latestReport[0].parentSection,
+          summary: this.reportSectionSummary(latestReport[0].parentSection),
         });
       }
       if (latestAnalysis[0]) {
@@ -538,7 +611,7 @@ export class InsightsService {
       this.prisma.submission.findMany({
         where: {
           createdAt: { gte: since },
-          assignment: { class: { organizationId } },
+          assignment: { offering: { organizationId } },
         },
         select: { createdAt: true },
       }),
@@ -546,14 +619,14 @@ export class InsightsService {
         where: {
           isConfirmed: true,
           createdAt: { gte: since },
-          submission: { assignment: { class: { organizationId } } },
+          submission: { assignment: { offering: { organizationId } } },
         },
         select: { createdAt: true },
       }),
       this.prisma.gradingScore.findMany({
         where: {
           isConfirmed: true,
-          submission: { assignment: { class: { organizationId } } },
+          submission: { assignment: { offering: { organizationId } } },
         },
         include: { criteria: { select: { maxPoints: true } } },
       }),
@@ -581,11 +654,15 @@ export class InsightsService {
         select: {
           id: true,
           name: true,
-          taughtClasses: {
+          teacherOfferings: {
             select: {
-              enrollments: {
-                where: { status: 'APPROVED' },
-                select: { id: true },
+              section: {
+                select: {
+                  enrollments: {
+                    where: { status: 'APPROVED' },
+                    select: { id: true },
+                  },
+                },
               },
               assignments: {
                 select: {
@@ -661,21 +738,21 @@ export class InsightsService {
     for (const r of reports) {
       agentInsights.push({
         title: `${r.student.name} — management`,
-        summary: r.managementSection,
+        summary: this.reportSectionSummary(r.managementSection),
       });
     }
     for (const t of teachers) {
-      const pending = t.taughtClasses
-        .flatMap((c) => c.assignments)
+      const pending = t.teacherOfferings
+        .flatMap((o) => o.assignments)
         .flatMap((a) => a.submissions)
         .flatMap((s) => s.scores)
         .filter((s) => !s.isConfirmed).length;
-      const students = t.taughtClasses.reduce(
-        (sum, c) => sum + c.enrollments.length,
+      const students = t.teacherOfferings.reduce(
+        (sum, o) => sum + o.section.enrollments.length,
         0,
       );
-      const confirmed = t.taughtClasses
-        .flatMap((c) => c.assignments)
+      const confirmed = t.teacherOfferings
+        .flatMap((o) => o.assignments)
         .flatMap((a) => a.submissions)
         .flatMap((s) => s.scores)
         .filter((s) => s.isConfirmed);
@@ -767,7 +844,12 @@ export class InsightsService {
       pointsAwarded: number;
       criteria: { maxPoints: number };
       submission: {
-        assignment: { class: { name: string } };
+        assignment: {
+          offering: {
+            course: { name: string };
+            section: { name: string };
+          };
+        };
       };
     }[],
   ): InsightSection {
@@ -776,7 +858,9 @@ export class InsightsService {
       { pointsAwarded: number; maxPoints: number }[]
     >();
     for (const s of confirmed) {
-      const name = s.submission.assignment.class.name;
+      const name =
+        s.submission.assignment.offering.course.name ??
+        s.submission.assignment.offering.section.name;
       const bucket = byClass.get(name) ?? [];
       bucket.push({
         pointsAwarded: s.pointsAwarded,
@@ -888,8 +972,8 @@ export class InsightsService {
   private teacherWorkloadBar(
     teachers: {
       name: string;
-      taughtClasses: {
-        enrollments: { id: string }[];
+      teacherOfferings: {
+        section: { enrollments: { id: string }[] };
         assignments: {
           submissions: { scores: { isConfirmed: boolean }[] }[];
         }[];
@@ -897,13 +981,13 @@ export class InsightsService {
     }[],
   ): InsightSection {
     const series = teachers.map((t) => {
-      const pending = t.taughtClasses
-        .flatMap((c) => c.assignments)
+      const pending = t.teacherOfferings
+        .flatMap((o) => o.assignments)
         .flatMap((a) => a.submissions)
         .flatMap((s) => s.scores)
         .filter((s) => !s.isConfirmed).length;
-      const students = t.taughtClasses.reduce(
-        (sum, c) => sum + c.enrollments.length,
+      const students = t.teacherOfferings.reduce(
+        (sum, o) => sum + o.section.enrollments.length,
         0,
       );
       return { label: t.name, value: pending + students };
@@ -949,5 +1033,15 @@ export class InsightsService {
       return `Skill gaps: ${(obj.skillGaps as unknown[]).join(', ')}`;
     }
     return JSON.stringify(obj).slice(0, 200);
+  }
+
+  private reportSectionSummary(section: unknown): string {
+    if (typeof section === 'string') return section;
+    if (section && typeof section === 'object') {
+      const obj = section as Record<string, unknown>;
+      const text = obj.message ?? obj.analysis ?? obj.summary;
+      if (typeof text === 'string') return text;
+    }
+    return '';
   }
 }
