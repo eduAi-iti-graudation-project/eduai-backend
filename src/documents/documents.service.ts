@@ -302,6 +302,9 @@ export class DocumentsService {
       orderBy: { createdAt: 'desc' },
       include: {
         uploadedBy: { select: { id: true, name: true } },
+        aiSuggestedStudent: {
+          select: { id: true, name: true, email: true },
+        },
       },
     });
   }

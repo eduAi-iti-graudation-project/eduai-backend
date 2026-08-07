@@ -295,6 +295,7 @@ model User {
   chatMessages             ChatMessage[]
   documents                StudentDocument[]         @relation("StudentDocuments")
   uploadedDocuments        StudentDocument[]         @relation("DocumentsUploadedBy")
+  aiSuggestedDocuments     StudentDocument[]         @relation("DocumentsAiSuggestedStudent")
   feePayments              FeePayment[]
   classTeacherLogs         ClassTeacherLog[]         @relation("TeacherClassLogs")
   teacherDocuments         TeacherDocument[]         @relation("TeacherDocuments")
@@ -685,9 +686,10 @@ model StudentDocument {
   uploadedById          String?                   @db.Uuid
   createdAt             DateTime                  @default(now())
 
-  student      User?        @relation("StudentDocuments", fields: [studentId], references: [id], onDelete: Cascade)
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  uploadedBy   User?        @relation("DocumentsUploadedBy", fields: [uploadedById], references: [id])
+  student             User?        @relation("StudentDocuments", fields: [studentId], references: [id], onDelete: Cascade)
+  aiSuggestedStudent  User?        @relation("DocumentsAiSuggestedStudent", fields: [aiSuggestedStudentId], references: [id], onDelete: SetNull)
+  organization        Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  uploadedBy          User?        @relation("DocumentsUploadedBy", fields: [uploadedById], references: [id])
 
   @@index([studentId])
   @@index([organizationId])

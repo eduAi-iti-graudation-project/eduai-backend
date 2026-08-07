@@ -74,9 +74,13 @@ export class UsersController {
   findAll(
     @Query('role') role?: string,
     @Query('q') q?: string,
+    @Query('take') take?: string,
     @CurrentUser('organizationId') organizationId?: string,
   ) {
-    return this.usersService.findAll({ role, q }, organizationId!);
+    return this.usersService.findAll(
+      { role, q, take: take ? Number(take) : undefined },
+      organizationId!,
+    );
   }
 
   @Roles('ADMIN')

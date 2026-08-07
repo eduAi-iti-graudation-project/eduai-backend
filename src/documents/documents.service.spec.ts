@@ -317,7 +317,12 @@ describe('DocumentsService', () => {
       expect(mockPrisma.studentDocument.findMany).toHaveBeenCalledWith({
         where: { organizationId, studentId: null },
         orderBy: { createdAt: 'desc' },
-        include: { uploadedBy: { select: { id: true, name: true } } },
+        include: {
+          uploadedBy: { select: { id: true, name: true } },
+          aiSuggestedStudent: {
+            select: { id: true, name: true, email: true },
+          },
+        },
       });
       expect(result).toHaveLength(1);
     });
