@@ -1,7 +1,6 @@
 import {
   CanActivate,
   ExecutionContext,
-  HttpException,
   HttpStatus,
   Injectable,
 } from '@nestjs/common';
@@ -9,6 +8,9 @@ import { Reflector } from '@nestjs/core';
 import type { Organization, SubscriptionTier } from '@prisma/client';
 import { SKIP_SUBSCRIPTION_KEY } from './skip-subscription.decorator';
 import { REQUIRED_TIERS_KEY } from './requires-tier.decorator';
+import { ApiError } from '../common/errors/api-error';
+import { ErrorCode } from '../common/errors/codes';
+import { ErrorHint } from '../common/errors/hints';
 
 const TRIAL_DAYS = 14;
 
@@ -41,9 +43,11 @@ export class SubscriptionGuard implements CanActivate {
       if (new Date() <= trialEnd) return true;
     }
 
-    throw new HttpException(
-      'An active subscription is required to access this resource',
+    throw new ApiError(
+      ErrorCode.SUBSCRIPTION_REQUIRED,
       HttpStatus.PAYMENT_REQUIRED,
+      'Your organization needs an active subscription to continue using EduAI.',
+      { hint: ErrorHint.UPGRADE },
     );
   }
 
@@ -58,9 +62,11 @@ export class SubscriptionGuard implements CanActivate {
     if (!requiredTiers?.length) return;
 
     if (!requiredTiers.includes(organization.subscriptionTier)) {
-      throw new HttpException(
-        `This feature requires the ${requiredTiers[0].toLowerCase()} plan or higher`,
+      throw new ApiError(
+        ErrorCode.TIER_REQUIRED,
         HttpStatus.FORBIDDEN,
+        `This feature requires the ${requiredTiers[0].toLowerCase()} plan or higher.`,
+        { hint: ErrorHint.UPGRADE },
       );
     }
   }

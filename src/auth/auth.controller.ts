@@ -7,7 +7,7 @@ import {
   Query,
   Req,
   Res,
-  InternalServerErrorException,
+  HttpStatus,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import {
@@ -19,6 +19,9 @@ import {
   ApiQuery,
 } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
+import { ApiError } from '../common/errors/api-error';
+import { ErrorCode } from '../common/errors/codes';
+import { ErrorHint } from '../common/errors/hints';
 import {
   SignupDto,
   LoginDto,
@@ -96,7 +99,15 @@ export class AuthController {
       await this.authService.handleOauthCallback({ code, error });
     const frontendUrl = process.env.FRONTEND_URL;
     if (!frontendUrl) {
-      throw new InternalServerErrorException('FRONTEND_URL is not set');
+      throw new ApiError(
+        ErrorCode.INTERNAL_ERROR,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+        'Something went wrong on our side. Please try again in a moment.',
+        {
+          hint: ErrorHint.RETRY,
+          cause: new Error('FRONTEND_URL is not set'),
+        },
+      );
     }
     res.redirect(
       302,

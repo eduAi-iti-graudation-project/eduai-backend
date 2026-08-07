@@ -1,7 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { NotificationsService } from './notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { NotFoundException } from '@nestjs/common';
 
 describe('NotificationsService', () => {
   let service: NotificationsService;
@@ -16,7 +15,7 @@ describe('NotificationsService', () => {
     user: {
       findUnique: jest.fn(),
     },
-    class: {
+    courseOffering: {
       findUnique: jest.fn(),
     },
   };
@@ -64,23 +63,23 @@ describe('NotificationsService', () => {
   });
 
   describe('notifyTeachers', () => {
-    it('should resolve class to teacher ID and notify', async () => {
-      mockPrisma.class.findUnique.mockResolvedValue({
-        id: 'class-id',
+    it('should resolve offering to teacher ID and notify', async () => {
+      mockPrisma.courseOffering.findUnique.mockResolvedValue({
+        id: 'offering-id',
         teacherId: 'teacher-id',
         teacher: { id: 'teacher-id', email: 'teacher@test.com' },
       });
       mockPrisma.notification.create.mockResolvedValue({ id: 'notif-id' });
 
       await service.notifyTeachers(
-        'class-id',
+        'offering-id',
         'ALERT',
         'New Alert',
         'Student needs attention',
       );
 
-      expect(mockPrisma.class.findUnique).toHaveBeenCalledWith({
-        where: { id: 'class-id' },
+      expect(mockPrisma.courseOffering.findUnique).toHaveBeenCalledWith({
+        where: { id: 'offering-id' },
         include: { teacher: true },
       });
       expect(mockPrisma.notification.create).toHaveBeenCalledWith({
@@ -94,8 +93,8 @@ describe('NotificationsService', () => {
       });
     });
 
-    it('should not crash when class not found', async () => {
-      mockPrisma.class.findUnique.mockResolvedValue(null);
+    it('should not crash when offering not found', async () => {
+      mockPrisma.courseOffering.findUnique.mockResolvedValue(null);
 
       await expect(
         service.notifyTeachers('bad-id', 'ALERT', 'Title'),
@@ -119,12 +118,12 @@ describe('NotificationsService', () => {
       expect(mockPrisma.notification.update).toHaveBeenCalledTimes(1);
     });
 
-    it('should throw NotFoundException for missing notification', async () => {
+    it('should throw for missing notification', async () => {
       mockPrisma.notification.findUnique.mockResolvedValue(null);
 
-      await expect(service.markRead('bad-id')).rejects.toThrow(
-        NotFoundException,
-      );
+      await expect(service.markRead('bad-id')).rejects.toMatchObject({
+        code: 'NOTIFICATION_NOT_FOUND',
+      });
     });
   });
 });
