@@ -2,8 +2,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { Injectable, HttpStatus } from '@nestjs/common';
 import { ApiError } from '../common/errors/api-error';
 import { ErrorCode } from '../common/errors/codes';
-import * as path from 'path';
-import * as fs from 'fs';
+import { DocumentsService } from '../documents/documents.service';
 
 function academicYearOf(date: Date): string {
   const y = date.getFullYear();
@@ -14,7 +13,10 @@ function academicYearOf(date: Date): string {
 
 @Injectable()
 export class StudentsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly documentsService: DocumentsService,
+  ) {}
 
   async getGrades(id: string, organizationId: string) {
     const grades = await this.prisma.gradingScore.findMany({
@@ -429,7 +431,11 @@ export class StudentsService {
     organizationId: string,
     adminId: string,
     file: Express.Multer.File,
-    dto: { type: string; title: string; academicYear?: string | null },
+    dto: {
+      category?: string | null;
+      title: string;
+      academicYear?: string | null;
+    },
   ) {
     await this.ensureStudent(studentId, organizationId);
     if (!file) {
@@ -440,36 +446,38 @@ export class StudentsService {
       );
     }
 
-    const dir = path.resolve(
-      process.cwd(),
-      process.env.DOCUMENT_UPLOAD_DIR ?? 'uploads/documents',
+    const fileUrl = await this.documentsService.storeFile(
+      organizationId,
+      file.buffer,
+      file.originalname,
+      file.mimetype,
     );
-    fs.mkdirSync(dir, { recursive: true });
-    const safe = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
-    const fileName = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safe}`;
-    const fileUrl = path.join(dir, fileName);
 
-    try {
-      fs.writeFileSync(fileUrl, file.buffer);
-    } catch {
-      throw new ApiError(
-        ErrorCode.DOCUMENT_UPLOAD_FAILED,
-        HttpStatus.INTERNAL_SERVER_ERROR,
-        'Could not save the uploaded document.',
+    let aiSuggestedCategory: string | null = null;
+    if (!dto.category) {
+      const rawText = await this.documentsService.extractText(
+        file.buffer,
+        file.originalname,
       );
+      if (rawText) {
+        aiSuggestedCategory =
+          await this.documentsService.suggestCategory(rawText);
+      }
     }
 
     return this.prisma.studentDocument.create({
       data: {
         studentId,
+        organizationId,
         uploadedById: adminId,
-        type: dto.type as never,
+        category: (dto.category ?? 'OTHER') as never,
         title: dto.title,
         academicYear: dto.academicYear ?? null,
         fileName: file.originalname,
         fileUrl,
         mimeType: file.mimetype,
         sizeBytes: file.size,
+        aiSuggestedCategory,
       },
     });
   }
@@ -490,11 +498,7 @@ export class StudentsService {
         'This document could not be found.',
       );
     }
-    try {
-      fs.unlinkSync(doc.fileUrl);
-    } catch {
-      // file may already be gone; deletion of the row still succeeds
-    }
+    await this.documentsService.removeFromStorage(doc.fileUrl);
     return this.prisma.studentDocument.delete({ where: { id: doc.id } });
   }
 
@@ -514,7 +518,8 @@ export class StudentsService {
         'This document could not be found.',
       );
     }
-    return doc;
+    const url = await this.documentsService.createSignedUrl(doc.fileUrl);
+    return { url, fileName: doc.fileName, mimeType: doc.mimeType };
   }
 
   async getFees(studentId: string, organizationId: string) {

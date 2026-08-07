@@ -107,18 +107,6 @@ enum AttemptStatus {
   COMPLETED
 }
 
-enum DocumentType {
-  CERTIFICATE
-  REPORT_CARD
-  TRANSCRIPT
-  IMMUNIZATION
-  TRANSFER
-  ENROLLMENT_FORM
-  ID
-  MEDICAL
-  OTHER
-}
-
 enum FeeType {
   TUITION
   REGISTRATION
@@ -154,6 +142,7 @@ model Organization {
   courseOfferings    CourseOffering[]
   subscriptionEvents SubscriptionEvent[]
   membershipRequests MembershipRequest[]
+  studentDocuments   StudentDocument[]
 
   @@map("organizations")
 }
@@ -680,23 +669,38 @@ model ChatMessage {
 }
 
 model StudentDocument {
-  id           String       @id @default(uuid()) @db.Uuid
-  studentId    String       @db.Uuid
-  type         DocumentType @default(OTHER)
-  title        String
-  academicYear String?
-  fileName     String
-  fileUrl      String
-  mimeType     String?
-  sizeBytes    Int?
-  uploadedById String?      @db.Uuid
-  createdAt    DateTime     @default(now())
+  id                    String                    @id @default(uuid()) @db.Uuid
+  studentId             String?                   @db.Uuid
+  organizationId        String                    @db.Uuid
+  category              StudentDocumentCategory   @default(OTHER)
+  title                 String
+  academicYear          String?
+  fileName              String
+  fileUrl               String
+  mimeType              String?
+  sizeBytes             Int?
+  aiSuggestedCategory   String?
+  aiSuggestedStudentId  String?                   @db.Uuid
+  aiMatchConfidence     Float?
+  uploadedById          String?                   @db.Uuid
+  createdAt             DateTime                  @default(now())
 
-  student    User  @relation("StudentDocuments", fields: [studentId], references: [id], onDelete: Cascade)
-  uploadedBy User? @relation("DocumentsUploadedBy", fields: [uploadedById], references: [id])
+  student      User?        @relation("StudentDocuments", fields: [studentId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  uploadedBy   User?        @relation("DocumentsUploadedBy", fields: [uploadedById], references: [id])
 
   @@index([studentId])
+  @@index([organizationId])
   @@map("student_documents")
+}
+
+enum StudentDocumentCategory {
+  BIRTH_CERTIFICATE
+  IMMUNIZATION_RECORD
+  PREVIOUS_TRANSCRIPT
+  PAYMENT_RECEIPT
+  ID_DOCUMENT
+  OTHER
 }
 
 model FeePayment {

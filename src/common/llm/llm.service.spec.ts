@@ -4,6 +4,7 @@ import { PiiService } from '../pii/pii.service';
 import { ProviderService } from '../ai/provider.service';
 import { ValidationError } from '../validation/retry-once';
 import { z } from 'zod';
+import { GeneratedAssignmentSchema } from '../../assignments/dto';
 
 const mockHfEmbed = jest.fn().mockResolvedValue(new Array(1024).fill(0.1));
 const mockChat = jest
@@ -155,6 +156,23 @@ describe('LlmService', () => {
 
       expect(mockChat).toHaveBeenCalledTimes(3);
       expect(result).toEqual({ name: 'retried', score: 90 });
+    });
+
+    it('should retry and then fail cleanly on a malformed assignment draft (no invented fallback)', async () => {
+      mockChat
+        .mockResolvedValueOnce('not json')
+        .mockResolvedValueOnce('also not json')
+        .mockResolvedValueOnce('definitely not json');
+
+      await expect(
+        service.generateStructured({
+          systemPrompt: 'Test',
+          userPrompt: 'Test',
+          schema: GeneratedAssignmentSchema,
+        }),
+      ).rejects.toThrow(ValidationError);
+
+      expect(mockChat).toHaveBeenCalledTimes(3);
     });
   });
 });
