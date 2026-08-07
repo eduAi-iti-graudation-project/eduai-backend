@@ -1,16 +1,13 @@
-import {
-  Inject,
-  Injectable,
-  InternalServerErrorException,
-  Logger,
-} from '@nestjs/common';
-import { UnauthorizedException } from '@nestjs/common';
+import { Inject, Injectable, HttpStatus, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type Stripe from 'stripe';
 import { PrismaService } from '../prisma/prisma.service';
 import { STRIPE_CLIENT } from '../billing/stripe-client';
 import { NotificationsService } from '../notifications/notifications.service';
 import type { SubscriptionStatus, SubscriptionTier } from '@prisma/client';
+import { ApiError } from '../common/errors/api-error';
+import { ErrorCode } from '../common/errors/codes';
+import { ErrorHint } from '../common/errors/hints';
 
 const PLAN_LIMITS: Record<string, number> = {
   basic: 30,
@@ -31,8 +28,14 @@ export class WebhooksService {
   async handleStripeEvent(payload: Buffer, signature: string) {
     const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
     if (!webhookSecret) {
-      throw new InternalServerErrorException(
-        'STRIPE_WEBHOOK_SECRET is not configured',
+      throw new ApiError(
+        ErrorCode.WEBHOOK_UNCONFIGURED,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+        'The webhook secret is not configured.',
+        {
+          hint: ErrorHint.RETRY,
+          cause: new Error('STRIPE_WEBHOOK_SECRET is not configured'),
+        },
       );
     }
 
@@ -43,8 +46,13 @@ export class WebhooksService {
         signature,
         webhookSecret,
       );
-    } catch {
-      throw new UnauthorizedException('Invalid Stripe signature');
+    } catch (cause) {
+      throw new ApiError(
+        ErrorCode.WEBHOOK_INVALID_SIGNATURE,
+        HttpStatus.UNAUTHORIZED,
+        'Invalid Stripe signature.',
+        { cause },
+      );
     }
 
     const existing = await this.prisma.subscriptionEvent.findUnique({

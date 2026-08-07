@@ -6,7 +6,7 @@ export const CreateAssignmentSchema = z.object({
   description: z.string().optional(),
   dueDate: z.string().datetime(),
   totalPoints: z.number().int().positive(),
-  classId: z.string().uuid(),
+  courseOfferingId: z.string().uuid(),
 });
 
 export const UpdateAssignmentSchema = z.object({
@@ -22,7 +22,7 @@ const AssignmentSchema = z.object({
   description: z.string().nullable(),
   dueDate: z.string(),
   totalPoints: z.number(),
-  classId: z.string().uuid(),
+  courseOfferingId: z.string().uuid(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
