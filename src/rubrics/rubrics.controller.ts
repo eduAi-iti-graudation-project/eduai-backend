@@ -8,7 +8,7 @@ import {
   Query,
   UploadedFile,
   UseInterceptors,
-  BadRequestException,
+  HttpStatus,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
@@ -17,6 +17,8 @@ import { RubricsService } from './rubrics.service';
 import { CreateRubricDto } from './dto';
 import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
+import { ApiError } from '../common/errors/api-error';
+import { ErrorCode } from '../common/errors/codes';
 
 @ApiTags('rubrics')
 @Controller('rubrics')
@@ -84,8 +86,10 @@ export class RubricsController {
   })
   importPdf(@UploadedFile() file: Express.Multer.File) {
     if (!file) {
-      throw new BadRequestException(
-        'File is required. Upload a PDF using the "file" field.',
+      throw new ApiError(
+        ErrorCode.FILE_NO_TEXT,
+        HttpStatus.BAD_REQUEST,
+        'Please upload a PDF file using the "file" field.',
       );
     }
     return this.rubricsService.importPdf(file.buffer);
@@ -118,12 +122,18 @@ export class RubricsController {
     @CurrentUser('organizationId') organizationId: string,
   ) {
     if (!file) {
-      throw new BadRequestException(
-        'File is required. Upload a PDF using the "file" field.',
+      throw new ApiError(
+        ErrorCode.FILE_NO_TEXT,
+        HttpStatus.BAD_REQUEST,
+        'Please upload a PDF file using the "file" field.',
       );
     }
     if (!assignmentId) {
-      throw new BadRequestException('assignmentId is required');
+      throw new ApiError(
+        ErrorCode.ASSIGNMENT_ID_REQUIRED,
+        HttpStatus.BAD_REQUEST,
+        'Please select an assignment to attach this rubric to.',
+      );
     }
     return this.rubricsService.fromPdf(
       file.buffer,

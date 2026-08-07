@@ -1,8 +1,11 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, HttpStatus } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { LlmService } from '../common/llm/llm.service';
 import { ExtractedRubricSchema } from './dto';
 import pdfParse from 'pdf-parse';
+import { ApiError } from '../common/errors/api-error';
+import { ErrorCode } from '../common/errors/codes';
+import { ErrorHint } from '../common/errors/hints';
 
 @Injectable()
 export class RubricsService {
@@ -20,9 +23,15 @@ export class RubricsService {
     organizationId: string,
   ) {
     const assignment = await this.prisma.assignment.findFirst({
-      where: { id: dto.assignmentId, class: { organizationId } },
+      where: { id: dto.assignmentId, offering: { organizationId } },
     });
-    if (!assignment) throw new NotFoundException('Assignment not found');
+    if (!assignment) {
+      throw new ApiError(
+        ErrorCode.ASSIGNMENT_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This assignment could not be found.',
+      );
+    }
     return this.prisma.rubric.create({
       data: {
         title: dto.title,
@@ -37,7 +46,7 @@ export class RubricsService {
     return this.prisma.rubric.findMany({
       where: {
         ...(assignmentId ? { assignmentId } : {}),
-        assignment: { class: { organizationId } },
+        assignment: { offering: { organizationId } },
       },
       include: { criteria: true },
     });
@@ -45,10 +54,16 @@ export class RubricsService {
 
   async findOne(id: string, organizationId: string) {
     const rubric = await this.prisma.rubric.findFirst({
-      where: { id, assignment: { class: { organizationId } } },
+      where: { id, assignment: { offering: { organizationId } } },
       include: { criteria: true, assignment: true },
     });
-    if (!rubric) throw new NotFoundException('Rubric not found');
+    if (!rubric) {
+      throw new ApiError(
+        ErrorCode.RUBRIC_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This rubric could not be found.',
+      );
+    }
     return rubric;
   }
 
@@ -57,14 +72,17 @@ export class RubricsService {
       where: {
         assignmentId,
         isConfirmed: true,
-        assignment: { class: { organizationId } },
+        assignment: { offering: { organizationId } },
       },
       include: { criteria: true },
     });
-    if (!rubric)
-      throw new NotFoundException(
-        'No confirmed rubric found for this assignment',
+    if (!rubric) {
+      throw new ApiError(
+        ErrorCode.RUBRIC_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'No confirmed rubric exists for this assignment yet.',
       );
+    }
     return rubric;
   }
 
@@ -82,9 +100,9 @@ export class RubricsService {
       FROM rubric_criteria rc
       JOIN rubrics r ON r.id = rc."rubricId"
       JOIN assignments a ON a.id = r."assignmentId"
-      JOIN classes c ON c.id = a."classId"
+      JOIN course_offerings co ON co.id = a."courseOfferingId"
       WHERE r."assignmentId" = ${assignmentId}::uuid
-        AND c."organizationId" = ${organizationId}::uuid
+        AND co."organizationId" = ${organizationId}::uuid
         AND r."isConfirmed" = true
         AND rc.embedding IS NOT NULL
       ORDER BY distance ASC
@@ -100,10 +118,16 @@ export class RubricsService {
 
   async confirm(id: string, organizationId: string) {
     const rubric = await this.prisma.rubric.findFirst({
-      where: { id, assignment: { class: { organizationId } } },
+      where: { id, assignment: { offering: { organizationId } } },
       include: { criteria: true },
     });
-    if (!rubric) throw new NotFoundException('Rubric not found');
+    if (!rubric) {
+      throw new ApiError(
+        ErrorCode.RUBRIC_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This rubric could not be found.',
+      );
+    }
 
     const updated = await this.prisma.rubric.update({
       where: { id },
@@ -141,13 +165,20 @@ export class RubricsService {
       console.log(`[importPdf] extracted ${rawText.length} chars from PDF`);
     } catch (err) {
       console.error('[importPdf] pdf-parse failed:', err);
-      throw new Error(
-        `Failed to parse PDF: ${err instanceof Error ? err.message : String(err)}`,
+      throw new ApiError(
+        ErrorCode.PDF_NO_TEXT,
+        HttpStatus.BAD_REQUEST,
+        'This PDF could not be read. Please try another file.',
+        { cause: err },
       );
     }
 
     if (!rawText || rawText.trim().length === 0) {
-      throw new Error('PDF contained no extractable text');
+      throw new ApiError(
+        ErrorCode.PDF_NO_TEXT,
+        HttpStatus.BAD_REQUEST,
+        'This PDF contained no extractable text.',
+      );
     }
 
     console.log('[importPdf] calling LlmService.generateStructured...');
@@ -171,10 +202,10 @@ Return valid JSON matching this schema:
       });
 
       if (!result.criteria || result.criteria.length === 0) {
-        throw new Error(
-          'Could not extract any grading criteria from the uploaded PDF. ' +
-            'The file may not contain a rubric with clearly defined criteria. ' +
-            'Please ensure the PDF includes labeled criteria (e.g., "Thesis — 10 points") and try again.',
+        throw new ApiError(
+          ErrorCode.FILE_NO_TEXT,
+          HttpStatus.BAD_REQUEST,
+          'We could not find grading criteria in that PDF. Please try a file that clearly lists criteria, like "Thesis — 10 points".',
         );
       }
 
@@ -193,11 +224,11 @@ Return valid JSON matching this schema:
           err.message.includes('Validation') ||
           err.message.includes('Empty LLM'))
       ) {
-        throw new Error(
-          'Could not extract grading criteria from the uploaded PDF. ' +
-            'The file may not contain a rubric with clearly defined criteria, ' +
-            'or the text could not be properly parsed. ' +
-            'Please try a PDF that clearly lists criteria (e.g., "Thesis — 10 points", "Evidence — 15 points").',
+        throw new ApiError(
+          ErrorCode.FILE_NO_TEXT,
+          HttpStatus.BAD_REQUEST,
+          'We could not extract grading criteria from that PDF. Please try a file that clearly lists criteria, like "Thesis — 10 points".',
+          { hint: ErrorHint.RETRY, cause: err },
         );
       }
 
@@ -207,9 +238,15 @@ Return valid JSON matching this schema:
 
   async fromPdf(buffer: Buffer, assignmentId: string, organizationId: string) {
     const assignment = await this.prisma.assignment.findFirst({
-      where: { id: assignmentId, class: { organizationId } },
+      where: { id: assignmentId, offering: { organizationId } },
     });
-    if (!assignment) throw new NotFoundException('Assignment not found');
+    if (!assignment) {
+      throw new ApiError(
+        ErrorCode.ASSIGNMENT_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This assignment could not be found.',
+      );
+    }
     const extracted = await this.importPdf(buffer);
     return this.prisma.rubric.create({
       data: {

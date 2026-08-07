@@ -1,5 +1,8 @@
-import { Injectable, Optional, UnauthorizedException } from '@nestjs/common';
+import { Injectable, HttpStatus, Optional } from '@nestjs/common';
 import { createClient } from '@supabase/supabase-js';
+import { ApiError } from '../common/errors/api-error';
+import { ErrorCode } from '../common/errors/codes';
+import { ErrorHint } from '../common/errors/hints';
 import type {
   AuthResponse,
   AuthTokenResponse,
@@ -114,14 +117,28 @@ export class SupabaseService {
   async signOut(authId: string): Promise<void> {
     const { error } = await this.client.auth.admin.signOut(authId);
     if (error) {
-      throw new UnauthorizedException('Logout failed');
+      throw new ApiError(
+        ErrorCode.AUTH_LOGOUT_FAILED,
+        HttpStatus.UNAUTHORIZED,
+        'We could not sign you out. Please try again.',
+        { cause: error },
+      );
     }
+  }
+
+  private invalidToken(): ApiError {
+    return new ApiError(
+      ErrorCode.AUTH_TOKEN_INVALID,
+      HttpStatus.UNAUTHORIZED,
+      'Your session is no longer valid. Please log in again.',
+      { hint: ErrorHint.RE_LOGIN },
+    );
   }
 
   private async verifyJwtLocally(token: string): Promise<JwtPayload> {
     const parts = token.split('.');
     if (parts.length !== 3) {
-      throw new UnauthorizedException('Invalid or expired token');
+      throw this.invalidToken();
     }
 
     const [headerB64, payloadB64, signatureB64] = parts;
@@ -136,20 +153,20 @@ export class SupabaseService {
         Buffer.from(payloadB64, 'base64url').toString('utf8'),
       ) as JwtPayload;
     } catch {
-      throw new UnauthorizedException('Invalid or expired token');
+      throw this.invalidToken();
     }
 
     if (header.alg !== 'RS256' && header.alg !== 'ES256') {
-      throw new UnauthorizedException('Invalid or expired token');
+      throw this.invalidToken();
     }
     if (!header.kid) {
-      throw new UnauthorizedException('Invalid or expired token');
+      throw this.invalidToken();
     }
 
     const keys = await this.fetchJwks();
     const jwk = keys.find((k) => k.kid === header.kid);
     if (!jwk) {
-      throw new UnauthorizedException('Invalid or expired token');
+      throw this.invalidToken();
     }
 
     const signingInput = `${headerB64}.${payloadB64}`;
@@ -183,7 +200,7 @@ export class SupabaseService {
         throw new Error('Unsupported key type or algorithm');
       }
     } catch {
-      throw new UnauthorizedException('Invalid or expired token');
+      throw this.invalidToken();
     }
 
     const signatureValid = crypto.verify(
@@ -193,19 +210,19 @@ export class SupabaseService {
       signature,
     );
     if (!signatureValid) {
-      throw new UnauthorizedException('Invalid or expired token');
+      throw this.invalidToken();
     }
 
     if (
       typeof payload.exp !== 'number' ||
       Date.now() / 1000 > payload.exp + CLOCK_SKEW_S
     ) {
-      throw new UnauthorizedException('Invalid or expired token');
+      throw this.invalidToken();
     }
 
     const expectedIss = `${process.env.SUPABASE_URL}/auth/v1`;
     if (payload.iss !== expectedIss || !payload.sub) {
-      throw new UnauthorizedException('Invalid or expired token');
+      throw this.invalidToken();
     }
 
     return payload;

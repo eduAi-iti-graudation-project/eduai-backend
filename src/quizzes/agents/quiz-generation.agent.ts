@@ -21,13 +21,13 @@ Available actions and their exact JSON format:
    {"action": "search_curriculum", "query": "search term", "topK": 5}
 
 2. generate_questions — Generate a batch of questions based on curriculum context.
-   {"action": "generate_questions", "context": "...", "types": ["MCQ","SHORT_ANSWER"], "count": 5, "topic": "...", "avoidTopics": [...]}
+   {"action": "generate_questions", "context": "...", "types": ["MCQ","SHORT_ANSWER"], "count": 5, "topic": "...", "avoidTopics": [...], "difficulty": "MEDIUM"}
 
 3. review_questions — Review the generated questions for coverage gaps.
    {"action": "review_questions", "questions": [...], "context": "..."}
 
 4. save_quiz — Save the final quiz to the database.
-   {"action": "save_quiz", "title": "...", "description": "...", "classId": "...", "teacherId": "...", "questions": [...]}
+   {"action": "save_quiz", "title": "...", "description": "...", "courseOfferingId": "...", "teacherId": "...", "questions": [...]}
 
 5. respond — Reply to the teacher with the result.
    {"action": "respond", "reply": "..."}
@@ -52,11 +52,12 @@ export class QuizGenerationAgent {
   ) {}
 
   async generate(params: {
-    classId: string;
+    courseOfferingId: string;
     teacherId: string;
     topic?: string;
     questionCount?: number;
     types?: ('MCQ' | 'TRUE_FALSE' | 'SHORT_ANSWER' | 'ESSAY')[];
+    difficulty?: 'EASY' | 'MEDIUM' | 'HARD';
   }): Promise<{ quizId: string; title: string; message: string }> {
     const searchCurriculum = createSearchCurriculumTool(this.materialsService);
     const generateQuestions = createGenerateQuestionsTool(this.llmService);
@@ -67,10 +68,11 @@ export class QuizGenerationAgent {
     let saved = false;
 
     const initialPrompt = [
-      `Generate quiz for class ${params.classId}`,
+      `Generate quiz for class ${params.courseOfferingId}`,
       params.topic ? `Topic: ${params.topic}` : null,
       `Target question count: ${params.questionCount ?? 5}`,
       params.types ? `Question types: ${params.types.join(', ')}` : null,
+      `Difficulty: ${params.difficulty ?? 'MEDIUM'}`,
     ]
       .filter(Boolean)
       .join('\n');
@@ -107,7 +109,7 @@ export class QuizGenerationAgent {
 
         case 'search_curriculum': {
           const toolResult = await searchCurriculum.execute({
-            classId: params.classId,
+            courseOfferingId: params.courseOfferingId,
             query: result.query,
             topK: result.topK ?? 5,
           });
@@ -138,6 +140,7 @@ export class QuizGenerationAgent {
             count: result.count,
             topic: result.topic,
             avoidTopics: result.avoidTopics,
+            difficulty: result.difficulty ?? params.difficulty ?? 'MEDIUM',
           });
           history.push(
             {
@@ -181,7 +184,7 @@ export class QuizGenerationAgent {
           const toolResult = await saveQuiz.execute({
             title: result.title,
             description: result.description ?? undefined,
-            classId: params.classId,
+            courseOfferingId: params.courseOfferingId,
             teacherId: params.teacherId,
             questions: result.questions.map((q, idx) => ({
               ...q,

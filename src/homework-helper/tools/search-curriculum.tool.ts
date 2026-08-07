@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { MaterialsService } from '../../materials/materials.service';
 
 export const SearchCurriculumInputSchema = z.object({
-  classId: z.string().uuid(),
+  courseOfferingId: z.string().uuid(),
   query: z.string(),
   topK: z.number().int().min(1).max(20).default(5),
 });
@@ -22,7 +22,7 @@ export function createSearchCurriculumTool(materialsService: MaterialsService) {
       input: SearchCurriculumInput,
     ): Promise<z.infer<typeof SearchCurriculumOutputSchema>> => {
       const chunks = await materialsService.searchChunks(
-        input.classId,
+        input.courseOfferingId,
         input.query,
         input.topK,
       );

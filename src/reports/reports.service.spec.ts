@@ -2,7 +2,6 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ReportsService } from './reports.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { LlmService } from '../common/llm/llm.service';
-import { NotFoundException } from '@nestjs/common';
 
 describe('ReportsService', () => {
   let service: ReportsService;
@@ -47,9 +46,21 @@ describe('ReportsService', () => {
       };
 
       const llmResponse = {
-        parentSection: 'Parent-friendly explanation',
-        teacherSection: 'Detailed pedagogical analysis',
-        managementSection: 'Administrative summary',
+        parentSection: {
+          message: 'Parent-friendly explanation',
+          homeSupport: ['Set a study routine', 'Review class notes weekly'],
+        },
+        teacherSection: {
+          analysis: 'Detailed pedagogical analysis',
+          skillGaps: ['Fractions'],
+          interventions: ['Small group tutoring'],
+          resourceSuggestions: ['Practice exercises'],
+        },
+        managementSection: {
+          summary: 'Administrative summary',
+          classTrend: 'Below class average',
+          recommendation: 'Schedule a parent conference',
+        },
       };
 
       mockPrisma.alert.findUnique.mockResolvedValue(alert);
@@ -79,20 +90,20 @@ describe('ReportsService', () => {
         data: {
           studentId: 'student-id',
           alertId: 'alert-id',
-          parentSection: 'Parent-friendly explanation',
-          teacherSection: 'Detailed pedagogical analysis',
-          managementSection: 'Administrative summary',
+          parentSection: llmResponse.parentSection,
+          teacherSection: llmResponse.teacherSection,
+          managementSection: llmResponse.managementSection,
         },
       });
       expect(result.id).toBe('report-id');
     });
 
-    it('should throw NotFoundException when alert does not exist', async () => {
+    it('should throw when alert does not exist', async () => {
       mockPrisma.alert.findUnique.mockResolvedValue(null);
 
       await expect(
         service.generate('student-id', 'bad-alert-id'),
-      ).rejects.toThrow(NotFoundException);
+      ).rejects.toMatchObject({ code: 'ALERT_NOT_FOUND' });
     });
   });
 });

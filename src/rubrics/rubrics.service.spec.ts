@@ -2,7 +2,6 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { RubricsService } from './rubrics.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { LlmService } from '../common/llm/llm.service';
-import { NotFoundException } from '@nestjs/common';
 
 describe('RubricsService', () => {
   let service: RubricsService;
@@ -141,12 +140,12 @@ describe('RubricsService', () => {
       expect(result.isConfirmed).toBe(true);
     });
 
-    it('should throw NotFoundException for missing rubric', async () => {
+    it('should throw for missing rubric', async () => {
       mockPrisma.rubric.findFirst.mockResolvedValue(null);
 
       await expect(
         service.confirm('non-existent-id', organizationId),
-      ).rejects.toThrow(NotFoundException);
+      ).rejects.toMatchObject({ code: 'RUBRIC_NOT_FOUND' });
     });
   });
 
@@ -180,7 +179,7 @@ describe('RubricsService', () => {
       const result = await service.findAll(undefined, organizationId);
       expect(result).toEqual([]);
       expect(mockPrisma.rubric.findMany).toHaveBeenCalledWith({
-        where: { assignment: { class: { organizationId } } },
+        where: { assignment: { offering: { organizationId } } },
         include: { criteria: true },
       });
     });
@@ -191,7 +190,7 @@ describe('RubricsService', () => {
       expect(mockPrisma.rubric.findMany).toHaveBeenCalledWith({
         where: {
           assignmentId: 'assignment-id',
-          assignment: { class: { organizationId } },
+          assignment: { offering: { organizationId } },
         },
         include: { criteria: true },
       });
@@ -208,9 +207,9 @@ describe('RubricsService', () => {
 
     it('should throw when rubric not found', async () => {
       mockPrisma.rubric.findFirst.mockResolvedValue(null);
-      await expect(service.findOne('bad-id', organizationId)).rejects.toThrow(
-        NotFoundException,
-      );
+      await expect(
+        service.findOne('bad-id', organizationId),
+      ).rejects.toMatchObject({ code: 'RUBRIC_NOT_FOUND' });
     });
   });
 
@@ -233,7 +232,7 @@ describe('RubricsService', () => {
         where: {
           assignmentId: 'assignment-id',
           isConfirmed: true,
-          assignment: { class: { organizationId } },
+          assignment: { offering: { organizationId } },
         },
         include: { criteria: true },
       });
@@ -245,7 +244,7 @@ describe('RubricsService', () => {
 
       await expect(
         service.findConfirmedRubric('assignment-id', organizationId),
-      ).rejects.toThrow(NotFoundException);
+      ).rejects.toMatchObject({ code: 'RUBRIC_NOT_FOUND' });
     });
   });
 
@@ -294,7 +293,7 @@ describe('RubricsService', () => {
         where: {
           assignmentId,
           isConfirmed: true,
-          assignment: { class: { organizationId } },
+          assignment: { offering: { organizationId } },
         },
         include: { criteria: true },
       });

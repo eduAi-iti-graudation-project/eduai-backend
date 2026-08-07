@@ -9,5 +9,6 @@ import { WsAuthGuard } from './ws-auth.guard';
   imports: [AuthModule],
   controllers: [ChatController],
   providers: [ChatService, ChatGateway, WsAuthGuard],
+  exports: [ChatService],
 })
 export class ChatModule {}

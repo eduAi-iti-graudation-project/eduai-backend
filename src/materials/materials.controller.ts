@@ -44,7 +44,7 @@ export class MaterialsController {
       properties: {
         file: { type: 'string', format: 'binary' },
         title: { type: 'string' },
-        classId: { type: 'string', format: 'uuid' },
+        courseOfferingId: { type: 'string', format: 'uuid' },
       },
     },
   })
@@ -55,34 +55,34 @@ export class MaterialsController {
   ) {
     return this.materialsService.upload(
       dto.title,
-      dto.classId,
+      dto.courseOfferingId,
       file.buffer,
       file.originalname,
       organizationId,
     );
   }
 
-  @Get('class/:classId/search')
+  @Get('offering/:courseOfferingId/search')
   @ApiOperation({ summary: 'Search material chunks by semantic similarity' })
   searchChunks(
-    @Param('classId') classId: string,
+    @Param('courseOfferingId') courseOfferingId: string,
     @Query('q') query: string,
     @Query('topK') topK?: string,
   ) {
     return this.materialsService.searchChunks(
-      classId,
+      courseOfferingId,
       query,
       topK ? parseInt(topK, 10) : 5,
     );
   }
 
-  @Get('class/:classId')
-  @ApiOperation({ summary: 'List materials for a class' })
+  @Get('offering/:courseOfferingId')
+  @ApiOperation({ summary: 'List materials for a course offering' })
   findByClass(
-    @Param('classId') classId: string,
+    @Param('courseOfferingId') courseOfferingId: string,
     @CurrentUser('organizationId') organizationId: string,
   ) {
-    return this.materialsService.findByClass(classId, organizationId);
+    return this.materialsService.findByClass(courseOfferingId, organizationId);
   }
 
   @Get(':id')

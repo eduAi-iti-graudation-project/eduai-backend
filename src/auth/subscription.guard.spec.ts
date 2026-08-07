@@ -26,6 +26,7 @@ describe('SubscriptionGuard', () => {
     return {
       id: 'org-1',
       name: 'Demo School',
+      joinCode: 'DEMO2026',
       stripeCustomerId: null,
       stripeSubscriptionId: null,
       subscriptionTier,

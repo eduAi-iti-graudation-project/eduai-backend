@@ -22,32 +22,34 @@ describe('transitionStatus', () => {
   });
 
   it('rejects SUBMITTED → REVIEW_READY (skip)', () => {
-    expect(() => transitionStatus('SUBMITTED', 'REVIEW_READY')).toThrow(
-      'Invalid submission status transition',
+    expect(() => transitionStatus('SUBMITTED', 'REVIEW_READY')).toThrowError(
+      expect.objectContaining({ code: 'INVALID_STATUS_TRANSITION' }),
     );
   });
 
   it('rejects SUBMITTED → CONFIRMED (skip)', () => {
-    expect(() => transitionStatus('SUBMITTED', 'CONFIRMED')).toThrow(
-      'Invalid submission status transition',
+    expect(() => transitionStatus('SUBMITTED', 'CONFIRMED')).toThrowError(
+      expect.objectContaining({ code: 'INVALID_STATUS_TRANSITION' }),
     );
   });
 
   it('rejects CONFIRMED → REVIEW_READY (reverse)', () => {
-    expect(() => transitionStatus('CONFIRMED', 'REVIEW_READY')).toThrow(
-      'Invalid submission status transition',
+    expect(() => transitionStatus('CONFIRMED', 'REVIEW_READY')).toThrowError(
+      expect.objectContaining({ code: 'INVALID_STATUS_TRANSITION' }),
     );
   });
 
   it('rejects CONFIRMED → SUBMITTED (reverse)', () => {
-    expect(() => transitionStatus('CONFIRMED', 'SUBMITTED')).toThrow(
-      'Invalid submission status transition',
+    expect(() => transitionStatus('CONFIRMED', 'SUBMITTED')).toThrowError(
+      expect.objectContaining({ code: 'INVALID_STATUS_TRANSITION' }),
     );
   });
 
   it('rejects GRADING_IN_PROGRESS → SUBMITTED (reverse)', () => {
-    expect(() => transitionStatus('GRADING_IN_PROGRESS', 'SUBMITTED')).toThrow(
-      'Invalid submission status transition',
+    expect(() =>
+      transitionStatus('GRADING_IN_PROGRESS', 'SUBMITTED'),
+    ).toThrowError(
+      expect.objectContaining({ code: 'INVALID_STATUS_TRANSITION' }),
     );
   });
 });

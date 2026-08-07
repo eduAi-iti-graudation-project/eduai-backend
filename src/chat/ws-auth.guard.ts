@@ -2,12 +2,15 @@ import {
   Injectable,
   CanActivate,
   ExecutionContext,
-  UnauthorizedException,
+  HttpStatus,
 } from '@nestjs/common';
 import type { Socket } from 'socket.io';
 import type { User } from '@prisma/client';
 import { SupabaseService } from '../auth/supabase.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { ApiError } from '../common/errors/api-error';
+import { ErrorCode } from '../common/errors/codes';
+import { ErrorHint } from '../common/errors/hints';
 
 type AuthSocket = Socket & { data: { user?: User } };
 
@@ -32,7 +35,12 @@ export class WsAuthGuard implements CanActivate {
         : undefined;
 
     if (!jwt) {
-      throw new UnauthorizedException('Missing authentication token');
+      throw new ApiError(
+        ErrorCode.AUTH_MISSING_HEADER,
+        HttpStatus.UNAUTHORIZED,
+        'Please log in to continue.',
+        { hint: ErrorHint.RE_LOGIN },
+      );
     }
 
     const supabaseUser = await this.supabaseService.verifyToken(jwt);
@@ -42,7 +50,12 @@ export class WsAuthGuard implements CanActivate {
     });
 
     if (!localUser) {
-      throw new UnauthorizedException('User not found');
+      throw new ApiError(
+        ErrorCode.AUTH_USER_NOT_FOUND,
+        HttpStatus.UNAUTHORIZED,
+        'This account could not be found. Please contact your administrator.',
+        { hint: ErrorHint.RE_LOGIN },
+      );
     }
 
     const userStore = client.data as { user?: User };

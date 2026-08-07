@@ -1,5 +1,41 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, HttpStatus } from '@nestjs/common';
+import { ApiError } from '../common/errors/api-error';
+import { ErrorCode } from '../common/errors/codes';
 import { PrismaService } from '../prisma/prisma.service';
+import type { Prisma } from '@prisma/client';
+
+const alertInclude = {
+  offering: {
+    select: {
+      id: true,
+      teacher: { select: { id: true, name: true } },
+    },
+  },
+  student: {
+    select: {
+      name: true,
+      grade: { select: { id: true, level: true, name: true } },
+      enrollments: {
+        where: { status: 'APPROVED' },
+        include: {
+          section: {
+            select: {
+              id: true,
+              name: true,
+              gradeLevel: { select: { id: true, level: true, name: true } },
+            },
+          },
+        },
+        take: 1,
+      },
+    },
+  },
+  analyses: {
+    orderBy: { createdAt: 'desc' },
+    take: 1,
+    select: { diagnosis: true, teacherContent: true },
+  },
+} satisfies Prisma.AlertInclude;
 
 @Injectable()
 export class AlertsService {
@@ -12,23 +48,7 @@ export class AlertsService {
     if (status) where.status = status;
     const alerts = await this.prisma.alert.findMany({
       where,
-      include: {
-        student: {
-          select: {
-            name: true,
-            enrollments: {
-              where: { status: 'APPROVED' },
-              include: { class: { select: { name: true } } },
-              take: 1,
-            },
-          },
-        },
-        analyses: {
-          orderBy: { createdAt: 'desc' },
-          take: 1,
-          select: { diagnosis: true, teacherContent: true },
-        },
-      },
+      include: alertInclude,
       orderBy: { createdAt: 'desc' },
     });
     return alerts.map((a) => ({
@@ -39,7 +59,11 @@ export class AlertsService {
       studentId: a.studentId,
       createdAt: a.createdAt.toISOString(),
       studentName: a.student.name,
-      className: a.student.enrollments[0]?.class.name ?? null,
+      className: a.student.enrollments[0]?.section.name ?? null,
+      grade:
+        a.student.grade ?? a.student.enrollments[0]?.section.gradeLevel ?? null,
+      teacherName: a.offering?.teacher?.name ?? null,
+      teacherId: a.offering?.teacher?.id ?? null,
       severity:
         (a.analyses[0]?.diagnosis as { severity?: string | null } | undefined)
           ?.severity ?? null,
@@ -57,7 +81,13 @@ export class AlertsService {
     const alert = await this.prisma.alert.findFirst({
       where: { id, student: { organizationId } },
     });
-    if (!alert) throw new NotFoundException('Alert not found');
+    if (!alert) {
+      throw new ApiError(
+        ErrorCode.ALERT_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This alert could not be found.',
+      );
+    }
     return this.prisma.alert.update({
       where: { id },
       data: { status },
@@ -69,7 +99,11 @@ export class AlertsService {
       where: { alertId: id, alert: { student: { organizationId } } },
     });
     if (!analysis)
-      throw new NotFoundException('Analysis not found for this alert');
+      throw new ApiError(
+        ErrorCode.ALERT_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'The analysis for this alert could not be found.',
+      );
 
     return {
       diagnosis: analysis.diagnosis,

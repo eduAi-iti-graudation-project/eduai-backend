@@ -17,7 +17,7 @@ const SaveQuestionSchema = z.object({
 export const SaveQuizInputSchema = z.object({
   title: z.string().min(1),
   description: z.string().optional(),
-  classId: z.string().uuid(),
+  courseOfferingId: z.string().uuid(),
   teacherId: z.string().uuid(),
   questions: z.array(SaveQuestionSchema).min(1),
 });
@@ -41,7 +41,7 @@ export function createSaveQuizTool(prisma: PrismaService) {
         data: {
           title: input.title,
           description: input.description ?? null,
-          classId: input.classId,
+          courseOfferingId: input.courseOfferingId,
           teacherId: input.teacherId,
           status: 'DRAFT',
           questions: {

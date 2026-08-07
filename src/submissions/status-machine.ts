@@ -1,4 +1,6 @@
-import { BadRequestException } from '@nestjs/common';
+import { HttpStatus } from '@nestjs/common';
+import { ApiError } from '../common/errors/api-error';
+import { ErrorCode } from '../common/errors/codes';
 
 export const SUBMITTED = 'SUBMITTED';
 export const GRADING_IN_PROGRESS = 'GRADING_IN_PROGRESS';
@@ -17,8 +19,10 @@ export function transitionStatus(current: string, next: string): void {
 
   const allowed = VALID_TRANSITIONS[current];
   if (!allowed?.includes(next)) {
-    throw new BadRequestException(
-      `Invalid submission status transition from ${current} to ${next}`,
+    throw new ApiError(
+      ErrorCode.INVALID_STATUS_TRANSITION,
+      HttpStatus.CONFLICT,
+      'This submission cannot move to that state.',
     );
   }
 }

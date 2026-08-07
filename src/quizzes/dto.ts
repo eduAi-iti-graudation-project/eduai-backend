@@ -12,6 +12,8 @@ export type QuestionType = z.infer<typeof QuestionTypeEnum>;
 
 export const QuizStatusEnum = z.enum(['DRAFT', 'PUBLISHED', 'CLOSED']);
 
+export const QuizDifficultyEnum = z.enum(['EASY', 'MEDIUM', 'HARD']);
+
 export const AttemptStatusEnum = z.enum(['IN_PROGRESS', 'COMPLETED']);
 
 export const ViolationTypeEnum = z.enum(['TAB_SWITCH', 'FULLSCREEN_EXIT']);
@@ -35,7 +37,7 @@ const QuizQuestionInputSchema = z.object({
 export const CreateQuizSchema = z.object({
   title: z.string().min(1),
   description: z.string().optional(),
-  classId: z.string().uuid(),
+  courseOfferingId: z.string().uuid(),
   timeLimit: z.number().int().min(1).optional(),
   passingScore: z.number().int().min(0).optional(),
   questions: z.array(QuizQuestionInputSchema).min(1),
@@ -52,10 +54,11 @@ export const UpdateQuizSchema = z.object({
 
 // ─── Quiz Generation Agent ──────────────────────────────
 export const GenerateQuizSchema = z.object({
-  classId: z.string().uuid(),
+  courseOfferingId: z.string().uuid(),
   topic: z.string().optional(),
   questionCount: z.number().int().min(1).max(30).default(5),
   types: z.array(QuestionTypeEnum).optional(),
+  difficulty: QuizDifficultyEnum.default('MEDIUM'),
 });
 
 export const QuizGenerationToolSchema = z.discriminatedUnion('action', [
@@ -71,6 +74,7 @@ export const QuizGenerationToolSchema = z.discriminatedUnion('action', [
     count: z.number().int().min(1).max(20).default(5),
     topic: z.string().nullish(),
     avoidTopics: z.array(z.string()).nullish(),
+    difficulty: QuizDifficultyEnum.nullish(),
   }),
   z.object({
     action: z.literal('review_questions'),
@@ -153,7 +157,7 @@ export const QuizResponseSchema = z.object({
   id: z.string(),
   title: z.string(),
   description: z.string().nullable(),
-  classId: z.string(),
+  courseOfferingId: z.string(),
   teacherId: z.string(),
   timeLimit: z.number().nullable(),
   passingScore: z.number().nullable(),

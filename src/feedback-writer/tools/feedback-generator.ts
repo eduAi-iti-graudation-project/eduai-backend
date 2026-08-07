@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { LlmService } from '../../common/llm/llm.service';
+import { FORMATTING_RULES } from '../../common/llm/formatting-rules';
 
 export const FeedbackSchema = z.object({
   feedback: z
@@ -24,7 +25,8 @@ export async function generateFeedback(
     input;
 
   const result = await llmService.generateStructured({
-    systemPrompt: `You are a helpful teaching assistant providing feedback on student work.
+    systemPrompt:
+      `You are a helpful teaching assistant providing feedback on student work.
 Write specific, actionable feedback for a single rubric criterion.
 
 Given:
@@ -41,7 +43,8 @@ Guidelines:
 2. Reference specific parts of their submission
 3. Suggest concrete improvements
 4. Be encouraging but honest
-5. Keep feedback to 2-4 sentences`,
+5. Keep feedback to 2-4 sentences
+` + FORMATTING_RULES,
     userPrompt: `Student submission:\n${submissionContent.slice(0, 3000)}`,
     schema: FeedbackSchema,
   });

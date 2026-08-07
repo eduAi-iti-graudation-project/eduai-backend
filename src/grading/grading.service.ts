@@ -1,7 +1,10 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, HttpStatus } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { FeedbackWriterService } from '../feedback-writer/feedback-writer.service';
 import { CommunicationAgentService } from '../communication-agent/communication-agent.service';
+import { GradingAgent } from './grading.agent';
+import { ApiError } from '../common/errors/api-error';
+import { ErrorCode } from '../common/errors/codes';
 
 @Injectable()
 export class GradingService {
@@ -11,6 +14,7 @@ export class GradingService {
     private readonly prisma: PrismaService,
     private readonly feedbackWriterService: FeedbackWriterService,
     private readonly communicationAgentService: CommunicationAgentService,
+    private readonly gradingAgent: GradingAgent,
   ) {}
 
   async gradeSubmission(submissionId: string): Promise<void> {
@@ -19,31 +23,50 @@ export class GradingService {
       data: { status: 'GRADING_IN_PROGRESS' },
     });
 
-    const criteria = await this.prisma.rubricCriteria.findMany({
-      where: {
-        rubric: { assignment: { submissions: { some: { id: submissionId } } } },
-      },
-    });
+    try {
+      const result = await this.gradingAgent.grade(submissionId);
 
-    for (const criterion of criteria) {
-      await this.prisma.gradingScore.upsert({
-        where: {
-          submissionId_criteriaId: { submissionId, criteriaId: criterion.id },
+      for (const score of result.scores) {
+        await this.prisma.gradingScore.upsert({
+          where: {
+            submissionId_criteriaId: {
+              submissionId,
+              criteriaId: score.criterionId,
+            },
+          },
+          create: {
+            submissionId,
+            criteriaId: score.criterionId,
+            pointsAwarded: score.pointsAwarded,
+            aiFeedback: score.feedback,
+          },
+          update: {
+            pointsAwarded: score.pointsAwarded,
+            aiFeedback: score.feedback,
+          },
+        });
+      }
+
+      await this.prisma.submission.update({
+        where: { id: submissionId },
+        data: {
+          status: 'REVIEW_READY',
+          ...(result.overallFeedback !== undefined
+            ? { aiOverallFeedback: result.overallFeedback }
+            : {}),
         },
-        create: {
-          submissionId,
-          criteriaId: criterion.id,
-          pointsAwarded: Math.floor(criterion.maxPoints * 0.7),
-          aiFeedback: null,
-        },
-        update: {},
       });
+    } catch (err) {
+      this.logger.error(
+        `AI grading failed for submission ${submissionId}`,
+        err,
+      );
+      await this.prisma.submission.update({
+        where: { id: submissionId },
+        data: { status: 'REVIEW_READY' },
+      });
+      throw err;
     }
-
-    await this.prisma.submission.update({
-      where: { id: submissionId },
-      data: { status: 'REVIEW_READY' },
-    });
   }
 
   async confirmAll(submissionId: string) {
@@ -51,7 +74,13 @@ export class GradingService {
       where: { id: submissionId },
       include: { scores: true },
     });
-    if (!submission) throw new NotFoundException('Submission not found');
+    if (!submission) {
+      throw new ApiError(
+        ErrorCode.SUBMISSION_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This submission could not be found.',
+      );
+    }
 
     await this.prisma.$transaction(async (tx) => {
       await tx.gradingScore.updateMany({
@@ -99,7 +128,13 @@ export class GradingService {
     const submission = await this.prisma.submission.findUnique({
       where: { id: submissionId },
     });
-    if (!submission) throw new NotFoundException('Submission not found');
+    if (!submission) {
+      throw new ApiError(
+        ErrorCode.SUBMISSION_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This submission could not be found.',
+      );
+    }
 
     return this.prisma.gradingScore.findMany({
       where: { submissionId },
@@ -144,9 +179,19 @@ export class GradingService {
     const score = await this.prisma.gradingScore.findUnique({
       where: { id: scoreId },
     });
-    if (!score) throw new NotFoundException('Score not found');
+    if (!score) {
+      throw new ApiError(
+        ErrorCode.SCORE_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This grade could not be found.',
+      );
+    }
     if (score.isConfirmed) {
-      throw new Error('Cannot edit a confirmed score');
+      throw new ApiError(
+        ErrorCode.CONFLICT,
+        HttpStatus.CONFLICT,
+        'This grade has already been confirmed and can no longer be edited.',
+      );
     }
 
     return this.prisma.gradingScore.update({

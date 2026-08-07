@@ -2,7 +2,7 @@ import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
 
 export const CreateThreadSchema = z.object({
-  classId: z.string().uuid(),
+  courseOfferingId: z.string().uuid(),
   studentId: z.string().uuid().optional(),
 });
 
@@ -34,7 +34,7 @@ export class MessageDto extends createZodDto(MessageSchema) {}
 
 export const ThreadSchema = z.object({
   id: z.string().uuid(),
-  classId: z.string().uuid(),
+  courseOfferingId: z.string().uuid(),
   teacherId: z.string().uuid(),
   studentId: z.string().uuid(),
   createdAt: z.string().datetime(),

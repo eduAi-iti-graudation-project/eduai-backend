@@ -10,6 +10,40 @@ export const DiagnosisSchema = z.object({
 
 export type Diagnosis = z.infer<typeof DiagnosisSchema>;
 
+export const ExplanationSchema = z.object({
+  reason: z
+    .string()
+    .min(1)
+    .describe(
+      'One plain-language paragraph explaining what the numbers show and why this matters',
+    ),
+  headline: z
+    .string()
+    .describe(
+      'Short, one-line verdict headline, e.g. "Risk of failing English Literature"',
+    ),
+  highlights: z
+    .array(z.string())
+    .describe(
+      '3-5 short factual bullet points that reference the actual numbers (average, trend, class comparison)',
+    ),
+  strengths: z
+    .array(z.string())
+    .describe(
+      '1-3 skills/criteria the student does well, include the percentage where known',
+    ),
+  concerns: z
+    .array(z.string())
+    .describe(
+      '1-4 skills/criteria needing work, include the percentage where known',
+    ),
+  recommendation: z
+    .string()
+    .describe('One short, actionable sentence on what to focus on next'),
+});
+
+export type Explanation = z.infer<typeof ExplanationSchema>;
+
 export const TeacherStudentContentSchema = z.object({
   analysis: z.string(),
   skillGaps: z.array(z.string()),
@@ -48,6 +82,7 @@ export const StudentProfileSchema = z.object({
   grades: z.array(
     z.object({
       submissionId: z.string(),
+      criteriaId: z.string(),
       pointsAwarded: z.number(),
       maxPoints: z.number(),
       percentage: z.number(),
@@ -95,7 +130,7 @@ export type ClassContext = z.infer<typeof ClassContextSchema>;
 export const AnalysisLogSchema = z.object({
   submissionId: z.string(),
   studentId: z.string(),
-  classId: z.string().optional(),
+  courseOfferingId: z.string().optional(),
   diagnosis: DiagnosisSchema,
   alertCreated: z.boolean(),
   alertId: z.string().nullable(),

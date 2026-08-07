@@ -1,9 +1,10 @@
-import { BadRequestException, Inject, Injectable } from '@nestjs/common';
-import { NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, HttpStatus } from '@nestjs/common';
 import type { Stripe } from 'stripe';
 import { PrismaService } from '../prisma/prisma.service';
 import { STRIPE_CLIENT } from './stripe-client';
 import { PlanId } from './dto';
+import { ApiError } from '../common/errors/api-error';
+import { ErrorCode } from '../common/errors/codes';
 
 @Injectable()
 export class BillingService {
@@ -26,8 +27,10 @@ export class BillingService {
   }) {
     const priceId = this.planPrices[input.planId];
     if (!priceId) {
-      throw new BadRequestException(
-        `Plan '${input.planId}' is not available for checkout`,
+      throw new ApiError(
+        ErrorCode.PLAN_NOT_AVAILABLE,
+        HttpStatus.BAD_REQUEST,
+        'This plan is not available for purchase right now.',
       );
     }
 
@@ -35,7 +38,11 @@ export class BillingService {
       where: { id: input.organizationId },
     });
     if (!organization) {
-      throw new NotFoundException('Organization not found');
+      throw new ApiError(
+        ErrorCode.ORG_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'Your organization could not be found.',
+      );
     }
 
     let customerId = organization.stripeCustomerId;
@@ -70,8 +77,10 @@ export class BillingService {
   }) {
     const priceId = this.planPrices[input.planId];
     if (!priceId) {
-      throw new BadRequestException(
-        `Plan '${input.planId}' is not available for checkout`,
+      throw new ApiError(
+        ErrorCode.PLAN_NOT_AVAILABLE,
+        HttpStatus.BAD_REQUEST,
+        'This plan is not available for purchase right now.',
       );
     }
 
@@ -79,11 +88,17 @@ export class BillingService {
       where: { id: input.organizationId },
     });
     if (!organization) {
-      throw new NotFoundException('Organization not found');
+      throw new ApiError(
+        ErrorCode.ORG_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'Your organization could not be found.',
+      );
     }
     if (!organization.stripeSubscriptionId) {
-      throw new BadRequestException(
-        'Organization has no active subscription to change',
+      throw new ApiError(
+        ErrorCode.BILLING_NO_SUBSCRIPTION,
+        HttpStatus.BAD_REQUEST,
+        'Your organization has no active subscription to change.',
       );
     }
 
@@ -92,8 +107,10 @@ export class BillingService {
     );
     const item = subscription.items?.data?.[0];
     if (!item) {
-      throw new BadRequestException(
-        'Subscription has no billable items to change',
+      throw new ApiError(
+        ErrorCode.BILLING_NO_ITEMS,
+        HttpStatus.BAD_REQUEST,
+        'Your subscription cannot be changed right now.',
       );
     }
 
@@ -117,7 +134,11 @@ export class BillingService {
       where: { id: input.organizationId },
     });
     if (!organization) {
-      throw new NotFoundException('Organization not found');
+      throw new ApiError(
+        ErrorCode.ORG_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'Your organization could not be found.',
+      );
     }
 
     let customerId = organization.stripeCustomerId;

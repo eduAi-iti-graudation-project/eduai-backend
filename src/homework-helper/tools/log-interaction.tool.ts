@@ -3,7 +3,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 
 export const LogInteractionInputSchema = z.object({
   studentId: z.string().uuid(),
-  classId: z.string().uuid(),
+  courseOfferingId: z.string().uuid(),
   question: z.string(),
   answer: z.string(),
   action: z.enum(['HINT', 'EXPLANATION', 'REDIRECT_TEACHER']),
@@ -26,7 +26,7 @@ export function createLogInteractionTool(prisma: PrismaService) {
       const interaction = await prisma.homeworkHelpInteraction.create({
         data: {
           studentId: input.studentId,
-          classId: input.classId,
+          courseOfferingId: input.courseOfferingId,
           question: input.question,
           answer: input.answer,
           action: input.action,

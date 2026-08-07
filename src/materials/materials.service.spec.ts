@@ -21,7 +21,7 @@ describe('MaterialsService', () => {
   const organizationId = 'org-1';
 
   const mockPrisma = {
-    class: {
+    courseOffering: {
       findFirst: jest.fn(),
     },
     material: {
@@ -72,19 +72,20 @@ describe('MaterialsService', () => {
 
   describe('upload', () => {
     const title = 'Test Material';
-    const classId = '00000000-0000-0000-0000-000000000001';
+    const courseOfferingId = '00000000-0000-0000-0000-000000000001';
 
     it('should chunk and embed a text file', async () => {
       const text = 'Hello world. '.repeat(500);
       const buffer = Buffer.from(text);
       const filename = 'test.txt';
 
-      mockPrisma.class.findFirst.mockResolvedValue({ id: classId });
+      mockPrisma.courseOffering.findFirst.mockResolvedValue({
+        id: courseOfferingId,
+      });
       mockPrisma.material.create.mockResolvedValue({
         id: 'mat-1',
         title,
-        classId,
-        fileUrl: filename,
+        courseOfferingId,
         chunks: [{ id: 'chunk-1', content: text.slice(0, 1900) }],
       });
       mockLlm.embed.mockResolvedValue([0.1, 0.2, 0.3]);
@@ -92,7 +93,7 @@ describe('MaterialsService', () => {
 
       const result = await service.upload(
         title,
-        classId,
+        courseOfferingId,
         buffer,
         filename,
         organizationId,
@@ -120,10 +121,18 @@ describe('MaterialsService', () => {
       const buffer = Buffer.from('   \n\n  ');
       const filename = 'empty.txt';
 
-      mockPrisma.class.findFirst.mockResolvedValue({ id: classId });
+      mockPrisma.courseOffering.findFirst.mockResolvedValue({
+        id: courseOfferingId,
+      });
       await expect(
-        service.upload(title, classId, buffer, filename, organizationId),
-      ).rejects.toThrow(BadRequestException);
+        service.upload(
+          title,
+          courseOfferingId,
+          buffer,
+          filename,
+          organizationId,
+        ),
+      ).rejects.toMatchObject({ code: 'FILE_NO_TEXT' });
     });
 
     it('should upload a PDF to the bucket and persist the object path', async () => {
@@ -226,14 +235,19 @@ describe('MaterialsService', () => {
   describe('findByClass', () => {
     it('should return materials for a class', async () => {
       mockPrisma.material.findMany.mockResolvedValue([
-        { id: 'mat-1', title: 'M1', classId: 'c1', _count: { chunks: 3 } },
+        {
+          id: 'mat-1',
+          title: 'M1',
+          courseOfferingId: 'of-1',
+          _count: { chunks: 3 },
+        },
       ]);
 
-      const result = await service.findByClass('c1', organizationId);
+      const result = await service.findByClass('of-1', organizationId);
 
       expect(result).toHaveLength(1);
       expect(mockPrisma.material.findMany).toHaveBeenCalledWith({
-        where: { classId: 'c1', class: { organizationId } },
+        where: { courseOfferingId: 'of-1', offering: { organizationId } },
         include: { _count: { select: { chunks: true } } },
         orderBy: { createdAt: 'desc' },
       });
@@ -258,7 +272,7 @@ describe('MaterialsService', () => {
 
       await expect(
         service.findOne('nonexistent', organizationId),
-      ).rejects.toThrow('Material not found');
+      ).rejects.toMatchObject({ code: 'MATERIAL_NOT_FOUND' });
     });
   });
 
@@ -275,7 +289,7 @@ describe('MaterialsService', () => {
         },
       ]);
 
-      const result = await service.searchChunks('c1', 'query', 3);
+      const result = await service.searchChunks('of-1', 'query', 3);
 
       expect(result).toHaveLength(1);
       expect(mockLlm.embed).toHaveBeenCalledWith('query');
@@ -285,7 +299,7 @@ describe('MaterialsService', () => {
       mockLlm.embed.mockResolvedValue([0.1, 0.2, 0.3]);
       mockPrisma.$queryRaw.mockResolvedValue([]);
 
-      await service.searchChunks('c1', 'query', 3);
+      await service.searchChunks('of-1', 'query', 3);
 
       const call = mockPrisma.$queryRaw.mock.calls[0] as unknown as [
         string[],
@@ -305,7 +319,7 @@ describe('MaterialsService', () => {
         mockSupabase as never,
       );
 
-      await service.searchChunks('c1', 'query', 3);
+      await service.searchChunks('of-1', 'query', 3);
 
       const call = mockPrisma.$queryRaw.mock.calls[0] as unknown as [
         string[],
@@ -529,7 +543,7 @@ describe('MaterialsService', () => {
 
       await expect(
         service.delete('nonexistent', organizationId),
-      ).rejects.toThrow('Material not found');
+      ).rejects.toMatchObject({ code: 'MATERIAL_NOT_FOUND' });
     });
   });
 });

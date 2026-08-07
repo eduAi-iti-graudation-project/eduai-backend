@@ -1,35 +1,54 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { LlmService } from '../common/llm/llm.service';
+import { FORMATTING_RULES } from '../common/llm/formatting-rules';
 import { ReportsService } from '../reports/reports.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import {
-  DiagnosisSchema,
+  ExplanationSchema,
   TeacherStudentContentSchema,
   GuardianStudentContentSchema,
   TeacherFeedbackSchema,
   ManagementSummarySchema,
-  type Diagnosis,
-  type ClassContext,
+  type Explanation,
   type TeacherStudentContent,
   type GuardianStudentContent,
   type TeacherFeedback,
   type ManagementSummary,
+  type StudentProfile,
 } from './dto';
 import {
   createGetStudentProfileTool,
-  createGetClassContextTool,
   createCreateAlertTool,
   type StudentProfileTool,
-  type ClassContextTool,
   type CreateAlertTool,
 } from './tools';
+import {
+  submissionPcts,
+  summarizeStudentSeries,
+  summarizeClass,
+  scorePercentage,
+  verdict,
+  submissionCriterionSeries,
+  criterionStatsFromSeries,
+  weakCriterion,
+  type ClassStats,
+  type StudentStats,
+  type ScorePoint,
+  type CriterionStat,
+} from './trends';
+
+type FlaggedVerdict = {
+  flagged: true;
+  type: 'FAILING' | 'DOWNWARD_TREND' | 'CONSISTENT_STRUGGLE' | 'WEAK_CRITERION';
+  severity: 'MEDIUM' | 'HIGH';
+  attribution: 'STUDENT' | 'CLASS' | 'BOTH';
+};
 
 @Injectable()
 export class CommunicationAgentService {
   private readonly logger = new Logger(CommunicationAgentService.name);
   private readonly getStudentProfileTool: StudentProfileTool;
-  private readonly getClassContextTool: ClassContextTool;
   private readonly createAlertTool: CreateAlertTool;
 
   constructor(
@@ -39,7 +58,6 @@ export class CommunicationAgentService {
     private readonly notificationsService: NotificationsService,
   ) {
     this.getStudentProfileTool = createGetStudentProfileTool(this.prisma);
-    this.getClassContextTool = createGetClassContextTool(this.prisma);
     this.createAlertTool = createCreateAlertTool(this.prisma);
   }
 
@@ -48,7 +66,9 @@ export class CommunicationAgentService {
       where: { id: submissionId },
       include: {
         assignment: {
-          include: { class: { select: { organizationId: true } } },
+          include: {
+            offering: { select: { organizationId: true, id: true } },
+          },
         },
         student: true,
       },
@@ -59,7 +79,7 @@ export class CommunicationAgentService {
     }
 
     const organization = await this.prisma.organization.findUnique({
-      where: { id: submission.assignment.class.organizationId },
+      where: { id: submission.assignment.offering.organizationId },
       select: { subscriptionStatus: true, subscriptionTier: true },
     });
     const enterpriseAccess =
@@ -67,133 +87,242 @@ export class CommunicationAgentService {
       organization?.subscriptionTier === 'ENTERPRISE';
     if (!enterpriseAccess) {
       this.logger.log(
-        `Skipping communication agent for ${submissionId}: organization is not on Enterprise`,
+        `Skipping communication agent for ${submissionId}: organization is not on Trial/Enterprise`,
       );
       return;
     }
 
     const studentId = submission.studentId;
-    const classId = submission.assignment.classId;
+    const courseOfferingId = submission.assignment.offering.id;
 
-    const confirmedCount = await this.prisma.gradingScore.count({
+    const confirmedCount = await this.prisma.submission.count({
       where: {
-        submission: { studentId },
-        isConfirmed: true,
+        studentId,
+        status: 'CONFIRMED',
+        scores: { some: { isConfirmed: true } },
       },
     });
 
     if (confirmedCount < 2) {
       this.logger.debug(
-        `Skipping analysis for ${studentId}: only ${confirmedCount} confirmed scores`,
+        `Skipping analysis for ${studentId}: only ${confirmedCount} confirmed submissions`,
       );
       return;
     }
 
     const profile = await this.getStudentProfileTool.execute({ studentId });
 
-    let classContext: ClassContext | null = null;
-    try {
-      classContext = await this.getClassContextTool.execute({
-        classId,
-      });
-    } catch (err) {
-      this.logger.warn(`Could not fetch class context for ${classId}`, err);
+    const studentSeries = submissionPcts(
+      profile.grades.map((g) => ({
+        studentId,
+        submissionId: g.submissionId,
+        pct: g.percentage,
+        createdAt: g.createdAt,
+      })),
+    );
+    const studentStats = summarizeStudentSeries(studentSeries);
+
+    const criterionStats: CriterionStat[] = criterionStatsFromSeries(
+      submissionCriterionSeries(
+        profile.grades.map((g) => ({
+          submissionId: g.submissionId,
+          criteriaId: g.criteriaId,
+          criteriaDescription: g.criteriaDescription,
+          pct: g.percentage,
+          createdAt: g.createdAt,
+        })),
+      ),
+    );
+    const weakCriteria = weakCriterion(criterionStats);
+
+    const classStats = await this.buildClassStats(courseOfferingId);
+    const recentlyFlagged = profile.previousAlerts.some(
+      (a) => a.status === 'ACTIVE',
+    );
+    let decision = verdict(studentStats, classStats, recentlyFlagged);
+
+    if (!decision.flagged && weakCriteria.length > 0) {
+      decision = {
+        flagged: true,
+        type: recentlyFlagged ? 'CONSISTENT_STRUGGLE' : 'WEAK_CRITERION',
+        severity: 'MEDIUM',
+        attribution: 'STUDENT',
+      };
     }
 
-    const diagnosis = await this.llmService.generateStructured<Diagnosis>({
-      systemPrompt:
-        'You are an educational analyst. Analyze the student data and class context to determine if there is a ' +
-        'performance issue and who it is attributed to. ' +
-        'Return valid JSON with EXACTLY these fields:\n' +
-        '{\n' +
-        '  "hasIssue": true | false,\n' +
-        '  "issueType": "STUDENT_ISSUE" | "CLASS_ISSUE" | "BOTH" | null,\n' +
-        '  "severity": "LOW" | "MEDIUM" | "HIGH" | null,\n' +
-        '  "summary": "string explaining the diagnosis" | null,\n' +
-        '  "classContext": "string describing class context" | null\n' +
-        '}\n' +
-        'Do not omit any fields.',
-      userPrompt: JSON.stringify({
-        studentName: profile.studentName,
-        recentGrades: profile.grades.slice(0, 5),
-        attendance: profile.attendance.slice(0, 10),
-        previousAlerts: profile.previousAlerts,
-        classContext,
-      }),
-      schema: DiagnosisSchema,
-    });
-
-    this.logger.debug(
-      `Diagnosis for ${studentId}: ${JSON.stringify(diagnosis)}`,
-    );
-
-    if (!diagnosis.hasIssue) {
+    if (!decision.flagged) {
       await this.prisma.studentAnalysis.create({
         data: {
           submissionId,
           studentId,
-          classId,
-          diagnosis: diagnosis,
+          courseOfferingId,
+          diagnosis: {
+            decision: 'none',
+            studentStats,
+            classStats,
+            criterionStats,
+          },
         },
       });
       this.logger.log(`No issue detected for student ${studentId}`);
       return;
     }
 
-    const hasStudentIssue =
-      diagnosis.issueType === 'STUDENT_ISSUE' || diagnosis.issueType === 'BOTH';
-    const hasTeacherIssue =
-      diagnosis.issueType === 'CLASS_ISSUE' || diagnosis.issueType === 'BOTH';
+    const explanation = await this.llmService.generateStructured<Explanation>({
+      systemPrompt:
+        'You are an educational analyst. Turn the numbers below into a precise, scannable brief for a teacher and a parent. ' +
+        'Reference the actual numbers. Keep every bullet short (a few words), never sentences longer than ~15 words.\n' +
+        'Return valid JSON with EXACTLY these fields:\n' +
+        '{\n' +
+        '  "reason": "string — one paragraph (3-5 sentences) explaining what the numbers show",\n' +
+        '  "headline": "string — short one-line verdict, e.g. "Omar is at risk in English Literature"",\n' +
+        '  "highlights": ["string — 3-5 short factual bullets citing the numbers"],\n' +
+        '  "strengths": ["string — 1-3 skills done well, with percentage when known"],\n' +
+        '  "concerns": ["string — 1-4 skills needing work, with percentage when known"],\n' +
+        '  "recommendation": "string — one short actionable next step"\n' +
+        '}\n' +
+        'Do not omit any fields.' +
+        FORMATTING_RULES,
+      userPrompt: JSON.stringify({
+        studentName: profile.studentName,
+        studentStats,
+        classStats,
+        criterionStats,
+        weakCriteria: weakCriteria.map((c) => ({
+          criteriaId: c.criteriaId,
+          description: c.criteriaDescription,
+          avgPct: Math.round(c.last3AvgPct),
+        })),
+        recentGrades: profile.grades.slice(0, 5),
+      }),
+      schema: ExplanationSchema,
+    });
+
+    const flagged: FlaggedVerdict = decision;
+    this.logger.debug(
+      `Verdict for ${studentId}: ${JSON.stringify(flagged)} — ${explanation.reason}`,
+    );
+
+    const teacherIssue = flagged.attribution !== 'STUDENT';
 
     const [studentResult, teacherResult] = await Promise.all([
-      hasStudentIssue
-        ? this.handleStudentIssue(
-            submissionId,
-            studentId,
-            classId,
-            profile,
-            diagnosis,
+      this.handleStudentIssue(
+        submissionId,
+        studentId,
+        courseOfferingId,
+        classStats,
+        profile,
+        flagged,
+        explanation.reason,
+        studentStats,
+        criterionStats,
+      ),
+      teacherIssue
+        ? this.handleTeacherIssue(
+            courseOfferingId,
+            classStats,
+            explanation.reason,
           )
-        : null,
-      hasTeacherIssue
-        ? this.handleTeacherIssue(studentId, classId, diagnosis, classContext)
-        : null,
+        : Promise.resolve(null),
     ]);
 
     await this.prisma.studentAnalysis.create({
       data: {
         submissionId,
         studentId,
-        classId,
-        alertId: studentResult?.alertId ?? null,
-        diagnosis: diagnosis,
-        teacherContent: studentResult?.teacherContent ?? undefined,
-        guardianContent: studentResult?.guardianContent ?? undefined,
+        courseOfferingId,
+        alertId: studentResult.alertId ?? null,
+        diagnosis: {
+          type: flagged.type,
+          severity: flagged.severity,
+          attribution: flagged.attribution,
+          reason: explanation.reason,
+          brief: {
+            headline: explanation.headline,
+            highlights: explanation.highlights,
+            strengths: explanation.strengths,
+            concerns: explanation.concerns,
+            recommendation: explanation.recommendation,
+          },
+          studentStats,
+          classStats,
+          criterionStats,
+          weakCriteria: weakCriteria.map((c) => ({
+            criteriaId: c.criteriaId,
+            description: c.criteriaDescription,
+            avgPct: Math.round(c.last3AvgPct),
+          })),
+        },
+        teacherContent: studentResult.teacherContent ?? undefined,
+        guardianContent: studentResult.guardianContent ?? undefined,
         teacherFeedback: teacherResult?.teacherFeedback ?? undefined,
         managementSummary: teacherResult?.managementSummary ?? undefined,
       },
     });
   }
 
+  private async buildClassStats(courseOfferingId: string): Promise<ClassStats> {
+    const scores = await this.prisma.gradingScore.findMany({
+      where: {
+        submission: { assignment: { courseOfferingId }, status: 'CONFIRMED' },
+        isConfirmed: true,
+      },
+      include: {
+        criteria: { select: { maxPoints: true } },
+        submission: { select: { id: true, studentId: true, createdAt: true } },
+      },
+    });
+
+    const byStudent = new Map<string, ScorePoint[]>();
+    for (const score of scores) {
+      const studentId = score.submission.studentId;
+      const pct =
+        score.criteria.maxPoints > 0
+          ? scorePercentage(score.pointsAwarded, score.criteria.maxPoints)
+          : 0;
+      const rows = byStudent.get(studentId) ?? [];
+      rows.push({
+        studentId,
+        submissionId: score.submission.id,
+        pct,
+        createdAt: score.submission.createdAt.toISOString(),
+      });
+      byStudent.set(studentId, rows);
+    }
+
+    return summarizeClass(
+      Array.from(byStudent.values()).map((rows) => submissionPcts(rows)),
+    );
+  }
+
   private async handleStudentIssue(
     submissionId: string,
     studentId: string,
-    classId: string,
-    profile: { studentName: string },
-    diagnosis: Diagnosis,
+    courseOfferingId: string,
+    classStats: ClassStats,
+    profile: StudentProfile,
+    decision: FlaggedVerdict,
+    reason: string,
+    studentStats: StudentStats,
+    criterionStats: CriterionStat[],
   ): Promise<{
     alertId: string;
     teacherContent: TeacherStudentContent;
     guardianContent: GuardianStudentContent;
   }> {
+    const recentGrades = profile.grades.slice(0, 5).map((g) => ({
+      pct: g.percentage,
+      criteria: g.criteriaDescription,
+    }));
+
     const [teacherContent, guardianContent] = await Promise.all([
       this.llmService.generateStructured<TeacherStudentContent>({
         systemPrompt:
-          'You are a teacher advisor. Given a student diagnosis, provide detailed analysis, ' +
-          'skill gaps, interventions, and resource suggestions. ' +
+          'You are a teacher advisor. Given a student diagnosis and their actual performance numbers, ' +
+          'provide detailed analysis, skill gaps, interventions, and resource suggestions.\n' +
           'Return valid JSON with EXACTLY these fields:\n' +
           '{\n' +
-          '  "analysis": "string with detailed analysis",\n' +
+          '  "analysis": "string — detailed analysis grounded in the numbers",\n' +
           '  "skillGaps": ["string array of identified skill gaps"],\n' +
           '  "interventions": ["string array of suggested interventions"],\n' +
           '  "resourceSuggestions": ["string array of recommended resources"]\n' +
@@ -201,16 +330,20 @@ export class CommunicationAgentService {
           'Do not omit any fields.',
         userPrompt: JSON.stringify({
           studentName: profile.studentName,
-          summary: diagnosis.summary,
-          severity: diagnosis.severity,
-          recentGrades: [],
+          issueType: decision.type,
+          summary: reason,
+          severity: decision.severity,
+          studentStats,
+          classStats,
+          criterionStats,
+          recentGrades,
         }),
         schema: TeacherStudentContentSchema,
       }),
       this.llmService.generateStructured<GuardianStudentContent>({
         systemPrompt:
-          'You are a parent liaison. Given a student diagnosis, write an empathetic message ' +
-          'and suggest home support strategies. ' +
+          'You are a parent liaison. Given a student diagnosis, write an empathetic, specific message ' +
+          'for the parent and suggest home support strategies.\n' +
           'Return valid JSON with EXACTLY these fields:\n' +
           '{\n' +
           '  "message": "string with empathetic message for the parent",\n' +
@@ -219,7 +352,8 @@ export class CommunicationAgentService {
           'Do not omit any fields.',
         userPrompt: JSON.stringify({
           studentName: profile.studentName,
-          summary: diagnosis.summary,
+          summary: reason,
+          severity: decision.severity,
         }),
         schema: GuardianStudentContentSchema,
       }),
@@ -227,34 +361,30 @@ export class CommunicationAgentService {
 
     const alert = await this.createAlertTool.execute({
       studentId,
-      type: diagnosis.severity === 'HIGH' ? 'FAILING' : 'DOWNWARD_TREND',
-      reason: diagnosis.summary ?? 'Performance issue detected by AI analysis',
+      type: decision.type,
+      reason,
     });
 
-    const classEntity = classId
-      ? await this.prisma.class.findUnique({ where: { id: classId } })
-      : null;
-    const teacherId = classEntity?.teacherId;
-
-    if (teacherId) {
-      const teacherBody = [
-        `Analysis: ${teacherContent.analysis}`,
-        `Skill gaps: ${teacherContent.skillGaps.join(', ')}`,
-        `Interventions: ${teacherContent.interventions.join(', ')}`,
-        `Resources: ${teacherContent.resourceSuggestions.join(', ')}`,
-      ].join('\n');
+    const offeringInfo = await this.prisma.courseOffering.findUnique({
+      where: { id: courseOfferingId },
+    });
+    if (offeringInfo?.teacherId) {
       await this.notificationsService.notifyUser(
-        teacherId,
+        offeringInfo.teacherId,
         'AGENT_ALERT',
         `Student flagged: ${profile.studentName}`,
-        teacherBody,
+        [
+          `Analysis: ${teacherContent.analysis}`,
+          `Skill gaps: ${teacherContent.skillGaps.join(', ')}`,
+          `Interventions: ${teacherContent.interventions.join(', ')}`,
+          `Resources: ${teacherContent.resourceSuggestions.join(', ')}`,
+        ].join('\n'),
       );
     }
 
     const student = await this.prisma.user.findUnique({
       where: { id: studentId },
     });
-
     if (student?.guardianId) {
       await this.notificationsService.notifyUser(
         student.guardianId,
@@ -277,26 +407,30 @@ export class CommunicationAgentService {
   }
 
   private async handleTeacherIssue(
-    studentId: string,
-    classId: string,
-    diagnosis: Diagnosis,
-    classContext: ClassContext | null,
+    courseOfferingId: string,
+    classStats: ClassStats,
+    reason: string,
   ): Promise<{
     teacherFeedback: TeacherFeedback;
     managementSummary: ManagementSummary;
   } | null> {
-    if (!classId) return null;
-    const classEntity = await this.prisma.class.findUnique({
-      where: { id: classId },
-      include: { teacher: true },
+    if (classStats.studentCount < 2) return null;
+
+    const offering = await this.prisma.courseOffering.findUnique({
+      where: { id: courseOfferingId },
+      include: { course: true, section: true },
     });
-    if (!classEntity) return null;
+    if (!offering) return null;
+
+    const offeringName = offering.section?.name
+      ? `${offering.course.name} — ${offering.section.name}`
+      : offering.course.name;
 
     const [teacherFeedback, managementSummary] = await Promise.all([
       this.llmService.generateStructured<TeacherFeedback>({
         systemPrompt:
-          'You are a peer coach for teachers. Given a class context showing potential teaching issues, ' +
-          'provide constructive feedback, pattern analysis, and actionable strategies. ' +
+          'You are a peer coach for teachers. Given class statistics showing a class-wide issue, ' +
+          'provide constructive feedback, pattern analysis, and actionable strategies.\n' +
           'Return valid JSON with EXACTLY these fields:\n' +
           '{\n' +
           '  "feedback": "string with constructive feedback",\n' +
@@ -305,17 +439,16 @@ export class CommunicationAgentService {
           '}\n' +
           'Do not omit any fields.',
         userPrompt: JSON.stringify({
-          className: classContext?.className,
-          averageScore: classContext?.averageScore,
-          belowAverageCount: classContext?.belowAverageCount,
-          totalStudents: classContext?.totalStudents,
+          className: offeringName,
+          classStats,
+          reason,
         }),
         schema: TeacherFeedbackSchema,
       }),
       this.llmService.generateStructured<ManagementSummary>({
         systemPrompt:
-          'You are a school management advisor. Given a class-level issue, provide a concise summary, ' +
-          'class trend, and recommendation for administration. ' +
+          'You are a school management advisor. Given class statistics, provide a concise summary, ' +
+          'class trend, and recommendation for administration.\n' +
           'Return valid JSON with EXACTLY these fields:\n' +
           '{\n' +
           '  "summary": "string with concise summary",\n' +
@@ -324,31 +457,29 @@ export class CommunicationAgentService {
           '}\n' +
           'Do not omit any fields.',
         userPrompt: JSON.stringify({
-          className: classContext?.className,
-          averageScore: classContext?.averageScore,
-          belowAverageCount: classContext?.belowAverageCount,
-          totalStudents: classContext?.totalStudents,
+          className: offeringName,
+          classStats,
+          reason,
         }),
         schema: ManagementSummarySchema,
       }),
     ]);
 
     await this.notificationsService.notifyUser(
-      classEntity.teacherId,
+      offering.teacherId,
       'AGENT_ALERT',
-      `Class performance insight: ${classEntity.name}`,
+      `Class performance insight: ${offeringName}`,
       teacherFeedback.feedback,
     );
 
     const admins = await this.prisma.user.findMany({
       where: { role: 'ADMIN' },
     });
-
     for (const admin of admins) {
       await this.notificationsService.notifyUser(
         admin.id,
         'AGENT_ALERT',
-        `Management summary: ${classEntity.name}`,
+        `Management summary: ${offeringName}`,
         managementSummary.summary,
       );
     }
