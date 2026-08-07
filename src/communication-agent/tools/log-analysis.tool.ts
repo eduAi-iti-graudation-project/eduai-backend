@@ -3,7 +3,7 @@ import { z } from 'zod';
 const InputSchema = z.object({
   submissionId: z.string(),
   studentId: z.string(),
-  classId: z.string().optional(),
+  courseOfferingId: z.string().optional(),
   diagnosis: z.object({
     hasIssue: z.boolean(),
     issueType: z.string().nullable(),

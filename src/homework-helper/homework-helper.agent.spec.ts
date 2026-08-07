@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { HomeworkHelperAgent } from './homework-helper.agent';
 import { LlmService } from '../common/llm/llm.service';
+import { ValidationError } from '../common/validation/retry-once';
 import { MaterialsService } from '../materials/materials.service';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -59,7 +60,7 @@ describe('HomeworkHelperAgent', () => {
     });
 
     const result = await agent.help({
-      classId: '00000000-0000-0000-0000-000000000001',
+      courseOfferingId: '00000000-0000-0000-0000-000000000001',
       studentId: '00000000-0000-0000-0000-000000000002',
       question: 'Explain the solar system',
     });
@@ -105,7 +106,7 @@ describe('HomeworkHelperAgent', () => {
     });
 
     const result = await agent.help({
-      classId: '00000000-0000-0000-0000-000000000001',
+      courseOfferingId: '00000000-0000-0000-0000-000000000001',
       studentId: '00000000-0000-0000-0000-000000000002',
       question: 'How does the water cycle work?',
     });
@@ -149,7 +150,7 @@ describe('HomeworkHelperAgent', () => {
     });
 
     const result = await agent.help({
-      classId: '00000000-0000-0000-0000-000000000001',
+      courseOfferingId: '00000000-0000-0000-0000-000000000001',
       studentId: '00000000-0000-0000-0000-000000000002',
       question: "I don't get question 3",
       assignmentId: '33333333-3333-3333-3333-333333333333',
@@ -159,9 +160,9 @@ describe('HomeworkHelperAgent', () => {
     expect(result.interactionId).toBe('44444444-4444-4444-4444-444444444444');
 
     const findFirstCalls = prisma.assignment.findFirst.mock.calls as Array<
-      Array<{ where: { classId?: string; id?: string } }>
+      Array<{ where: { courseOfferingId?: string; id?: string } }>
     >;
-    expect(findFirstCalls[0][0].where.classId).toBe(
+    expect(findFirstCalls[0][0].where.courseOfferingId).toBe(
       '00000000-0000-0000-0000-000000000001',
     );
     expect(findFirstCalls[0][0].where.id).toBe(
@@ -188,7 +189,7 @@ describe('HomeworkHelperAgent', () => {
     });
 
     const result = await agent.help({
-      classId: '00000000-0000-0000-0000-000000000001',
+      courseOfferingId: '00000000-0000-0000-0000-000000000001',
       studentId: '00000000-0000-0000-0000-000000000002',
       question: 'Help with math assignment 1',
       assignmentId: '99999999-9999-9999-9999-999999999999',
@@ -206,5 +207,71 @@ describe('HomeworkHelperAgent', () => {
     >;
     expect(logCalls[0][0].data.action).toBe('EXPLANATION');
     expect(logCalls[0][0].data.sources).toEqual([]);
+  });
+
+  it('should respond gracefully and log a REDIRECT_TEACHER interaction when the LLM call fails', async () => {
+    llm.generateStructured.mockRejectedValue(
+      new ValidationError(
+        'Validation failed after 3 attempts: Error: Empty LLM response',
+        {},
+        3,
+      ),
+    );
+    prisma.homeworkHelpInteraction.create.mockResolvedValue({
+      id: '66666666-6666-6666-6666-666666666666',
+    });
+
+    const result = await agent.help({
+      courseOfferingId: '00000000-0000-0000-0000-000000000001',
+      studentId: '00000000-0000-0000-0000-000000000002',
+      question: 'can you help me with the assignment',
+    });
+
+    expect(result.action).toBe('REDIRECT_TEACHER');
+    expect(result.answer).toContain('ask your teacher');
+    expect(result.sources).toEqual([]);
+    expect(result.interactionId).toBe('66666666-6666-6666-6666-666666666666');
+
+    const logCalls = prisma.homeworkHelpInteraction.create.mock.calls as Array<
+      Array<{ data: { action?: string; answer?: string } }>
+    >;
+    expect(logCalls[0][0].data.action).toBe('REDIRECT_TEACHER');
+    expect(logCalls[0][0].data.answer).toContain('ask your teacher');
+    expect(llm.generateStructured).toHaveBeenCalledTimes(1);
+  });
+
+  it('should respond gracefully and log the interaction when MAX_ITERATIONS is exhausted', async () => {
+    llm.generateStructured.mockResolvedValue({
+      action: 'search_curriculum',
+      query: 'photosynthesis',
+      topK: 5,
+    });
+    materials.searchChunks.mockResolvedValue([
+      {
+        id: 'c1',
+        content: 'Photosynthesis converts light into chemical energy.',
+        distance: 0.1,
+        materialId: 'm1',
+        materialTitle: 'Science Chapter 3',
+      },
+    ]);
+    prisma.homeworkHelpInteraction.create.mockResolvedValue({
+      id: '77777777-7777-7777-7777-777777777777',
+    });
+
+    const result = await agent.help({
+      courseOfferingId: '00000000-0000-0000-0000-000000000001',
+      studentId: '00000000-0000-0000-0000-000000000002',
+      question: 'How does photosynthesis work?',
+    });
+
+    expect(result.action).toBe('REDIRECT_TEACHER');
+    expect(result.interactionId).toBe('77777777-7777-7777-7777-777777777777');
+    expect(llm.generateStructured).toHaveBeenCalledTimes(5);
+
+    const logCalls = prisma.homeworkHelpInteraction.create.mock.calls as Array<
+      Array<{ data: { action?: string } }>
+    >;
+    expect(logCalls[0][0].data.action).toBe('REDIRECT_TEACHER');
   });
 });

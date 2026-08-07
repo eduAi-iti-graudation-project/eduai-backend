@@ -2,7 +2,7 @@ import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
 
 export const HomeworkHelpRequestSchema = z.object({
-  classId: z.string().uuid(),
+  courseOfferingId: z.string().uuid(),
   question: z.string().min(1),
   assignmentId: z.string().uuid().optional(),
 });
@@ -14,6 +14,7 @@ export const HomeworkHelpResponseSchema = z.object({
   sources: z.array(z.string()),
   interactionId: z.string().uuid(),
   teacherNotified: z.boolean(),
+  threadId: z.string().uuid().optional(),
 });
 
 export const HomeworkToolSchema = z.discriminatedUnion('action', [

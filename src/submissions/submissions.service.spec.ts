@@ -3,7 +3,6 @@ import { SubmissionsService } from './submissions.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { GradingService } from '../grading/grading.service';
 import { NotificationsService } from '../notifications/notifications.service';
-import { NotFoundException, BadRequestException } from '@nestjs/common';
 import pdfParse from 'pdf-parse';
 
 jest.mock('pdf-parse');
@@ -128,11 +127,38 @@ describe('SubmissionsService', () => {
       expect(mockGradingService.gradeSubmission).toHaveBeenCalled();
       expect(result).not.toHaveProperty('scores');
     });
+
+    it('should reject a duplicate submission for the same assignment', async () => {
+      const dto = {
+        assignmentId: 'assignment-id',
+        content: 'A second attempt.',
+      };
+
+      mockPrisma.assignment.findFirst.mockResolvedValue({
+        id: dto.assignmentId,
+      });
+      mockPrisma.submission.findFirst.mockResolvedValue({
+        id: 'existing-submission',
+        assignmentId: dto.assignmentId,
+        studentId,
+        status: 'SUBMITTED',
+      });
+
+      await expect(
+        service.create(dto, studentId, organizationId),
+      ).rejects.toMatchObject({ code: 'SUBMISSION_ALREADY_EXISTS' });
+
+      expect(mockPrisma.submission.findFirst).toHaveBeenCalledWith({
+        where: { assignmentId: dto.assignmentId, studentId },
+      });
+      expect(mockPrisma.submission.create).not.toHaveBeenCalled();
+    });
   });
 
   describe('createFromPdf', () => {
     beforeEach(() => {
       mockPdfParse.mockReset();
+      mockPrisma.submission.findFirst.mockReset();
     });
 
     it('should parse PDF and create submission with extracted text', async () => {
@@ -176,7 +202,7 @@ describe('SubmissionsService', () => {
           studentId,
           organizationId,
         ),
-      ).rejects.toThrow(BadRequestException);
+      ).rejects.toMatchObject({ code: 'PDF_NO_TEXT' });
     });
 
     it('should throw BadRequestException when pdf-parse fails', async () => {
@@ -190,7 +216,7 @@ describe('SubmissionsService', () => {
           studentId,
           organizationId,
         ),
-      ).rejects.toThrow(BadRequestException);
+      ).rejects.toMatchObject({ code: 'PDF_NO_TEXT' });
     });
   });
 
@@ -209,7 +235,7 @@ describe('SubmissionsService', () => {
       );
       expect(result).toEqual(mockSubmissions);
       expect(mockPrisma.submission.findMany).toHaveBeenCalledWith({
-        where: { assignment: { class: { organizationId } } },
+        where: { assignment: { offering: { organizationId } } },
         include: { student: true, scores: { include: { criteria: true } } },
       });
     });
@@ -222,9 +248,36 @@ describe('SubmissionsService', () => {
         where: {
           status: 'SUBMITTED',
           assignmentId: 'assignment-id',
-          assignment: { class: { organizationId } },
+          assignment: { offering: { organizationId } },
         },
         include: { student: true, scores: { include: { criteria: true } } },
+      });
+    });
+  });
+
+  describe('findMine', () => {
+    it("returns the student's submissions, optionally filtered by assignment", async () => {
+      mockPrisma.submission.findMany.mockResolvedValue([
+        { id: 's1', assignmentId: 'a1', status: 'SUBMITTED' },
+      ]);
+
+      const result = await service.findMine('student-1');
+
+      expect(result).toEqual([
+        { id: 's1', assignmentId: 'a1', status: 'SUBMITTED' },
+      ]);
+      expect(mockPrisma.submission.findMany).toHaveBeenCalledWith({
+        where: { studentId: 'student-1' },
+        select: { id: true, assignmentId: true, status: true },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      await service.findMine('student-1', 'a1');
+
+      expect(mockPrisma.submission.findMany).toHaveBeenLastCalledWith({
+        where: { studentId: 'student-1', assignmentId: 'a1' },
+        select: { id: true, assignmentId: true, status: true },
+        orderBy: { createdAt: 'desc' },
       });
     });
   });
@@ -246,9 +299,9 @@ describe('SubmissionsService', () => {
 
     it('should throw when submission not found', async () => {
       mockPrisma.submission.findFirst.mockResolvedValue(null);
-      await expect(service.findOne('bad-id', organizationId)).rejects.toThrow(
-        NotFoundException,
-      );
+      await expect(
+        service.findOne('bad-id', organizationId),
+      ).rejects.toMatchObject({ code: 'SUBMISSION_NOT_FOUND' });
     });
 
     it('should throw when the submission belongs to another organization', async () => {
@@ -256,11 +309,11 @@ describe('SubmissionsService', () => {
 
       await expect(
         service.findOne('org-b-submission', organizationId),
-      ).rejects.toThrow(NotFoundException);
+      ).rejects.toMatchObject({ code: 'SUBMISSION_NOT_FOUND' });
       expect(mockPrisma.submission.findFirst).toHaveBeenCalledWith({
         where: {
           id: 'org-b-submission',
-          assignment: { class: { organizationId } },
+          assignment: { offering: { organizationId } },
         },
         include: expect.any(Object) as object,
       });

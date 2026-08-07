@@ -1,9 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { NotFoundException, ForbiddenException } from '@nestjs/common';
 import { HomeworkHelperService } from './homework-helper.service';
 import { HomeworkHelperAgent } from './homework-helper.agent';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { ChatService } from '../chat/chat.service';
 
 describe('HomeworkHelperService', () => {
   let service: HomeworkHelperService;
@@ -22,12 +22,16 @@ describe('HomeworkHelperService', () => {
     quizAttempt: {
       findFirst: jest.fn(),
     },
-    class: { findUnique: jest.fn() },
+    courseOffering: { findUnique: jest.fn() },
     user: { findUnique: jest.fn() },
   };
 
   const mockNotifications = {
     notifyUser: jest.fn(),
+  };
+
+  const mockChatService = {
+    createThreadOrGet: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -37,6 +41,7 @@ describe('HomeworkHelperService', () => {
         { provide: HomeworkHelperAgent, useValue: mockAgent },
         { provide: PrismaService, useValue: mockPrisma },
         { provide: NotificationsService, useValue: mockNotifications },
+        { provide: ChatService, useValue: mockChatService },
       ],
     }).compile();
 
@@ -57,10 +62,10 @@ describe('HomeworkHelperService', () => {
 
       await expect(
         service.help('student-1', {
-          classId: 'class-1',
+          courseOfferingId: 'offering-1',
           question: 'Help me with question 3',
         }),
-      ).rejects.toThrow(ForbiddenException);
+      ).rejects.toMatchObject({ code: 'HOMEWORK_FORBIDDEN' });
 
       expect(mockPrisma.quizAttempt.findFirst).toHaveBeenCalledWith({
         where: { studentId: 'student-1', status: 'IN_PROGRESS' },
@@ -78,12 +83,12 @@ describe('HomeworkHelperService', () => {
       });
 
       const result = await service.help('student-1', {
-        classId: 'class-1',
+        courseOfferingId: 'offering-1',
         question: 'I dont get question 3 on photosynthesis',
       });
 
       expect(mockAgent.help).toHaveBeenCalledWith({
-        classId: 'class-1',
+        courseOfferingId: 'offering-1',
         studentId: 'student-1',
         question: 'I dont get question 3 on photosynthesis',
       });
@@ -107,13 +112,13 @@ describe('HomeworkHelperService', () => {
       });
 
       const result = await service.help('student-1', {
-        classId: 'class-1',
+        courseOfferingId: 'offering-1',
         question: 'I dont get question 1 on the math assignment',
         assignmentId: 'assignment-1',
       });
 
       expect(mockAgent.help).toHaveBeenCalledWith({
-        classId: 'class-1',
+        courseOfferingId: 'offering-1',
         studentId: 'student-1',
         question: 'I dont get question 1 on the math assignment',
         assignmentId: 'assignment-1',
@@ -131,7 +136,7 @@ describe('HomeworkHelperService', () => {
       });
 
       const result = await service.help('student-3', {
-        classId: 'class-1',
+        courseOfferingId: 'offering-1',
         question: 'Explain the Calvin cycle',
       });
 
@@ -140,7 +145,7 @@ describe('HomeworkHelperService', () => {
       expect(mockNotifications.notifyUser).not.toHaveBeenCalled();
     });
 
-    it('should notify teacher on REDIRECT_TEACHER action', async () => {
+    it('should notify teacher and open a chat thread on REDIRECT_TEACHER action', async () => {
       mockAgent.help.mockResolvedValue({
         answer:
           'This sounds like something your teacher should help with. Please ask Mr. Smith during office hours.',
@@ -148,31 +153,44 @@ describe('HomeworkHelperService', () => {
         sources: [],
         interactionId: 'log-2',
       });
-      mockPrisma.class.findUnique.mockResolvedValue({
-        id: 'class-1',
+      mockPrisma.courseOffering.findUnique.mockResolvedValue({
+        id: 'offering-1',
         teacherId: 'teacher-1',
       });
       mockPrisma.user.findUnique.mockResolvedValue({
         id: 'student-2',
         name: 'Sam L.',
       });
+      mockChatService.createThreadOrGet.mockResolvedValue({
+        id: 'thread-1',
+        courseOfferingId: 'offering-1',
+        teacherId: 'teacher-1',
+        studentId: 'student-2',
+        createdAt: '',
+        updatedAt: '',
+      });
 
       const result = await service.help('student-2', {
-        classId: 'class-1',
+        courseOfferingId: 'offering-1',
         question: 'Can you grade my essay?',
       });
 
       expect(result.action).toBe('REDIRECT_TEACHER');
       expect(result.sources).toEqual([]);
-      expect(result.reply).toBe(
-        'This sounds like something your teacher should help with. Please ask Mr. Smith during office hours.',
+      expect(result.threadId).toBe('thread-1');
+      expect(result.reply).toContain(
+        "I've opened a chat thread with your teacher",
       );
       expect(result.teacherNotified).toBe(true);
+      expect(mockChatService.createThreadOrGet).toHaveBeenCalledWith(
+        { id: 'student-2', name: 'Sam L.' },
+        'offering-1',
+      );
       expect(mockNotifications.notifyUser).toHaveBeenCalledWith(
         'teacher-1',
         'HOMEWORK_HELP_REDIRECT',
         'Sam L. needs your help',
-        expect.stringContaining('Can you grade my essay?'),
+        expect.stringContaining('thread-1'),
       );
     });
 
@@ -183,22 +201,24 @@ describe('HomeworkHelperService', () => {
         sources: [],
         interactionId: 'log-4',
       });
-      mockPrisma.class.findUnique.mockResolvedValue({
-        id: 'class-1',
+      mockPrisma.courseOffering.findUnique.mockResolvedValue({
+        id: 'offering-1',
         teacherId: 'teacher-1',
       });
       mockPrisma.user.findUnique.mockResolvedValue(null);
 
-      await service.help('student-4', {
-        classId: 'class-1',
+      const result = await service.help('student-4', {
+        courseOfferingId: 'offering-1',
         question: 'Why did I get this grade?',
       });
 
+      expect(result.threadId).toBeUndefined();
+      expect(mockChatService.createThreadOrGet).not.toHaveBeenCalled();
       expect(mockNotifications.notifyUser).toHaveBeenCalledWith(
         'teacher-1',
         'HOMEWORK_HELP_REDIRECT',
         'A student needs your help',
-        expect.any(String),
+        expect.stringContaining('Why did I get this grade?'),
       );
     });
   });
@@ -244,13 +264,13 @@ describe('HomeworkHelperService', () => {
       });
     });
 
-    it('should filter by classId when provided', async () => {
+    it('should filter by courseOfferingId when provided', async () => {
       mockPrisma.homeworkHelpInteraction.findMany.mockResolvedValue([]);
 
-      await service.getHistory('student-1', 'class-9');
+      await service.getHistory('student-1', 'offering-9');
 
       expect(mockPrisma.homeworkHelpInteraction.findMany).toHaveBeenCalledWith({
-        where: { studentId: 'student-1', classId: 'class-9' },
+        where: { studentId: 'student-1', courseOfferingId: 'offering-9' },
         orderBy: { createdAt: 'desc' },
         take: 50,
       });
@@ -272,15 +292,15 @@ describe('HomeworkHelperService', () => {
       });
     });
 
-    it('should throw NotFoundException for missing interaction', async () => {
+    it('should throw for missing interaction', async () => {
       mockPrisma.homeworkHelpInteraction.findUnique.mockResolvedValue(null);
 
       await expect(
         service.submitFeedback('bad-id', 'HELPFUL', 'student-1'),
-      ).rejects.toThrow(NotFoundException);
+      ).rejects.toMatchObject({ code: 'INTERACTION_NOT_FOUND' });
     });
 
-    it('should throw ForbiddenException for another students interaction', async () => {
+    it('should throw for another students interaction', async () => {
       mockPrisma.homeworkHelpInteraction.findUnique.mockResolvedValue({
         id: 'log-1',
         studentId: 'student-2',
@@ -288,7 +308,7 @@ describe('HomeworkHelperService', () => {
 
       await expect(
         service.submitFeedback('log-1', 'HELPFUL', 'student-1'),
-      ).rejects.toThrow(ForbiddenException);
+      ).rejects.toMatchObject({ code: 'HOMEWORK_FORBIDDEN' });
     });
   });
 });

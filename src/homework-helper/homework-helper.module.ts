@@ -4,9 +4,10 @@ import { HomeworkHelperService } from './homework-helper.service';
 import { HomeworkHelperAgent } from './homework-helper.agent';
 import { MaterialsModule } from '../materials/materials.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { ChatModule } from '../chat/chat.module';
 
 @Module({
-  imports: [MaterialsModule, NotificationsModule],
+  imports: [MaterialsModule, NotificationsModule, ChatModule],
   controllers: [HomeworkHelperController],
   providers: [HomeworkHelperService, HomeworkHelperAgent],
 })

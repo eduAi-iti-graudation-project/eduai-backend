@@ -1,6 +1,9 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, HttpStatus } from '@nestjs/common';
+import { ApiError } from '../common/errors/api-error';
+import { ErrorCode } from '../common/errors/codes';
 import { PrismaService } from '../prisma/prisma.service';
 import { LlmService } from '../common/llm/llm.service';
+import { FORMATTING_RULES as MD_FORMATTING_RULES } from '../common/llm/formatting-rules';
 import { ReportGenerateSchema } from './dto';
 
 @Injectable()
@@ -17,21 +20,32 @@ export class ReportsService {
       where: { id: alertId },
       include: { student: true },
     });
-    if (!alert) throw new NotFoundException('Alert not found');
+    if (!alert) {
+      throw new ApiError(
+        ErrorCode.ALERT_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This alert could not be found.',
+      );
+    }
 
     const { parentSection, teacherSection, managementSection } =
       await this.llmService.generateStructured({
         systemPrompt:
           'You are an educational report writer. Given an alert about a student, ' +
-          'generate three distinct sections explaining the situation for different audiences.',
+          'generate three structured report sections for different audiences. ' +
+          'Every free-text field must reference the actual numbers and reason from the alert — never generic filler.' +
+          MD_FORMATTING_RULES,
         userPrompt:
           `Student: ${alert.student.name}\n` +
           `Alert type: ${alert.type}\n` +
           `Reason: ${alert.reason}\n\n` +
-          'Generate three sections:\n' +
-          '1. parentSection: Explanation for parents (empathetic, constructive)\n' +
-          '2. teacherSection: Detailed pedagogical analysis for teachers\n' +
-          '3. managementSection: Administrative summary for school management',
+          'Generate three sections, each with the exact shape below:\n' +
+          '1. parentSection: plain-language explanation for parents.\n' +
+          '   { message: string — 2-3 sentences explaining what the numbers show, empathetic and constructive; homeSupport: string[] — 3-4 concrete actions the family can take }\n' +
+          '2. teacherSection: pedagogical analysis for teachers.\n' +
+          '   { analysis: string — paragraph citing the actual numbers and likely causes; skillGaps: string[] — specific skills falling behind; interventions: string[] — classroom strategies; resourceSuggestions: string[] — materials or resources }\n' +
+          '3. managementSection: administrative summary for school management.\n' +
+          '   { summary: string — overall status; classTrend: string — one line comparing this student to class patterns; recommendation: string — next step for leadership }',
         schema: ReportGenerateSchema,
       });
 
@@ -59,7 +73,13 @@ export class ReportsService {
     const report = await this.prisma.studentReport.findUnique({
       where: { id },
     });
-    if (!report) throw new NotFoundException('Report not found');
+    if (!report) {
+      throw new ApiError(
+        ErrorCode.REPORT_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This report could not be found.',
+      );
+    }
     return report;
   }
 }

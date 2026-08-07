@@ -1,14 +1,11 @@
-import {
-  Injectable,
-  Logger,
-  NotFoundException,
-  BadRequestException,
-} from '@nestjs/common';
+import { Injectable, Logger, HttpStatus } from '@nestjs/common';
 import pdfParse from 'pdf-parse';
 import { PrismaService } from '../prisma/prisma.service';
 import { GradingService } from '../grading/grading.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { chunkText } from './chunker';
+import { ApiError } from '../common/errors/api-error';
+import { ErrorCode } from '../common/errors/codes';
 
 @Injectable()
 export class SubmissionsService {
@@ -26,9 +23,25 @@ export class SubmissionsService {
     organizationId: string,
   ) {
     const assignment = await this.prisma.assignment.findFirst({
-      where: { id: dto.assignmentId, class: { organizationId } },
+      where: { id: dto.assignmentId, offering: { organizationId } },
     });
-    if (!assignment) throw new NotFoundException('Assignment not found');
+    if (!assignment) {
+      throw new ApiError(
+        ErrorCode.ASSIGNMENT_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This assignment could not be found.',
+      );
+    }
+    const existing = await this.prisma.submission.findFirst({
+      where: { assignmentId: dto.assignmentId, studentId },
+    });
+    if (existing) {
+      throw new ApiError(
+        ErrorCode.SUBMISSION_ALREADY_EXISTS,
+        HttpStatus.CONFLICT,
+        'You have already submitted this assignment.',
+      );
+    }
     const submission = await this.prisma.submission.create({
       data: {
         assignmentId: dto.assignmentId,
@@ -70,13 +83,20 @@ export class SubmissionsService {
       const pdfData = await pdfParse(buffer);
       rawText = pdfData.text;
     } catch (err) {
-      throw new BadRequestException(
-        `Failed to parse PDF: ${err instanceof Error ? err.message : String(err)}`,
+      throw new ApiError(
+        ErrorCode.PDF_NO_TEXT,
+        HttpStatus.BAD_REQUEST,
+        'This PDF could not be read. Please try another file.',
+        { cause: err },
       );
     }
 
     if (!rawText || rawText.trim().length === 0) {
-      throw new BadRequestException('PDF contained no extractable text');
+      throw new ApiError(
+        ErrorCode.PDF_NO_TEXT,
+        HttpStatus.BAD_REQUEST,
+        'This PDF contained no extractable text.',
+      );
     }
 
     return this.create(
@@ -92,7 +112,7 @@ export class SubmissionsService {
     organizationId: string,
   ) {
     const where: Record<string, unknown> = {
-      assignment: { class: { organizationId } },
+      assignment: { offering: { organizationId } },
     };
     if (status) where.status = status;
     if (assignmentId) where.assignmentId = assignmentId;
@@ -102,9 +122,24 @@ export class SubmissionsService {
     });
   }
 
+  findMine(studentId: string, assignmentId?: string) {
+    return this.prisma.submission.findMany({
+      where: {
+        studentId,
+        ...(assignmentId ? { assignmentId } : {}),
+      },
+      select: {
+        id: true,
+        assignmentId: true,
+        status: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
   async findOne(id: string, organizationId: string) {
     const submission = await this.prisma.submission.findFirst({
-      where: { id, assignment: { class: { organizationId } } },
+      where: { id, assignment: { offering: { organizationId } } },
       include: {
         student: true,
         assignment: true,
@@ -112,7 +147,13 @@ export class SubmissionsService {
         chunks: true,
       },
     });
-    if (!submission) throw new NotFoundException('Submission not found');
+    if (!submission) {
+      throw new ApiError(
+        ErrorCode.SUBMISSION_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This submission could not be found.',
+      );
+    }
     return submission;
   }
 }

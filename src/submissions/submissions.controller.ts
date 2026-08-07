@@ -7,7 +7,7 @@ import {
   Query,
   UploadedFile,
   UseInterceptors,
-  BadRequestException,
+  HttpStatus,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
@@ -23,6 +23,8 @@ import { SubmissionsService } from './submissions.service';
 import { CreateSubmissionDto, SubmissionDto } from './dto';
 import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
+import { ApiError } from '../common/errors/api-error';
+import { ErrorCode } from '../common/errors/codes';
 
 @ApiTags('submissions')
 @Controller('submissions')
@@ -69,12 +71,18 @@ export class SubmissionsController {
     @CurrentUser('organizationId') organizationId: string,
   ) {
     if (!file) {
-      throw new BadRequestException(
-        'File is required. Upload a PDF using the "file" field.',
+      throw new ApiError(
+        ErrorCode.FILE_NO_TEXT,
+        HttpStatus.BAD_REQUEST,
+        'Please upload a PDF file using the "file" field.',
       );
     }
     if (!assignmentId) {
-      throw new BadRequestException('assignmentId is required');
+      throw new ApiError(
+        ErrorCode.ASSIGNMENT_ID_REQUIRED,
+        HttpStatus.BAD_REQUEST,
+        'Please select an assignment to submit to.',
+      );
     }
     return this.submissionsService.createFromPdf(
       file.buffer,
@@ -102,6 +110,20 @@ export class SubmissionsController {
       assignmentId,
       organizationId!,
     );
+  }
+
+  @Roles('STUDENT')
+  @Get('mine')
+  @ApiOperation({
+    summary: "List the current student's own submissions",
+  })
+  @ApiQuery({ name: 'assignmentId', required: false })
+  @ApiOkResponse({ type: SubmissionDto, isArray: true })
+  findMine(
+    @Query('assignmentId') assignmentId?: string,
+    @CurrentUser('id') studentId?: string,
+  ) {
+    return this.submissionsService.findMine(studentId!, assignmentId);
   }
 
   @Roles('TEACHER', 'STUDENT')

@@ -27,7 +27,11 @@ export class ChatController {
       'Create or get a chat thread (student with their class teacher, or teacher with a class student)',
   })
   createThread(@CurrentUser() user: User, @Body() dto: CreateThreadDto) {
-    return this.chatService.createThreadOrGet(user, dto.classId, dto.studentId);
+    return this.chatService.createThreadOrGet(
+      user,
+      dto.courseOfferingId,
+      dto.studentId,
+    );
   }
 
   @Get('threads/:threadId/messages')

@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { LlmService } from '../common/llm/llm.service';
+import { FORMATTING_RULES } from '../common/llm/formatting-rules';
 import { z } from 'zod';
 
 const EssayGradeSchema = z.object({
@@ -58,7 +59,8 @@ export class QuizzesGradingService {
         '  "pointsAwarded": 0-{maxPoints},\n' +
         '  "feedback": "string with specific, actionable feedback"\n' +
         '}\n' +
-        'Do not omit any fields.',
+        'Do not omit any fields.' +
+        FORMATTING_RULES,
       userPrompt: JSON.stringify({
         question,
         studentAnswer,
