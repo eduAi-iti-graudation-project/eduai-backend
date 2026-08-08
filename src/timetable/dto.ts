@@ -81,6 +81,10 @@ const TimetableSlotWithOfferingSchema = TimetableSlotSchema.extend({
       name: z.string(),
       gradeLevelId: z.string().uuid(),
     }),
+    teacher: z.object({
+      id: z.string().uuid(),
+      name: z.string(),
+    }),
   }),
 });
 
