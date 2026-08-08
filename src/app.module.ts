@@ -37,6 +37,7 @@ import { ChatModule } from './chat/chat.module';
 import { BillingModule } from './billing/billing.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
 import { OrganizationsModule } from './organizations/organizations.module';
+import { TimetableModule } from './timetable/timetable.module';
 
 @Module({
   imports: [
@@ -75,6 +76,7 @@ import { OrganizationsModule } from './organizations/organizations.module';
     BillingModule,
     WebhooksModule,
     OrganizationsModule,
+    TimetableModule,
   ],
   controllers: [AppController],
   providers: [

@@ -3,6 +3,17 @@ import { ApiError } from '../common/errors/api-error';
 import { ErrorCode } from '../common/errors/codes';
 import { PrismaService } from '../prisma/prisma.service';
 
+export const COURSE_COLOR_TAGS = [
+  '#3B82F6', // blue
+  '#0D9488', // teal
+  '#EC4899', // pink
+  '#EA580C', // orange
+  '#0891B2', // cyan
+  '#C026D3', // fuchsia
+  '#65A30D', // lime
+  '#92400E', // brown
+] as const;
+
 @Injectable()
 export class CoursesService {
   constructor(private readonly prisma: PrismaService) {}
@@ -42,9 +53,26 @@ export class CoursesService {
         gradeLevelId: dto.gradeLevelId,
         name: dto.name,
         description: dto.description,
+        colorTag: await this.nextColorTag(organizationId),
         organizationId,
       },
     });
+  }
+
+  /**
+   * Auto-assign the next unused palette color in sequence, cycling through
+   * the palette once every color is taken. Stable per organization.
+   */
+  private async nextColorTag(organizationId: string): Promise<string> {
+    const courses = await this.prisma.course.findMany({
+      where: { organizationId },
+      select: { colorTag: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    const used = new Set(courses.map((c) => c.colorTag));
+    const unused = COURSE_COLOR_TAGS.find((c) => !used.has(c));
+    if (unused) return unused;
+    return COURSE_COLOR_TAGS[courses.length % COURSE_COLOR_TAGS.length];
   }
 
   findAll(organizationId: string) {

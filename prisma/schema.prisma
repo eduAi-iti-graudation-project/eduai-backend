@@ -232,6 +232,7 @@ model Course {
   gradeLevelId   String   @db.Uuid
   name           String
   description    String?
+  colorTag       String
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -265,11 +266,40 @@ model CourseOffering {
   teacherLogs   ClassTeacherLog[]
   analyses      StudentAnalysis[]
   homeworkHelp  HomeworkHelpInteraction[]
+  timetableSlots TimetableSlot[]
 
   @@unique([courseId, sectionId])
   @@index([organizationId])
   @@index([teacherId])
   @@map("course_offerings")
+}
+
+model TimetableSlot {
+  id               String    @id @default(uuid()) @db.Uuid
+  courseOfferingId String    @db.Uuid
+  organizationId   String    @db.Uuid
+  dayOfWeek        DayOfWeek
+  startTime        DateTime  @db.Time
+  endTime          DateTime  @db.Time
+  room             String?
+  createdAt        DateTime  @default(now())
+
+  courseOffering CourseOffering @relation(fields: [courseOfferingId], references: [id], onDelete: Cascade)
+
+  @@index([courseOfferingId])
+  @@index([organizationId, dayOfWeek])
+  @@index([courseOfferingId, dayOfWeek])
+  @@map("timetable_slots")
+}
+
+enum DayOfWeek {
+  MONDAY
+  TUESDAY
+  WEDNESDAY
+  THURSDAY
+  FRIDAY
+  SATURDAY
+  SUNDAY
 }
 
 model User {
