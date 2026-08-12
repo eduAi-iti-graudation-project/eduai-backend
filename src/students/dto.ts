@@ -22,6 +22,20 @@ export const UpdateStudentSchema = z.object({
   guardianId: z.string().uuid().optional(),
 });
 
+export const LinkGuardianSchema = z
+  .object({
+    guardianId: z.string().uuid().optional(),
+    email: z.string().email().optional(),
+    name: z.string().min(1).optional(),
+  })
+  .refine(
+    (d) => Boolean(d.guardianId) || (Boolean(d.email) && Boolean(d.name)),
+    {
+      message:
+        'Provide either a guardianId (existing account) or an email + name to create a guardian.',
+    },
+  );
+
 export const CreateDocumentSchema = z.object({
   type: z.enum([
     'CERTIFICATE',
@@ -48,6 +62,8 @@ export const CreateFeeSchema = z.object({
   paidAt: z.string().datetime().optional().nullable(),
   dueDate: z.string().datetime().optional().nullable(),
 });
+
+export class LinkGuardianDto extends createZodDto(LinkGuardianSchema) {}
 
 export class GradeDto extends createZodDto(GradeSchema) {}
 export class UpdateStudentDto extends createZodDto(UpdateStudentSchema) {}

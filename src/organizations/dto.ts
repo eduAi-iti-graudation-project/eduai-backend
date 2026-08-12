@@ -16,3 +16,14 @@ export const ApproveRequestSchema = z.object({
 });
 
 export class ApproveRequestDto extends createZodDto(ApproveRequestSchema) {}
+
+export const EmailDomainSchema = z.object({
+  emailDomain: z
+    .string()
+    .regex(
+      /^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/i,
+      'The domain must look like "school.example.org".',
+    ),
+});
+
+export class EmailDomainDto extends createZodDto(EmailDomainSchema) {}

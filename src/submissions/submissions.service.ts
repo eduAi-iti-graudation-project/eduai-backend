@@ -118,7 +118,11 @@ export class SubmissionsService {
     if (assignmentId) where.assignmentId = assignmentId;
     return this.prisma.submission.findMany({
       where,
-      include: { student: true, scores: { include: { criteria: true } } },
+      include: {
+        student: true,
+        assignment: true,
+        scores: { include: { criteria: true } },
+      },
     });
   }
 

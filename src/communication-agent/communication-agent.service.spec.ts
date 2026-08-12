@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { LlmService } from '../common/llm/llm.service';
 import { ReportsService } from '../reports/reports.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { StudyLabService } from '../study-lab/study-lab.service';
 
 describe('CommunicationAgentService', () => {
   let service: CommunicationAgentService;
@@ -35,6 +36,7 @@ describe('CommunicationAgentService', () => {
     },
     studentAnalysis: {
       create: jest.fn(),
+      findFirst: jest.fn().mockResolvedValue(null),
     },
   };
 
@@ -48,6 +50,10 @@ describe('CommunicationAgentService', () => {
 
   const mockNotifications = {
     notifyUser: jest.fn(),
+  };
+
+  const mockStudyLab = {
+    recommend: jest.fn(),
   };
 
   // [submissionId, pct, dayOffset]
@@ -170,6 +176,7 @@ describe('CommunicationAgentService', () => {
         { provide: LlmService, useValue: mockLlm },
         { provide: ReportsService, useValue: mockReports },
         { provide: NotificationsService, useValue: mockNotifications },
+        { provide: StudyLabService, useValue: mockStudyLab },
       ],
     }).compile();
 
@@ -427,5 +434,39 @@ describe('CommunicationAgentService', () => {
       data: { type: string };
     }[][];
     expect(alertCalls[0][0].data.type).toBe('CONSISTENT_STRUGGLE');
+  });
+
+  it('falls back to deterministic content and still alerts, notifies, and recommends practice when the LLM fails', async () => {
+    mockPrisma.organization.findUnique.mockResolvedValue({
+      subscriptionStatus: 'TRIALING',
+      subscriptionTier: 'TRIAL',
+    });
+    mockLlm.generateStructured.mockRejectedValue(new Error('upstream 503'));
+    mockStudyLab.recommend.mockResolvedValue('gen-1');
+
+    await service.analyze('sub-1');
+
+    expect(mockPrisma.alert.create).toHaveBeenCalled();
+    expect(mockNotifications.notifyUser).toHaveBeenCalledWith(
+      'guardian-1',
+      'AGENT_ALERT',
+      expect.stringContaining('Sam Learner'),
+      expect.any(String),
+    );
+    expect(mockNotifications.notifyUser).toHaveBeenCalledWith(
+      'student-1',
+      'AGENT_ALERT',
+      expect.stringContaining('recommended'),
+      expect.any(String),
+    );
+    expect(mockStudyLab.recommend).toHaveBeenCalledWith(
+      'student-1',
+      expect.any(String),
+      expect.any(String),
+      'sa-1',
+    );
+    const analysisCalls = mockPrisma.studentAnalysis.create.mock
+      .calls as unknown as { data: { guardianContent: object } }[][];
+    expect(analysisCalls[0][0].data.guardianContent).toBeDefined();
   });
 });

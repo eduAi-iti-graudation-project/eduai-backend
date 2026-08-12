@@ -89,6 +89,25 @@ export class SupabaseService {
     return this.client;
   }
 
+  /**
+   * Returns a fresh service-role client for storage operations. The shared
+   * `getClient()` instance accumulates an authenticated user session after
+   * any sign-in, which downgrades subsequent storage calls to the user role
+   * and triggers row-level-security denials.
+   */
+  getStorageClient(): SupabaseClient<Database> {
+    return createClient<Database>(
+      process.env.SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_KEY!,
+      {
+        auth: {
+          persistSession: false,
+          flowType: 'pkce',
+        },
+      },
+    );
+  }
+
   async signInWithOAuth(
     provider: OAuthProvider,
     redirectTo: string,
@@ -122,6 +141,45 @@ export class SupabaseService {
         HttpStatus.UNAUTHORIZED,
         'We could not sign you out. Please try again.',
         { cause: error },
+      );
+    }
+  }
+
+  async resetPasswordForEmail(
+    email: string,
+    redirectTo: string,
+  ): Promise<void> {
+    const { error } = await this.client.auth.resetPasswordForEmail(email, {
+      redirectTo,
+    });
+    if (error) {
+      throw new ApiError(
+        ErrorCode.AUTH_RESET_FAILED,
+        HttpStatus.BAD_REQUEST,
+        'We could not send a reset link. Please try again.',
+        { hint: ErrorHint.RETRY, cause: error },
+      );
+    }
+  }
+
+  async getUserByToken(token: string): Promise<{ id: string; email: string }> {
+    const { data, error } = await this.client.auth.getUser(token);
+    if (error || !data.user) {
+      throw this.invalidToken();
+    }
+    return { id: data.user.id, email: data.user.email ?? '' };
+  }
+
+  async updatePassword(authId: string, password: string): Promise<void> {
+    const { error } = await this.client.auth.admin.updateUserById(authId, {
+      password,
+    });
+    if (error) {
+      throw new ApiError(
+        ErrorCode.AUTH_RESET_FAILED,
+        HttpStatus.BAD_REQUEST,
+        'We could not update your password. Please try again.',
+        { hint: ErrorHint.RETRY, cause: error },
       );
     }
   }

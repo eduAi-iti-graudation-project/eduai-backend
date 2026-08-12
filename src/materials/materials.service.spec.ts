@@ -4,7 +4,6 @@ import { PrismaService } from '../prisma/prisma.service';
 import { LlmService } from '../common/llm/llm.service';
 import { SupabaseService } from '../auth/supabase.service';
 import {
-  BadRequestException,
   BadGatewayException,
   ForbiddenException,
   NotFoundException,
@@ -19,6 +18,7 @@ describe('MaterialsService', () => {
   let service: MaterialsService;
 
   const organizationId = 'org-1';
+  const courseOfferingId = '00000000-0000-0000-0000-000000000001';
 
   const mockPrisma = {
     courseOffering: {
@@ -28,7 +28,17 @@ describe('MaterialsService', () => {
       create: jest.fn(),
       findMany: jest.fn(),
       findFirst: jest.fn(),
+      findUnique: jest.fn(),
+      update: jest.fn(),
       delete: jest.fn(),
+    },
+    materialChapter: {
+      create: jest.fn(),
+      findMany: jest.fn(),
+      findFirst: jest.fn(),
+      update: jest.fn(),
+      delete: jest.fn(),
+      aggregate: jest.fn(),
     },
     $executeRawUnsafe: jest.fn(),
     $queryRaw: jest.fn(),
@@ -46,6 +56,11 @@ describe('MaterialsService', () => {
 
   const mockSupabase = {
     getClient: jest.fn(() => ({
+      storage: {
+        from: jest.fn(() => mockStorageBucket),
+      },
+    })),
+    getStorageClient: jest.fn(() => ({
       storage: {
         from: jest.fn(() => mockStorageBucket),
       },
@@ -72,7 +87,6 @@ describe('MaterialsService', () => {
 
   describe('upload', () => {
     const title = 'Test Material';
-    const courseOfferingId = '00000000-0000-0000-0000-000000000001';
 
     it('should chunk and embed a text file', async () => {
       const text = 'Hello world. '.repeat(500);
@@ -106,7 +120,9 @@ describe('MaterialsService', () => {
       expect(mockPrisma.material.create).toHaveBeenCalledWith({
         data: {
           title,
-          classId,
+          courseOfferingId,
+          assignmentId: null,
+          chapterId: null,
           fileUrl: filename,
           chunks: {
             create: expect.any(Array) as Array<{ content: string }>,
@@ -115,6 +131,28 @@ describe('MaterialsService', () => {
         include: { chunks: true },
       });
       expect(mockStorageBucket.upload).not.toHaveBeenCalled();
+    });
+
+    it('should scope the offering lookup to the organization', async () => {
+      mockPrisma.courseOffering.findFirst.mockResolvedValue(null);
+      mockPrisma.material.create.mockResolvedValue({
+        id: 'mat-1',
+        chunks: [],
+      });
+
+      await expect(
+        service.upload(
+          title,
+          courseOfferingId,
+          Buffer.from('x'),
+          'x.txt',
+          organizationId,
+        ),
+      ).rejects.toMatchObject({ code: 'OFFERING_NOT_FOUND' });
+
+      expect(mockPrisma.courseOffering.findFirst).toHaveBeenCalledWith({
+        where: { id: courseOfferingId, organizationId },
+      });
     });
 
     it('should throw for empty text', async () => {
@@ -139,10 +177,13 @@ describe('MaterialsService', () => {
       const filename = 'lesson.pdf';
       const buffer = Buffer.from('%PDF-1.4 fake');
 
+      mockPrisma.courseOffering.findFirst.mockResolvedValue({
+        id: courseOfferingId,
+      });
       mockPrisma.material.create.mockResolvedValue({
         id: 'mat-1',
         title,
-        classId,
+        courseOfferingId,
         fileUrl: null,
         chunks: [{ id: 'chunk-1', content: 'text' }],
       });
@@ -150,15 +191,21 @@ describe('MaterialsService', () => {
       mockPrisma.material.update.mockResolvedValue({
         id: 'mat-1',
         title,
-        classId,
-        fileUrl: `materials/${classId}/mat-1.pdf`,
+        courseOfferingId,
+        fileUrl: `materials/${courseOfferingId}/mat-1.pdf`,
       });
       mockLlm.embed.mockResolvedValue([0.1, 0.2, 0.3]);
       mockPrisma.$executeRawUnsafe.mockResolvedValue(undefined);
 
-      const result = await service.upload(title, classId, buffer, filename);
+      const result = await service.upload(
+        title,
+        courseOfferingId,
+        buffer,
+        filename,
+        organizationId,
+      );
 
-      const expectedPath = `materials/${classId}/mat-1.pdf`;
+      const expectedPath = `materials/${courseOfferingId}/mat-1.pdf`;
       expect(mockStorageBucket.upload).toHaveBeenCalledWith(
         expectedPath,
         buffer,
@@ -171,8 +218,10 @@ describe('MaterialsService', () => {
       expect(mockPrisma.material.create).toHaveBeenCalledWith({
         data: {
           title,
-          classId,
-          fileUrl: null,
+          courseOfferingId,
+          assignmentId: null,
+          chapterId: null,
+          fileUrl: filename,
           chunks: {
             create: expect.any(Array) as Array<{ content: string }>,
           },
@@ -186,10 +235,13 @@ describe('MaterialsService', () => {
       const filename = 'lesson.pdf';
       const buffer = Buffer.from('%PDF-1.4 fake');
 
+      mockPrisma.courseOffering.findFirst.mockResolvedValue({
+        id: courseOfferingId,
+      });
       mockPrisma.material.create.mockResolvedValue({
         id: 'mat-1',
         title,
-        classId,
+        courseOfferingId,
         fileUrl: null,
         chunks: [{ id: 'chunk-1', content: 'text' }],
       });
@@ -197,7 +249,13 @@ describe('MaterialsService', () => {
       mockPrisma.material.delete.mockResolvedValue({ id: 'mat-1' });
 
       await expect(
-        service.upload(title, classId, buffer, filename),
+        service.upload(
+          title,
+          courseOfferingId,
+          buffer,
+          filename,
+          organizationId,
+        ),
       ).rejects.toThrow(BadGatewayException);
 
       expect(mockPrisma.material.delete).toHaveBeenCalledWith({
@@ -210,10 +268,13 @@ describe('MaterialsService', () => {
       const filename = 'lesson.pdf';
       const buffer = Buffer.from('%PDF-1.4 fake');
 
+      mockPrisma.courseOffering.findFirst.mockResolvedValue({
+        id: courseOfferingId,
+      });
       mockPrisma.material.create.mockResolvedValue({
         id: 'mat-1',
         title,
-        classId,
+        courseOfferingId,
         fileUrl: null,
         chunks: [{ id: 'chunk-1', content: 'text' }],
       });
@@ -223,7 +284,13 @@ describe('MaterialsService', () => {
       mockPrisma.material.delete.mockResolvedValue({ id: 'mat-1' });
 
       await expect(
-        service.upload(title, classId, buffer, filename),
+        service.upload(
+          title,
+          courseOfferingId,
+          buffer,
+          filename,
+          organizationId,
+        ),
       ).rejects.toThrow(BadGatewayException);
 
       expect(mockPrisma.material.delete).toHaveBeenCalledWith({
@@ -232,8 +299,8 @@ describe('MaterialsService', () => {
     });
   });
 
-  describe('findByClass', () => {
-    it('should return materials for a class', async () => {
+  describe('findByOffering', () => {
+    it('should return materials for a course offering', async () => {
       mockPrisma.material.findMany.mockResolvedValue([
         {
           id: 'mat-1',
@@ -243,11 +310,26 @@ describe('MaterialsService', () => {
         },
       ]);
 
-      const result = await service.findByClass('of-1', organizationId);
+      const result = await service.findByOffering('of-1', organizationId);
 
       expect(result).toHaveLength(1);
       expect(mockPrisma.material.findMany).toHaveBeenCalledWith({
         where: { courseOfferingId: 'of-1', offering: { organizationId } },
+        include: { _count: { select: { chunks: true } } },
+        orderBy: { createdAt: 'desc' },
+      });
+    });
+
+    it('should not leak materials from another organization', async () => {
+      mockPrisma.material.findMany.mockResolvedValue([]);
+
+      await service.findByOffering('of-other-org', organizationId);
+
+      expect(mockPrisma.material.findMany).toHaveBeenCalledWith({
+        where: {
+          courseOfferingId: 'of-other-org',
+          offering: { organizationId },
+        },
         include: { _count: { select: { chunks: true } } },
         orderBy: { createdAt: 'desc' },
       });
@@ -273,6 +355,18 @@ describe('MaterialsService', () => {
       await expect(
         service.findOne('nonexistent', organizationId),
       ).rejects.toMatchObject({ code: 'MATERIAL_NOT_FOUND' });
+    });
+
+    it('should throw when the material belongs to another organization', async () => {
+      mockPrisma.material.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.findOne('org-b-material', organizationId),
+      ).rejects.toMatchObject({ code: 'MATERIAL_NOT_FOUND' });
+      expect(mockPrisma.material.findFirst).toHaveBeenCalledWith({
+        where: { id: 'org-b-material', offering: { organizationId } },
+        include: { chunks: true },
+      });
     });
   });
 
@@ -331,27 +425,336 @@ describe('MaterialsService', () => {
     });
   });
 
+  describe('upload with chapters', () => {
+    it('should link the material to an explicit chapter', async () => {
+      const buffer = Buffer.from('Just some flat text here.'.repeat(40));
+
+      mockPrisma.courseOffering.findFirst.mockResolvedValue({
+        id: courseOfferingId,
+      });
+      mockPrisma.materialChapter.findFirst.mockResolvedValue({
+        id: 'ch-1',
+        courseOfferingId,
+      });
+      mockPrisma.material.create.mockResolvedValue({
+        id: 'mat-1',
+        title: 'T',
+        courseOfferingId,
+        chapterId: 'ch-1',
+        chunks: [{ id: 'c1', content: 'x' }],
+      });
+      mockLlm.embed.mockResolvedValue([0.1, 0.2, 0.3]);
+      mockPrisma.$executeRawUnsafe.mockResolvedValue(undefined);
+
+      const result = await service.upload(
+        'T',
+        courseOfferingId,
+        buffer,
+        'x.txt',
+        organizationId,
+        undefined,
+        'ch-1',
+      );
+
+      expect(result.chapterId).toBe('ch-1');
+      const createCalls = mockPrisma.material.create.mock.calls as [
+        { data: Record<string, unknown> },
+      ][];
+      expect(createCalls[0][0].data).toEqual(
+        expect.objectContaining({ chapterId: 'ch-1' }),
+      );
+    });
+
+    it('should reject a chapter that belongs to another class', async () => {
+      mockPrisma.courseOffering.findFirst.mockResolvedValue({
+        id: courseOfferingId,
+      });
+      mockPrisma.materialChapter.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.upload(
+          'T',
+          courseOfferingId,
+          Buffer.from('x'),
+          'x.txt',
+          organizationId,
+          undefined,
+          'ch-other',
+        ),
+      ).rejects.toMatchObject({ code: 'CHAPTER_NOT_FOUND' });
+    });
+
+    it('should auto-create chapters when the document has headings', async () => {
+      const text = [
+        'Chapter 1 Introduction',
+        'Biology is the science of life.',
+        'It studies living organisms from bacteria to whales.',
+        'Organisms grow, reproduce, and respond to their environment.',
+        'All living things are made of cells, the smallest units of life.',
+        'The study of biology is divided into many branches of knowledge.',
+        '',
+        'Chapter 2 Cells',
+        'The cell is the basic structural unit of all living organisms.',
+        'Cells contain a cell membrane which controls what enters them.',
+        'The nucleus stores genetic material inside every living cell.',
+        'Mitochondria produce the energy that cells need to survive.',
+        'Plant cells also contain chloroplasts used for photosynthesis.',
+      ].join('\n');
+
+      mockPrisma.courseOffering.findFirst.mockResolvedValue({
+        id: courseOfferingId,
+      });
+      mockPrisma.materialChapter.aggregate.mockResolvedValue({
+        _max: { order: null },
+      });
+      mockPrisma.materialChapter.create
+        .mockResolvedValueOnce({ id: 'auto-1', order: 0 })
+        .mockResolvedValueOnce({ id: 'auto-2', order: 1 });
+      mockPrisma.material.create.mockResolvedValue({
+        id: 'mat-1',
+        title: 'T',
+        courseOfferingId,
+        chapterId: 'auto-1',
+        chunks: [{ id: 'c1', content: 'x' }],
+      });
+      mockLlm.embed.mockResolvedValue([0.1, 0.2, 0.3]);
+      mockPrisma.$executeRawUnsafe.mockResolvedValue(undefined);
+
+      const result = await service.upload(
+        'T',
+        courseOfferingId,
+        Buffer.from(text),
+        'book.txt',
+        organizationId,
+      );
+
+      expect(mockPrisma.materialChapter.create).toHaveBeenCalledTimes(2);
+      expect(mockPrisma.materialChapter.create).toHaveBeenNthCalledWith(1, {
+        data: {
+          courseOfferingId,
+          title: 'Chapter 1 Introduction',
+          order: 0,
+        },
+      });
+      expect(mockPrisma.materialChapter.create).toHaveBeenNthCalledWith(2, {
+        data: {
+          courseOfferingId,
+          title: 'Chapter 2 Cells',
+          order: 1,
+        },
+      });
+      expect(result.chapterId).toBe('auto-1');
+      expect(result.detectedChapterCount).toBe(2);
+    });
+
+    it('should not auto-create chapters for flat text', async () => {
+      mockPrisma.courseOffering.findFirst.mockResolvedValue({
+        id: courseOfferingId,
+      });
+      mockPrisma.material.create.mockResolvedValue({
+        id: 'mat-1',
+        title: 'T',
+        courseOfferingId,
+        chapterId: null,
+        chunks: [{ id: 'c1', content: 'x' }],
+      });
+      mockLlm.embed.mockResolvedValue([0.1, 0.2, 0.3]);
+      mockPrisma.$executeRawUnsafe.mockResolvedValue(undefined);
+
+      const result = await service.upload(
+        'T',
+        courseOfferingId,
+        Buffer.from('No headings here at all. '.repeat(60)),
+        'x.txt',
+        organizationId,
+      );
+
+      expect(result.chapterId).toBeNull();
+      expect(result.detectedChapterCount).toBe(0);
+      expect(mockPrisma.materialChapter.create).not.toHaveBeenCalled();
+      expect(mockPrisma.materialChapter.aggregate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('chapters', () => {
+    it('should create a chapter at the next order position', async () => {
+      mockPrisma.courseOffering.findFirst.mockResolvedValue({
+        id: courseOfferingId,
+      });
+      mockPrisma.materialChapter.aggregate.mockResolvedValue({
+        _max: { order: 4 },
+      });
+      mockPrisma.materialChapter.create.mockResolvedValue({
+        id: 'ch-9',
+        courseOfferingId,
+        title: 'Chapter 9',
+        order: 5,
+      });
+
+      const result = await service.createChapter(
+        courseOfferingId,
+        'Chapter 9',
+        organizationId,
+      );
+
+      expect(mockPrisma.materialChapter.create).toHaveBeenCalledWith({
+        data: { courseOfferingId, title: 'Chapter 9', order: 5 },
+      });
+      expect(result.order).toBe(5);
+    });
+
+    it('should rename and reorder a chapter in the same organization', async () => {
+      mockPrisma.materialChapter.findFirst.mockResolvedValue({
+        id: 'ch-1',
+      });
+      mockPrisma.materialChapter.update.mockResolvedValue({
+        id: 'ch-1',
+        title: 'Renamed',
+        order: 0,
+      });
+
+      const result = await service.updateChapter('ch-1', organizationId, {
+        title: 'Renamed',
+        order: 0,
+      });
+
+      expect(mockPrisma.materialChapter.update).toHaveBeenCalledWith({
+        where: { id: 'ch-1' },
+        data: { title: 'Renamed', order: 0 },
+      });
+      expect(result.title).toBe('Renamed');
+    });
+
+    it('should not rename a chapter from another organization', async () => {
+      mockPrisma.materialChapter.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.updateChapter('ch-x', organizationId, { title: 'X' }),
+      ).rejects.toMatchObject({ code: 'CHAPTER_NOT_FOUND' });
+    });
+
+    it('should delete a chapter', async () => {
+      mockPrisma.materialChapter.findFirst.mockResolvedValue({ id: 'ch-1' });
+      mockPrisma.materialChapter.delete.mockResolvedValue({ id: 'ch-1' });
+
+      const result = await service.deleteChapter('ch-1', organizationId);
+
+      expect(result).toEqual({ deleted: true });
+      expect(mockPrisma.materialChapter.delete).toHaveBeenCalledWith({
+        where: { id: 'ch-1' },
+      });
+    });
+
+    it('should move a material into a chapter', async () => {
+      mockPrisma.material.findFirst.mockResolvedValue({
+        id: 'mat-1',
+        courseOfferingId,
+      });
+      mockPrisma.materialChapter.findFirst.mockResolvedValue({ id: 'ch-2' });
+      mockPrisma.material.update.mockResolvedValue({
+        id: 'mat-1',
+        chapterId: 'ch-2',
+      });
+
+      const result = await service.moveMaterialToChapter(
+        'mat-1',
+        'ch-2',
+        organizationId,
+      );
+
+      expect(mockPrisma.material.update).toHaveBeenCalledWith({
+        where: { id: 'mat-1' },
+        data: { chapterId: 'ch-2' },
+        select: { id: true, chapterId: true },
+      });
+      expect(result.chapterId).toBe('ch-2');
+    });
+
+    it('should ungroup a material when moved to null', async () => {
+      mockPrisma.material.findFirst.mockResolvedValue({
+        id: 'mat-1',
+        courseOfferingId,
+      });
+      mockPrisma.material.update.mockResolvedValue({
+        id: 'mat-1',
+        chapterId: null,
+      });
+
+      await service.moveMaterialToChapter('mat-1', null, organizationId);
+
+      expect(mockPrisma.materialChapter.findFirst).not.toHaveBeenCalled();
+      expect(mockPrisma.material.update).toHaveBeenCalledWith({
+        where: { id: 'mat-1' },
+        data: { chapterId: null },
+        select: { id: true, chapterId: true },
+      });
+    });
+
+    it('should not link a material to a chapter from another class', async () => {
+      mockPrisma.material.findFirst.mockResolvedValue({
+        id: 'mat-1',
+        courseOfferingId,
+      });
+      mockPrisma.materialChapter.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.moveMaterialToChapter('mat-1', 'ch-x', organizationId),
+      ).rejects.toMatchObject({ code: 'CHAPTER_NOT_FOUND' });
+    });
+
+    it('should return chapters with materials plus ungrouped materials', async () => {
+      mockPrisma.courseOffering.findFirst.mockResolvedValue({
+        id: courseOfferingId,
+      });
+      mockPrisma.materialChapter.findMany.mockResolvedValue([
+        { id: 'ch-1', title: 'C1', order: 0, materials: [] },
+      ]);
+      mockPrisma.material.findMany.mockResolvedValue([
+        { id: 'm-x', title: 'Loose' },
+      ]);
+
+      const result = await service.findByOfferingGrouped(
+        courseOfferingId,
+        organizationId,
+      );
+
+      expect(result.chapters).toHaveLength(1);
+      expect(result.unassigned).toHaveLength(1);
+      expect(mockPrisma.materialChapter.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          orderBy: { order: 'asc' },
+        }),
+      );
+    });
+
+    it('should throw when grouping materials for an unknown class', async () => {
+      mockPrisma.courseOffering.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.findByOfferingGrouped(courseOfferingId, organizationId),
+      ).rejects.toMatchObject({ code: 'OFFERING_NOT_FOUND' });
+    });
+  });
+
   describe('getMaterialFileUrl', () => {
-    const classId = '00000000-0000-0000-0000-000000000001';
     const materialBase = {
       id: 'mat-1',
       title: 'M1',
-      classId,
-      fileUrl: `materials/${classId}/mat-1.pdf`,
-      class: {
-        id: classId,
+      courseOfferingId,
+      fileUrl: `materials/${courseOfferingId}/mat-1.pdf`,
+      offering: {
         teacherId: 'teacher-1',
-        enrollments: [
-          {
-            status: 'APPROVED',
-            studentId: 'student-1',
-            student: { id: 'student-1', guardianId: 'guardian-1' },
-          },
-        ],
+        section: {
+          enrollments: [
+            {
+              student: { id: 'student-1', guardianId: 'guardian-1' },
+            },
+          ],
+        },
       },
     };
 
-    it('should return a signed URL for the teacher of the class', async () => {
+    it('should return a signed URL for the teacher of the offering', async () => {
       mockPrisma.material.findUnique.mockResolvedValue(materialBase);
       mockStorageBucket.createSignedUrl.mockResolvedValue({
         data: { signedUrl: 'https://signed/url' },
@@ -365,7 +768,7 @@ describe('MaterialsService', () => {
 
       expect(result).toEqual({ url: 'https://signed/url' });
       expect(mockStorageBucket.createSignedUrl).toHaveBeenCalledWith(
-        `materials/${classId}/mat-1.pdf`,
+        `materials/${courseOfferingId}/mat-1.pdf`,
         3600,
       );
     });
@@ -415,7 +818,7 @@ describe('MaterialsService', () => {
       expect(result.url).toBe('https://signed/url');
     });
 
-    it('should forbid a teacher from another class', async () => {
+    it('should forbid a teacher who does not teach the offering', async () => {
       mockPrisma.material.findUnique.mockResolvedValue(materialBase);
 
       await expect(
@@ -491,7 +894,7 @@ describe('MaterialsService', () => {
 
   describe('delete', () => {
     it('should remove the storage object and delete the material', async () => {
-      mockPrisma.material.findUnique.mockResolvedValue({
+      mockPrisma.material.findFirst.mockResolvedValue({
         id: 'mat-1',
         fileUrl: 'materials/c1/mat-1.pdf',
       });
@@ -510,27 +913,27 @@ describe('MaterialsService', () => {
     });
 
     it('should skip storage gracefully when the material has no stored path', async () => {
-      mockPrisma.material.findUnique.mockResolvedValue({
+      mockPrisma.material.findFirst.mockResolvedValue({
         id: 'mat-1',
         fileUrl: 'notes.txt',
       });
       mockPrisma.material.delete.mockResolvedValue({ id: 'mat-1' });
 
-      const result = await service.delete('mat-1');
+      const result = await service.delete('mat-1', organizationId);
 
       expect(result.deleted).toBe(true);
       expect(mockStorageBucket.remove).not.toHaveBeenCalled();
     });
 
     it('should still delete the row when storage remove fails', async () => {
-      mockPrisma.material.findUnique.mockResolvedValue({
+      mockPrisma.material.findFirst.mockResolvedValue({
         id: 'mat-1',
         fileUrl: 'materials/c1/mat-1.pdf',
       });
       mockStorageBucket.remove.mockRejectedValue(new Error('storage down'));
       mockPrisma.material.delete.mockResolvedValue({ id: 'mat-1' });
 
-      const result = await service.delete('mat-1');
+      const result = await service.delete('mat-1', organizationId);
 
       expect(result.deleted).toBe(true);
       expect(mockPrisma.material.delete).toHaveBeenCalledWith({
@@ -538,12 +941,15 @@ describe('MaterialsService', () => {
       });
     });
 
-    it('should throw when not found', async () => {
+    it('should scope deletion to the organization', async () => {
       mockPrisma.material.findFirst.mockResolvedValue(null);
 
       await expect(
-        service.delete('nonexistent', organizationId),
+        service.delete('org-b-material', organizationId),
       ).rejects.toMatchObject({ code: 'MATERIAL_NOT_FOUND' });
+      expect(mockPrisma.material.findFirst).toHaveBeenCalledWith({
+        where: { id: 'org-b-material', offering: { organizationId } },
+      });
     });
   });
 });

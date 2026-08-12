@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { LlmService } from '../common/llm/llm.service';
 import { FORMATTING_RULES as MD_FORMATTING_RULES } from '../common/llm/formatting-rules';
 import { ReportGenerateSchema } from './dto';
+import type { User } from '@prisma/client';
 
 @Injectable()
 export class ReportsService {
@@ -60,18 +61,17 @@ export class ReportsService {
     });
   }
 
-  async findAll(studentId?: string) {
-    const where: Record<string, unknown> = {};
-    if (studentId) where.studentId = studentId;
+  async findAll(user: User, studentId?: string) {
+    const where = this.accessWhere(user, studentId);
     return this.prisma.studentReport.findMany({
       where,
       orderBy: { createdAt: 'desc' },
     });
   }
 
-  async findOne(id: string) {
-    const report = await this.prisma.studentReport.findUnique({
-      where: { id },
+  async findOne(id: string, user: User) {
+    const report = await this.prisma.studentReport.findFirst({
+      where: { id, ...this.accessWhere(user) },
     });
     if (!report) {
       throw new ApiError(
@@ -81,5 +81,30 @@ export class ReportsService {
       );
     }
     return report;
+  }
+
+  /**
+   * Role-scoped where clause: students only see their own reports, guardians
+   * only their linked children's, teachers/admins everything in their org.
+   */
+  private accessWhere(user: User, studentId?: string) {
+    switch (user.role) {
+      case 'STUDENT':
+        return { studentId: user.id };
+      case 'GUARDIAN':
+        return {
+          student: {
+            ...(studentId ? { id: studentId } : {}),
+            guardianId: user.id,
+          },
+        };
+      default:
+        return {
+          student: {
+            ...(studentId ? { id: studentId } : {}),
+            organizationId: user.organizationId,
+          },
+        };
+    }
   }
 }

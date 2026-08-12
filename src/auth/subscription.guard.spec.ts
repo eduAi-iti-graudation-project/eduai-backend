@@ -27,6 +27,8 @@ describe('SubscriptionGuard', () => {
       id: 'org-1',
       name: 'Demo School',
       joinCode: 'DEMO2026',
+      emailDomain: 'demo.org',
+      groupId: null,
       stripeCustomerId: null,
       stripeSubscriptionId: null,
       subscriptionTier,
@@ -173,6 +175,80 @@ describe('SubscriptionGuard', () => {
       expect(
         guard.canActivate(contextWith({ organization: org('ACTIVE') })),
       ).toBe(true);
+    });
+  });
+
+  describe('SchoolGroup resolution (WP5)', () => {
+    function groupedOrg(
+      orgStatus: SubscriptionStatus,
+      groupStatus: SubscriptionStatus,
+      tier: SubscriptionTier = 'TRIAL',
+    ) {
+      const o = org(orgStatus, new Date(), tier);
+      return {
+        ...o,
+        group: {
+          id: 'group-1',
+          name: 'Edu Chain',
+          stripeCustomerId: null,
+          stripeSubscriptionId: null,
+          subscriptionTier: tier,
+          subscriptionStatus: groupStatus,
+          seatLimit: null,
+          createdAt: o.createdAt,
+        },
+      };
+    }
+
+    it('a CANCELED school inside an ACTIVE group keeps access', () => {
+      expect(
+        guard.canActivate(
+          contextWith({ organization: groupedOrg('CANCELED', 'ACTIVE') }),
+        ),
+      ).toBe(true);
+    });
+
+    it('a grouped school past its own trial is still inside the group trial window', () => {
+      const membersSince = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const o = org('TRIALING', membersSince);
+      const group = {
+        ...o,
+        group: {
+          id: 'group-1',
+          name: 'Edu Chain',
+          stripeCustomerId: null,
+          stripeSubscriptionId: null,
+          subscriptionTier: 'TRIAL' as SubscriptionTier,
+          subscriptionStatus: 'TRIALING' as SubscriptionStatus,
+          seatLimit: null,
+          createdAt: new Date(), // group created now -> fresh trial
+        },
+      };
+      expect(guard.canActivate(contextWith({ organization: group }))).toBe(
+        true,
+      );
+    });
+
+    it('an ACTIVE-group school on a Pro-pro gate passes tier checks via the group', () => {
+      const handler = () => {};
+      Reflect.defineMetadata(
+        REQUIRED_TIERS_KEY,
+        ['PRO', 'ENTERPRISE'],
+        handler,
+      );
+      const context = contextWith(
+        { organization: groupedOrg('CANCELED', 'ACTIVE', 'PRO') },
+        handler,
+      );
+      expect(guard.canActivate(context)).toBe(true);
+    });
+
+    it('a CANCELED group blocks grouped schools with 402', () => {
+      expect(() =>
+        guard.canActivate(
+          contextWith({ organization: groupedOrg('ACTIVE', 'CANCELED') }),
+        ),
+      ).toThrow(HttpException);
     });
   });
 });

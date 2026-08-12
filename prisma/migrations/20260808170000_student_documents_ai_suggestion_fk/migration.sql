@@ -1,0 +1,8 @@
+-- No-op migration (kept for history integrity).
+--
+-- Original content attempted to add a foreign key on
+-- "student_documents"."aiSuggestedStudentId", a column that was removed by
+-- the earlier migration `20260808030204_add_study_generation`. The final
+-- schema (see schema.prisma) intentionally has no such column or constraint,
+-- so this migration contributes nothing. Kept because it is already recorded
+-- as applied in deployed databases.

@@ -2,6 +2,12 @@ import { PrismaService } from '../prisma/prisma.service';
 import { Injectable, HttpStatus } from '@nestjs/common';
 import { ApiError } from '../common/errors/api-error';
 import { ErrorCode } from '../common/errors/codes';
+import { EnrollSyncService } from '../roster/enroll-sync.service';
+import { JoinRequestsService } from '../join-requests/join-requests.service';
+import { SupabaseService } from '../auth/supabase.service';
+import { encryptCredential } from '../common/crypto/credentials';
+import { generatePassword } from '../common/mailer/generated-credentials';
+import type { User } from '@prisma/client';
 import * as path from 'path';
 import * as fs from 'fs';
 
@@ -14,9 +20,117 @@ function academicYearOf(date: Date): string {
 
 @Injectable()
 export class StudentsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly enrollSync: EnrollSyncService,
+    private readonly supabaseService: SupabaseService,
+    private readonly joinRequests: JoinRequestsService,
+  ) {}
 
-  async getGrades(id: string, organizationId: string) {
+  /**
+   * The post-import follow-up queue: students of THIS organization who are
+   * missing a grade level and/or have no APPROVED section enrollment.
+   */
+  async listUnassignedStudents(organizationId: string) {
+    return this.prisma.user.findMany({
+      where: {
+        organizationId,
+        role: 'STUDENT',
+        OR: [
+          { gradeId: null },
+          { enrollments: { none: { status: 'APPROVED' } } },
+        ],
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        gradeId: true,
+        grade: { select: { id: true, level: true, name: true } },
+        enrollments: {
+          where: { status: 'APPROVED' },
+          select: {
+            sectionId: true,
+            section: { select: { id: true, name: true } },
+          },
+        },
+        createdAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  /**
+   * Org admin student list. `withoutGuardian = true` narrows to students with
+   * no linked guardian (the WP2 "students without guardian" widget).
+   */
+  async listStudents(organizationId: string, withoutGuardian: boolean) {
+    return this.prisma.user.findMany({
+      where: {
+        organizationId,
+        role: 'STUDENT',
+        ...(withoutGuardian ? { guardianId: null } : {}),
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        gradeId: true,
+        grade: { select: { id: true, level: true, name: true } },
+        guardian: { select: { id: true, name: true, email: true } },
+        createdAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  /**
+   * WP4 ownership audit: students may only read their own data; guardians
+   * only their wards' (404 so unrelated students stay invisible). Admin and
+   * teacher callers are unaffected.
+   */
+  private async assertStudentReadAccess(
+    studentId: string,
+    organizationId: string,
+    caller?: { id: string; role: User['role'] },
+  ): Promise<void> {
+    if (!caller || caller.role === 'ADMIN' || caller.role === 'TEACHER') return;
+    const student = await this.prisma.user.findFirst({
+      where: { id: studentId, role: 'STUDENT', organizationId },
+      select: { guardianId: true },
+    });
+    if (!student) {
+      throw new ApiError(
+        ErrorCode.STUDENT_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This student could not be found.',
+      );
+    }
+    if (caller.role === 'GUARDIAN') {
+      if (student.guardianId !== caller.id) {
+        throw new ApiError(
+          ErrorCode.STUDENT_NOT_FOUND,
+          HttpStatus.NOT_FOUND,
+          'This student could not be found.',
+        );
+      }
+      return;
+    }
+    if (caller.role === 'STUDENT' && caller.id !== studentId) {
+      throw new ApiError(
+        ErrorCode.FORBIDDEN,
+        HttpStatus.FORBIDDEN,
+        "You don't have permission to do that.",
+      );
+    }
+  }
+
+  async getGrades(
+    id: string,
+    organizationId: string,
+    caller?: { id: string; role: User['role'] },
+  ) {
+    await this.assertStudentReadAccess(id, organizationId, caller);
     const grades = await this.prisma.gradingScore.findMany({
       where: {
         submission: { studentId: id, student: { organizationId } },
@@ -44,7 +158,9 @@ export class StudentsService {
     studentId: string,
     submissionId: string,
     organizationId: string,
+    caller?: { id: string; role: User['role'] },
   ) {
+    await this.assertStudentReadAccess(studentId, organizationId, caller);
     const submission = await this.prisma.submission.findFirst({
       where: {
         id: submissionId,
@@ -80,8 +196,13 @@ export class StudentsService {
     }));
   }
 
-  async getClasses(studentId: string, organizationId: string) {
-    return this.prisma.section.findMany({
+  async getClasses(
+    studentId: string,
+    organizationId: string,
+    caller?: { id: string; role: User['role'] },
+  ) {
+    await this.assertStudentReadAccess(studentId, organizationId, caller);
+    const sections = await this.prisma.section.findMany({
       where: {
         organizationId,
         enrollments: {
@@ -94,10 +215,41 @@ export class StudentsService {
           include: {
             course: true,
             teacher: true,
-            assignments: { include: { rubrics: true } },
+            assignments: {
+              include: {
+                rubrics: true,
+                materials: { select: { id: true, title: true } },
+              },
+            },
           },
         },
       },
+    });
+
+    return sections.map((s) => {
+      const teacherNames = [
+        ...new Set(
+          s.offerings
+            .map((o) => o.teacher?.name)
+            .filter((n): n is string => Boolean(n)),
+        ),
+      ];
+      return {
+        id: s.id,
+        name: s.name,
+        description: s.description ?? (s.gradeLevel ? s.gradeLevel.name : null),
+        teacherName: teacherNames.join(', '),
+        assignments: s.offerings.flatMap((o) =>
+          o.assignments.map((a) => ({
+            id: a.id,
+            title: a.title,
+            description: a.description,
+            dueDate: a.dueDate.toISOString(),
+            totalPoints: a.totalPoints,
+            materials: a.materials.map((m) => ({ id: m.id, title: m.title })),
+          })),
+        ),
+      };
     });
   }
 
@@ -133,7 +285,7 @@ export class StudentsService {
         );
       }
     }
-    return this.prisma.user.update({
+    const updated = await this.prisma.user.update({
       where: { id: studentId },
       data: {
         ...(dto.name !== undefined ? { name: dto.name } : {}),
@@ -144,12 +296,24 @@ export class StudentsService {
         ...(dto.guardianId !== undefined ? { guardianId: dto.guardianId } : {}),
       },
     });
+    if (
+      dto.gradeLevelId !== undefined &&
+      dto.gradeLevelId !== student.gradeId
+    ) {
+      await this.enrollSync.syncStudentToGrade(
+        studentId,
+        organizationId,
+        dto.gradeLevelId,
+      );
+    }
+    return updated;
   }
 
   async linkGuardian(
     studentId: string,
-    guardianId: string,
+    dto: { guardianId?: string; email?: string; name?: string },
     organizationId: string,
+    decidedBy: string,
   ) {
     const student = await this.prisma.user.findFirst({
       where: { id: studentId, organizationId },
@@ -161,8 +325,35 @@ export class StudentsService {
         'This student could not be found.',
       );
     }
+
+    // WP2: create the guardian from a real email (school identity provisioned,
+    // verify invite sent) and link — for rows imported without guardian data.
+    if (dto.email) {
+      if (!dto.name) {
+        throw new ApiError(
+          ErrorCode.VALIDATION_FAILED,
+          HttpStatus.BAD_REQUEST,
+          'A guardian name is required when creating a guardian from an email.',
+        );
+      }
+      return this.joinRequests.provisionGuardian({
+        organizationId,
+        studentId,
+        name: dto.name,
+        personalEmail: dto.email,
+        decidedBy,
+      });
+    }
+
+    if (!dto.guardianId) {
+      throw new ApiError(
+        ErrorCode.VALIDATION_FAILED,
+        HttpStatus.BAD_REQUEST,
+        'Provide either a guardianId (existing account) or an email + name to create the guardian.',
+      );
+    }
     const guardian = await this.prisma.user.findFirst({
-      where: { id: guardianId, organizationId },
+      where: { id: dto.guardianId, organizationId },
     });
     if (!guardian) {
       throw new ApiError(
@@ -173,8 +364,43 @@ export class StudentsService {
     }
     return this.prisma.user.update({
       where: { id: studentId },
-      data: { guardianId },
+      data: { guardianId: dto.guardianId },
     });
+  }
+
+  /**
+   * WP1 admin escape hatch: regenerate a school-provisioned student's login
+   * password (Supabase) and re-encrypt the stored copy. The new password is
+   * returned ONCE to the admin (e.g. "parent lost access").
+   */
+  async resetCredentials(id: string, organizationId: string) {
+    const student = await this.prisma.user.findFirst({
+      where: { id, role: 'STUDENT', organizationId },
+      select: { id: true, authId: true, email: true },
+    });
+    if (!student) {
+      throw new ApiError(
+        ErrorCode.STUDENT_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This student could not be found.',
+      );
+    }
+    if (!student.authId) {
+      throw new ApiError(
+        ErrorCode.AUTH_USER_NOT_FOUND,
+        HttpStatus.BAD_REQUEST,
+        'This student has no auth identity to reset.',
+      );
+    }
+    const password = generatePassword(10);
+    await this.supabaseService
+      .getClient()
+      .auth.admin.updateUserById(student.authId, { password });
+    await this.prisma.user.update({
+      where: { id: student.id },
+      data: { credentialEncrypted: encryptCredential(password) },
+    });
+    return { email: student.email, password };
   }
 
   private async ensureStudent(id: string, organizationId: string) {

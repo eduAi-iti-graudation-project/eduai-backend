@@ -10,6 +10,7 @@ import { ApiError } from '../common/errors/api-error';
 import { ErrorCode } from '../common/errors/codes';
 import { InsightsService } from './insights.service';
 import { Roles } from '../auth/roles.decorator';
+import { AllowGuardianless } from '../auth/allow-guardianless.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { RequiresTier } from '../auth/requires-tier.decorator';
 import type { User } from '@prisma/client';
@@ -25,6 +26,7 @@ export class DashboardController {
 
   @Get('overview')
   @Roles('TEACHER', 'STUDENT', 'GUARDIAN', 'ADMIN')
+  @AllowGuardianless()
   @ApiOperation({ summary: 'Role-aware dashboard overview' })
   @ApiOkResponse({
     description: 'Role-aware dashboard data — shape varies by role',
@@ -35,6 +37,7 @@ export class DashboardController {
 
   @Get('insights')
   @Roles('TEACHER', 'STUDENT', 'GUARDIAN', 'ADMIN')
+  @AllowGuardianless()
   @RequiresTier('ENTERPRISE')
   @ApiOperation({ summary: 'Role-aware dashboard insights' })
   @ApiQuery({

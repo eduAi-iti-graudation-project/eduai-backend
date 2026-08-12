@@ -236,7 +236,11 @@ describe('SubmissionsService', () => {
       expect(result).toEqual(mockSubmissions);
       expect(mockPrisma.submission.findMany).toHaveBeenCalledWith({
         where: { assignment: { offering: { organizationId } } },
-        include: { student: true, scores: { include: { criteria: true } } },
+        include: {
+          student: true,
+          assignment: true,
+          scores: { include: { criteria: true } },
+        },
       });
     });
 
@@ -250,7 +254,11 @@ describe('SubmissionsService', () => {
           assignmentId: 'assignment-id',
           assignment: { offering: { organizationId } },
         },
-        include: { student: true, scores: { include: { criteria: true } } },
+        include: {
+          student: true,
+          assignment: true,
+          scores: { include: { criteria: true } },
+        },
       });
     });
   });

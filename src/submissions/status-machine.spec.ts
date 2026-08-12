@@ -23,25 +23,25 @@ describe('transitionStatus', () => {
 
   it('rejects SUBMITTED → REVIEW_READY (skip)', () => {
     expect(() => transitionStatus('SUBMITTED', 'REVIEW_READY')).toThrowError(
-      expect.objectContaining({ code: 'INVALID_STATUS_TRANSITION' }),
+      expect.objectContaining({ code: 'INVALID_STATUS_TRANSITION' }) as Error,
     );
   });
 
   it('rejects SUBMITTED → CONFIRMED (skip)', () => {
     expect(() => transitionStatus('SUBMITTED', 'CONFIRMED')).toThrowError(
-      expect.objectContaining({ code: 'INVALID_STATUS_TRANSITION' }),
+      expect.objectContaining({ code: 'INVALID_STATUS_TRANSITION' }) as Error,
     );
   });
 
   it('rejects CONFIRMED → REVIEW_READY (reverse)', () => {
     expect(() => transitionStatus('CONFIRMED', 'REVIEW_READY')).toThrowError(
-      expect.objectContaining({ code: 'INVALID_STATUS_TRANSITION' }),
+      expect.objectContaining({ code: 'INVALID_STATUS_TRANSITION' }) as Error,
     );
   });
 
   it('rejects CONFIRMED → SUBMITTED (reverse)', () => {
     expect(() => transitionStatus('CONFIRMED', 'SUBMITTED')).toThrowError(
-      expect.objectContaining({ code: 'INVALID_STATUS_TRANSITION' }),
+      expect.objectContaining({ code: 'INVALID_STATUS_TRANSITION' }) as Error,
     );
   });
 
@@ -49,7 +49,7 @@ describe('transitionStatus', () => {
     expect(() =>
       transitionStatus('GRADING_IN_PROGRESS', 'SUBMITTED'),
     ).toThrowError(
-      expect.objectContaining({ code: 'INVALID_STATUS_TRANSITION' }),
+      expect.objectContaining({ code: 'INVALID_STATUS_TRANSITION' }) as Error,
     );
   });
 });
