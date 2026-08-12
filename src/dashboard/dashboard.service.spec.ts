@@ -241,7 +241,7 @@ describe('DashboardService', () => {
         { status: 'PRESENT' },
         { status: 'LATE' },
       ]);
-      mockPrisma.alert.count.mockResolvedValue(1);
+      mockPrisma.alert.findMany.mockResolvedValue([{ id: 'alert-1' }]);
       mockPrisma.studentReport.count.mockResolvedValue(0);
       mockPrisma.notification.count.mockResolvedValue(2);
 
@@ -253,6 +253,7 @@ describe('DashboardService', () => {
             name: 'Child A',
             className: 'Science',
             activeAlertCount: 1,
+            activeAlertId: 'alert-1',
             unreadReportCount: 0,
           },
         ],
@@ -287,6 +288,7 @@ describe('DashboardService', () => {
       mockPrisma.user.count
         .mockResolvedValueOnce(5) // teacherCount
         .mockResolvedValueOnce(100) // studentCount
+        .mockResolvedValueOnce(2) // studentsWithoutGuardian
         .mockResolvedValueOnce(3); // flaggedStudentCount
       mockPrisma.courseOffering.count.mockResolvedValue(15);
       mockPrisma.studentReport.count.mockResolvedValue(2);
@@ -311,23 +313,30 @@ describe('DashboardService', () => {
           ],
         },
       ]);
+      mockPrisma.gradingScore.count.mockResolvedValue(4); // pendingConfirmations
       mockPrisma.gradingScore.findMany.mockResolvedValue([
         { pointsAwarded: 9, criteria: { maxPoints: 10 } },
         { pointsAwarded: 4, criteria: { maxPoints: 10 } },
         { pointsAwarded: 7, criteria: { maxPoints: 10 } },
       ]);
+      mockPrisma.alert.count.mockResolvedValue(6); // activeAlertCount
+      mockPrisma.alert.findMany.mockResolvedValue([]); // recentAlerts
+      mockPrisma.submission.findMany.mockResolvedValue([]); // submissionsNeedingReview
 
       const result = await service.getOverview(adminUser);
 
       expect(result).toMatchObject({
         teacherCount: 5,
         studentCount: 100,
+        studentsWithoutGuardian: 2,
         classCount: 15,
         flaggedStudentCount: 3,
         pendingReportCount: 2,
       });
       const teachers = (
-        result as { teachers: Array<{ name: string; studentCount: number }> }
+        result as unknown as {
+          teachers: Array<{ name: string; studentCount: number }>;
+        }
       ).teachers;
       expect(teachers).toHaveLength(1);
       expect(teachers[0]).toMatchObject({

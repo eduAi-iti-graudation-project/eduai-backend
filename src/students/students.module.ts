@@ -2,9 +2,12 @@ import { Module } from '@nestjs/common';
 import { StudentsService } from './students.service';
 import { StudentsController } from './students.controller';
 import { DocumentsModule } from '../documents/documents.module';
+import { RosterModule } from '../roster/roster.module';
+import { AuthModule } from '../auth/auth.module';
+import { JoinRequestsModule } from '../join-requests/join-requests.module';
 
 @Module({
-  imports: [DocumentsModule],
+  imports: [RosterModule, AuthModule, JoinRequestsModule, DocumentsModule],
   providers: [StudentsService],
   controllers: [StudentsController],
 })

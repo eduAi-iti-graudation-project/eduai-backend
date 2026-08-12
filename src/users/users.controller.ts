@@ -1,4 +1,15 @@
-import { Controller, Get, Query, Delete, Param } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Query,
+  Delete,
+  Param,
+  Res,
+  HttpStatus,
+} from '@nestjs/common';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import type { Response } from 'express';
 import {
   ApiTags,
   ApiOperation,
@@ -11,11 +22,46 @@ import {
 import { UsersService } from './users.service';
 import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
+import { Public } from '../auth/public.decorator';
+import { ApiError } from '../common/errors/api-error';
+import { ErrorCode } from '../common/errors/codes';
 
 @ApiTags('users')
 @Controller('users')
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
+
+  @Public()
+  @Get(':id/avatar')
+  @ApiOperation({ summary: 'Stream a user avatar photo' })
+  async getAvatar(@Param('id') id: string, @Res() res: Response) {
+    const user = await this.usersService.getAvatarById(id);
+    if (!user?.avatarUrl) {
+      throw new ApiError(
+        ErrorCode.AVATAR_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'Avatar not found.',
+      );
+    }
+    const expected = path.resolve(process.cwd(), user.avatarUrl);
+    if (!fs.existsSync(expected)) {
+      throw new ApiError(
+        ErrorCode.AVATAR_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'Avatar not found.',
+      );
+    }
+    const ext = path.extname(expected).toLowerCase();
+    res.setHeader('Content-Type', ext === '.png' ? 'image/png' : 'image/jpeg');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.sendFile(expected, (err) => {
+      if (err) {
+        res
+          .status(HttpStatus.NOT_FOUND)
+          .send({ error: 'AVATAR_NOT_FOUND', message: 'Avatar not found.' });
+      }
+    });
+  }
 
   @Roles('ADMIN')
   @Get()

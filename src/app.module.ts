@@ -8,8 +8,10 @@ import { AuthModule } from './auth/auth.module';
 import { AuthGuard } from './auth/auth.guard';
 import { RolesGuard } from './auth/roles.guard';
 import { SubscriptionGuard } from './auth/subscription.guard';
+import { GuardianRequirementGuard } from './auth/guardian-requirement.guard';
 import { GradeLevelsModule } from './grade-levels/grade-levels.module';
 import { SectionsModule } from './sections/sections.module';
+import { RosterModule } from './roster/roster.module';
 import { CoursesModule } from './courses/courses.module';
 import { OfferingsModule } from './offerings/offerings.module';
 import { AssignmentsModule } from './assignments/assignments.module';
@@ -27,18 +29,28 @@ import { PiiModule } from './common/pii/pii.module';
 import { ValidationModule } from './common/validation/validation.module';
 import { AttendanceModule } from './attendance/attendance.module';
 import { DashboardModule } from './dashboard/dashboard.module';
-import { EnrollmentsModule } from './enrollments/enrollments.module';
+
 import { TeachersModule } from './teachers/teachers.module';
 import { UsersModule } from './users/users.module';
 import { QuizzesModule } from './quizzes/quizzes.module';
 import { FeedbackWriterModule } from './feedback-writer/feedback-writer.module';
 import { HomeworkHelperModule } from './homework-helper/homework-helper.module';
+import { StudyLabModule } from './study-lab/study-lab.module';
 import { ChatModule } from './chat/chat.module';
 import { BillingModule } from './billing/billing.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
+import { GroupsModule } from './groups/groups.module';
 import { OrganizationsModule } from './organizations/organizations.module';
 import { DocumentsModule } from './documents/documents.module';
+import { TimetableModule } from './timetable/timetable.module';
+import { MeetingsModule } from './meetings/meetings.module';
+import { StruggleSignalsModule } from './struggle-signals/struggle-signals.module';
+import { LabsModule } from './labs/labs.module';
 import { MigrationModule } from './migration/migration.module';
+import { JoinRequestsModule } from './join-requests/join-requests.module';
+import { GuardianModule } from './guardian/guardian.module';
+import { ClassesModule } from './classes/classes.module';
+import { GradeConsoleModule } from './grade-console/grade-console.module';
 
 @Module({
   imports: [
@@ -64,21 +76,31 @@ import { MigrationModule } from './migration/migration.module';
     AttendanceModule,
     DashboardModule,
     GradeLevelsModule,
+    RosterModule,
     SectionsModule,
     CoursesModule,
     OfferingsModule,
-    EnrollmentsModule,
     TeachersModule,
     UsersModule,
     QuizzesModule,
     FeedbackWriterModule,
     HomeworkHelperModule,
+    StudyLabModule,
     ChatModule,
     BillingModule,
     WebhooksModule,
+    GroupsModule,
     OrganizationsModule,
-    DocumentsModule,
+DocumentsModule,
+    TimetableModule,
+    MeetingsModule,
+    StruggleSignalsModule,
     MigrationModule,
+    JoinRequestsModule,
+    GuardianModule,
+    ClassesModule,
+    GradeConsoleModule,
+    LabsModule,
   ],
   controllers: [AppController],
   providers: [
@@ -87,6 +109,7 @@ import { MigrationModule } from './migration/migration.module';
     { provide: APP_GUARD, useClass: AuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
     { provide: APP_GUARD, useClass: SubscriptionGuard },
+    { provide: APP_GUARD, useClass: GuardianRequirementGuard },
   ],
 })
 export class AppModule {}

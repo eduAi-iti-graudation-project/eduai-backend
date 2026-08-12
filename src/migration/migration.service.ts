@@ -4,18 +4,82 @@ import { PrismaService } from '../prisma/prisma.service';
 import { LlmService } from '../common/llm/llm.service';
 import { ApiError } from '../common/errors/api-error';
 import { ErrorCode } from '../common/errors/codes';
-import { isEmailLike, isPhoneLike, parseCsv } from './csv-parser';
+import { JoinRequestsService } from '../join-requests/join-requests.service';
+import { encryptSsn, ssnTail4 } from '../common/crypto/ssn';
+import { isEmailLike, isPhoneLike, parseCsv, parsePasted } from './csv-parser';
 
 export const IMPORTABLE_FIELDS = [
   'STUDENT_NAME',
+  'FIRST_NAME',
+  'LAST_NAME',
   'EMAIL',
   'GRADE_LEVEL',
   'SECTION',
+  'GUARDIAN_NAME',
+  'GUARDIAN_EMAIL',
+  'GUARDIAN_SSN',
+  'GUARDIAN_PHONE',
+  'GUARDIAN_NATIONALITY',
 ] as const;
 
 export type ImportableField = (typeof IMPORTABLE_FIELDS)[number];
 
 export const MAPPED_FIELD_VALUES = [...IMPORTABLE_FIELDS, 'UNMAPPED'] as const;
+
+/** The blank template (Path C): exact header + one example row. */
+export const TEMPLATE_HEADERS = [
+  'firstName',
+  'lastName',
+  'email',
+  'gradeLevelName',
+  'sectionName',
+  'dateOfBirth',
+  'guardianName',
+  'guardianEmail',
+  'guardianPhone',
+  'guardianSsn',
+  'guardianNationality',
+] as const;
+
+const TEMPLATE_EXAMPLE_ROW = [
+  'Jane',
+  'Doe',
+  'jane.doe@example.com',
+  'Grade 7',
+  'A',
+  '2014-03-12',
+  'Joan Doe',
+  'joan.doe@example.com',
+  '+20 100 000 0000',
+  '123-45-6789',
+  'Egyptian',
+];
+
+export const TEMPLATE_CSV = [
+  TEMPLATE_HEADERS.join(','),
+  TEMPLATE_EXAMPLE_ROW.join(','),
+].join('\n');
+
+/**
+ * Exact header match against the template → the mapping is unambiguous, so
+ * the AI mapping call is skipped entirely (a school using the template
+ * never pays for, or waits on, an LLM round-trip it doesn't need).
+ */
+export function isTemplateHeader(header: string[]): boolean {
+  return (
+    header.length === TEMPLATE_HEADERS.length &&
+    header.every(
+      (h, i) => h.trim().toLowerCase() === TEMPLATE_HEADERS[i].toLowerCase(),
+    )
+  );
+}
+
+function isTemplateExampleRow(header: string[], row: string[]): boolean {
+  if (!isTemplateHeader(header) || row.length < TEMPLATE_EXAMPLE_ROW.length) {
+    return false;
+  }
+  return TEMPLATE_EXAMPLE_ROW.every((value, i) => row[i].trim() === value);
+}
 
 const MappingSuggestionSchema = z.object({
   mappings: z.array(
@@ -35,11 +99,46 @@ export interface AnalyzedColumn {
   masked: boolean;
 }
 
+export interface FollowUpRow {
+  row: number;
+  reason: string;
+}
+
+export interface UnassignedRow {
+  row: number;
+  studentId?: string;
+  reason: string;
+}
+
+export interface UnmatchedRow {
+  row: number;
+  providedValue: string;
+}
+
+/**
+ * Structured import summary. Buckets are mutually exclusive per row:
+ * - imported: rows that were staged (PENDING, awaiting admin approval) or,
+ *   with roster auto-approval, provisioned immediately
+ * - autoApproved: count of rows provisioned instantly (WP2 — no admin click)
+ * - queued: rows left PENDING after a failed auto-approval (admin review)
+ * - needsFollowUp: row NOT staged (missing name/email, duplicate, already a
+ *   member, an email-less row that must be self-registered later, or a
+ *   split-import row whose guardian data was dropped)
+ * - unmatchedSectionsOrGrades: reporting detail for rows whose PROVIDED
+ *   grade/section value failed to match (the row is still staged)
+ * - unassignedGradeOrSection: staged rows whose grade/section are missing or
+ *   unmatched — the admin can resolve these before approval
+ */
 export interface ImportResult {
-  created: number;
-  duplicates: number;
-  errors: Array<{ row: number; reason: string }>;
-  flagged: Array<{ row: number; reason: string }>;
+  /** Rows staged as PENDING join requests awaiting approval (or imported, when NOT auto-approved). */
+  imported: number;
+  /** Rows provisioned instantly by roster auto-approval (WP2). */
+  autoApproved: number;
+  /** Rows left PENDING after a failed auto-approval — admin review needed. */
+  queued: number;
+  unassignedGradeOrSection: UnassignedRow[];
+  needsFollowUp: FollowUpRow[];
+  unmatchedSectionsOrGrades: UnmatchedRow[];
 }
 
 const EMAIL_MASK = 'name@example.com';
@@ -93,19 +192,46 @@ function maskColumn(
   return { maskedSamples, masked };
 }
 
+const TEMPLATE_1_TO_1: Record<string, ImportableField | 'UNMAPPED'> = {
+  firstname: 'FIRST_NAME',
+  lastname: 'LAST_NAME',
+  email: 'EMAIL',
+  gradelevelname: 'GRADE_LEVEL',
+  sectionname: 'SECTION',
+  dateofbirth: 'UNMAPPED',
+  guardianname: 'GUARDIAN_NAME',
+  guardianemail: 'GUARDIAN_EMAIL',
+  guardianphone: 'GUARDIAN_PHONE',
+  guardianssn: 'GUARDIAN_SSN',
+  guardiannationality: 'GUARDIAN_NATIONALITY',
+};
+
 @Injectable()
 export class MigrationService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly llm: LlmService,
+    private readonly joinRequests: JoinRequestsService,
   ) {}
 
-  async analyzeCsv(text: string): Promise<{
-    columns: AnalyzedColumn[];
-    totalRows: number;
-    maskedColumns: string[];
-  }> {
+  async analyzeCsv(text: string): Promise<AnalyzeResult> {
     const rows = parseCsv(text);
+    return this.analyzeRows(rows);
+  }
+
+  /** Paste path: tab-separated spreadsheet ranges, comma as fallback. */
+  async analyzePasted(text: string): Promise<AnalyzeResult> {
+    const rows = parsePasted(text);
+    return this.analyzeRows(rows);
+  }
+
+  /**
+   * The ONE analyze pipeline. Every input path (file upload, paste, and
+   * returned template template) converges here once parsed into string[][];
+   * the only branch in this function is the template short-circuit that
+   * replaces the LLM mapping call with a deterministic one.
+   */
+  private async analyzeRows(rows: string[][]): Promise<AnalyzeResult> {
     if (rows.length === 0) {
       throw new ApiError(
         ErrorCode.CSV_PARSE_ERROR,
@@ -141,27 +267,50 @@ export class MigrationService {
       samples: c.maskedSamples,
     }));
 
-    const result = await this.llm.generateStructured({
-      systemPrompt:
-        'You are a school data import assistant. Given a CSV header and masked sample values, propose which EduAI field each column maps to. Supported fields: STUDENT_NAME, EMAIL, GRADE_LEVEL, SECTION. Use UNMAPPED for columns that do not match any field. Respond with JSON only: {"mappings": [{"sourceColumn": "...", "mappedField": "...", "confidence": 0.0}]}.',
-      userPrompt: `Columns (samples are masked placeholders):\n${JSON.stringify(mappingPreview, null, 2)}`,
-      schema: MappingSuggestionSchema,
-    });
+    interface Suggestion {
+      mappedField: ImportableField | 'UNMAPPED';
+      confidence: number;
+    }
+    const suggestionsByColumn = new Map<string, Suggestion>();
 
-    const byColumn = new Map(result.mappings.map((m) => [m.sourceColumn, m]));
+    if (isTemplateHeader(header)) {
+      header.forEach((sourceColumn) => {
+        suggestionsByColumn.set(sourceColumn, {
+          mappedField:
+            TEMPLATE_1_TO_1[sourceColumn.trim().toLowerCase()] ?? 'UNMAPPED',
+          confidence: 1,
+        });
+      });
+    } else {
+      const result = await this.llm.generateStructured({
+        systemPrompt: `You are a school data import assistant. Given a CSV header and masked sample values, propose which EduAI field each column maps to. Supported fields: STUDENT_NAME, FIRST_NAME, LAST_NAME, EMAIL, GRADE_LEVEL, SECTION, GUARDIAN_NAME, GUARDIAN_EMAIL, GUARDIAN_SSN, GUARDIAN_PHONE, GUARDIAN_NATIONALITY. Use UNMAPPED for columns that do not match any field. Respond with JSON only: {"mappings": [{"sourceColumn": "...", "mappedField": "...", "confidence": 0.0}]}.`,
+        userPrompt: `Columns (samples are masked placeholders):\n${JSON.stringify(mappingPreview, null, 2)}`,
+        schema: MappingSuggestionSchema,
+      });
+      for (const m of result.mappings) {
+        if (!suggestionsByColumn.has(m.sourceColumn)) {
+          suggestionsByColumn.set(m.sourceColumn, {
+            mappedField: m.mappedField,
+            confidence: m.confidence,
+          });
+        }
+      }
+    }
 
-    const analyzed = columns.map<AnalyzedColumn>((c) => {
-      const suggestion = byColumn.get(c.sourceColumn);
-      return {
-        sourceColumn: c.sourceColumn,
-        sampleValues: c.sampleValues,
-        suggestedField: suggestion?.mappedField ?? 'UNMAPPED',
-        confidence: suggestion?.confidence ?? 0,
-        masked: c.masked,
-      };
-    });
-
-    return { columns: analyzed, totalRows, maskedColumns };
+    return {
+      columns: columns.map<AnalyzedColumn>((c) => {
+        const suggestion = suggestionsByColumn.get(c.sourceColumn);
+        return {
+          sourceColumn: c.sourceColumn,
+          sampleValues: c.sampleValues,
+          suggestedField: suggestion?.mappedField ?? 'UNMAPPED',
+          confidence: suggestion?.confidence ?? 0,
+          masked: c.masked,
+        };
+      }),
+      totalRows,
+      maskedColumns,
+    };
   }
 
   async importCsv(
@@ -171,17 +320,19 @@ export class MigrationService {
       mappedField: ImportableField | 'UNMAPPED';
     }>,
     organizationId: string,
+    decidedBy?: string,
   ): Promise<ImportResult> {
     const rows = parseCsv(text);
     if (rows.length === 0) {
       throw new ApiError(
-        ErrorCode.CSV_PARSE_ERROR,
+        ErrorCode.CSV_IMPORT_EMPTY,
         HttpStatus.BAD_REQUEST,
         'The CSV file is empty or could not be read.',
       );
     }
 
     const header = rows[0];
+    const isTemplate = isTemplateHeader(header);
     const columnIndex = new Map<string, number>();
     header.forEach((name, index) => {
       if (!columnIndex.has(name)) columnIndex.set(name, index);
@@ -203,6 +354,8 @@ export class MigrationService {
       return (row[index] ?? '').trim();
     };
 
+    const SSN_PATTERN = /^\d{3}[- ]?\d{2}[- ]?\d{4}$/;
+
     const gradeLevels = await this.prisma.gradeLevel.findMany({
       where: { organizationId },
       select: { id: true, name: true, level: true },
@@ -211,60 +364,85 @@ export class MigrationService {
       where: { organizationId },
       select: { id: true, name: true, gradeLevelId: true },
     });
-    const existingEmails = new Set(
-      (
-        await this.prisma.user.findMany({
-          where: { organizationId, role: 'STUDENT' },
-          select: { email: true },
-        })
-      ).map((u) => u.email.toLowerCase()),
-    );
 
     const result: ImportResult = {
-      created: 0,
-      duplicates: 0,
-      errors: [],
-      flagged: [],
+      imported: 0,
+      autoApproved: 0,
+      queued: 0,
+      unassignedGradeOrSection: [],
+      needsFollowUp: [],
+      unmatchedSectionsOrGrades: [],
     };
+
+    type PendingStage = {
+      row: number;
+      email: string;
+      firstName: string;
+      lastName?: string;
+      gradeId?: string;
+      gradeLevelName?: string;
+      sectionId?: string;
+      sectionName?: string;
+      guardianName?: string;
+      guardianEmail?: string;
+      guardianSsnEncrypted?: string;
+      guardianSsnTail4?: string;
+      guardianPhone?: string;
+      guardianNationality?: string;
+    };
+    const pendingStages: PendingStage[] = [];
 
     for (let i = 0; i < rows.length - 1; i++) {
       const row = rows[i + 1];
       const rowNumber = i + 2;
 
-      const name = cell(row, 'STUDENT_NAME');
-      const email = cell(row, 'EMAIL').toLowerCase();
-
-      const missing: string[] = [];
-      if (!name) missing.push('name');
-      if (!email) missing.push('email');
-      if (missing.length > 0) {
-        result.errors.push({
+      if (isTemplate && isTemplateExampleRow(header, row)) {
+        result.needsFollowUp.push({
           row: rowNumber,
-          reason: `Missing required field: ${missing.join(', ')}`,
+          reason: 'Template example row — remove it before importing.',
         });
         continue;
       }
 
-      if (existingEmails.has(email)) {
-        result.duplicates++;
+      const firstName = cell(row, 'FIRST_NAME');
+      const lastName = cell(row, 'LAST_NAME');
+      const singleName = cell(row, 'STUDENT_NAME');
+      const name =
+        singleName || [firstName, lastName].filter(Boolean).join(' ').trim();
+      const email = cell(row, 'EMAIL').toLowerCase();
+
+      if (!name) {
+        result.needsFollowUp.push({
+          row: rowNumber,
+          reason: 'Missing required field: name',
+        });
+        continue;
+      }
+      if (!email) {
+        result.needsFollowUp.push({
+          row: rowNumber,
+          reason:
+            'No email — this student will need to self-register with the school code.',
+        });
         continue;
       }
 
       const gradeValue = cell(row, 'GRADE_LEVEL');
-      let gradeId: string | null = null;
-      let gradeReason: string | null = null;
+      let gradeId: string | undefined;
       if (gradeValue) {
         const match = this.matchGradeLevel(gradeValue, gradeLevels);
         if (match) {
           gradeId = match.id;
         } else {
-          gradeReason = `Grade level "${gradeValue}" not found`;
+          result.unmatchedSectionsOrGrades.push({
+            row: rowNumber,
+            providedValue: gradeValue,
+          });
         }
       }
 
       const sectionValue = cell(row, 'SECTION');
-      let sectionId: string | null = null;
-      let sectionReason: string | null = null;
+      let sectionId: string | undefined;
       if (sectionValue) {
         const match = this.matchSection(
           sectionValue,
@@ -274,34 +452,116 @@ export class MigrationService {
         if (match) {
           sectionId = match.id;
         } else {
-          sectionReason = `Section "${sectionValue}" not found`;
+          result.unmatchedSectionsOrGrades.push({
+            row: rowNumber,
+            providedValue: sectionValue,
+          });
         }
       }
 
-      if (gradeReason || sectionReason) {
-        result.flagged.push({
+      const unassignedReasons = [
+        ...(!gradeId
+          ? gradeValue
+            ? [`Grade level "${gradeValue}" could not be matched`]
+            : ['no grade level provided']
+          : []),
+        ...(!sectionId
+          ? sectionValue
+            ? [`Section "${sectionValue}" could not be matched`]
+            : ['no section provided']
+          : []),
+      ];
+      if (unassignedReasons.length > 0) {
+        result.unassignedGradeOrSection.push({
           row: rowNumber,
-          reason: [gradeReason, sectionReason].filter(Boolean).join(' · '),
+          reason: unassignedReasons.join(' · '),
         });
-        continue;
       }
 
-      const user = await this.prisma.user.create({
-        data: {
-          email,
-          name,
-          role: 'STUDENT',
-          organizationId,
-          ...(gradeId ? { gradeId } : {}),
-        },
-      });
-      if (sectionId) {
-        await this.prisma.enrollment.create({
-          data: { sectionId, studentId: user.id, status: 'APPROVED' },
+      const guardianName = cell(row, 'GUARDIAN_NAME');
+      const guardianEmail = cell(row, 'GUARDIAN_EMAIL').toLowerCase();
+      const guardianSsn = cell(row, 'GUARDIAN_SSN');
+      const guardianPhone = cell(row, 'GUARDIAN_PHONE');
+      const guardianNationality = cell(row, 'GUARDIAN_NATIONALITY');
+
+      const hasGuardianData =
+        guardianName ||
+        guardianEmail ||
+        guardianSsn ||
+        guardianPhone ||
+        guardianNationality;
+
+      // WP2 split-import: incomplete guardian data no longer skips the whole
+      // row. The student is imported (guardian columns dropped) and flagged so
+      // a guardian can be attached later (parent verify invite or admin link).
+      const guardianBlocked =
+        hasGuardianData &&
+        (!guardianName ||
+          !guardianEmail ||
+          !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(guardianEmail));
+      const guardianSsnInvalid = Boolean(
+        guardianSsn && !SSN_PATTERN.test(guardianSsn),
+      );
+      let guardianData: {
+        guardianName: string;
+        guardianEmail: string;
+        guardianSsnEncrypted?: string;
+        guardianSsnTail4?: string;
+        guardianPhone?: string;
+        guardianNationality?: string;
+      } | null = null;
+      if (guardianBlocked) {
+        result.needsFollowUp.push({
+          row: rowNumber,
+          reason:
+            'Guardian data present but missing a valid guardian name + email — student imported without a guardian, provision the parent later.',
         });
+      } else if (guardianSsnInvalid) {
+        result.needsFollowUp.push({
+          row: rowNumber,
+          reason: `Guardian SSN "${guardianSsn}" is not a valid 9-digit SSN — student imported without a guardian, provision the parent later.`,
+        });
+      } else if (hasGuardianData) {
+        guardianData = {
+          guardianName,
+          guardianEmail,
+          ...(guardianSsn
+            ? {
+                guardianSsnEncrypted: encryptSsn(guardianSsn),
+                guardianSsnTail4: ssnTail4(guardianSsn),
+              }
+            : {}),
+          ...(guardianPhone ? { guardianPhone } : {}),
+          ...(guardianNationality ? { guardianNationality } : {}),
+        };
       }
-      existingEmails.add(email);
-      result.created++;
+
+      pendingStages.push({
+        row: rowNumber,
+        email,
+        firstName: singleName || firstName,
+        ...(singleName ? {} : lastName ? { lastName } : {}),
+        ...(gradeId ? { gradeId } : {}),
+        ...(gradeValue ? { gradeLevelName: gradeValue } : {}),
+        ...(sectionId ? { sectionId } : {}),
+        ...(sectionValue ? { sectionName: sectionValue } : {}),
+        ...(guardianData ?? {}),
+      });
+    }
+
+    if (pendingStages.length > 0) {
+      // WP2: migration imports auto-approve complete rows (no admin click).
+      // An admin id is required for the "decided by" audit trail.
+      const autoApprove = Boolean(decidedBy);
+      const staged = await this.joinRequests.stageRoster(
+        organizationId,
+        pendingStages,
+        autoApprove ? { autoApprove, decidedBy } : undefined,
+      );
+      result.imported = staged.staged;
+      result.autoApproved = autoApprove ? staged.staged : 0;
+      result.queued = staged.queued;
+      result.needsFollowUp.push(...staged.notStaged);
     }
 
     return result;
@@ -349,4 +609,10 @@ export class MigrationService {
     if (best && best.score >= 0.75) return best;
     return null;
   }
+}
+
+export interface AnalyzeResult {
+  columns: AnalyzedColumn[];
+  totalRows: number;
+  maskedColumns: string[];
 }

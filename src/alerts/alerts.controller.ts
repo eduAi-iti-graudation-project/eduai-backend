@@ -38,6 +38,16 @@ export class AlertsController {
     return this.alertsService.getTeacherDetail(id, organizationId);
   }
 
+  @Get(':id/guardian-detail')
+  @Roles('GUARDIAN')
+  @ApiOperation({ summary: 'Get guardian-facing alert content for a child' })
+  getGuardianDetail(
+    @Param('id') id: string,
+    @CurrentUser('id') guardianId: string,
+  ) {
+    return this.alertsService.getGuardianDetail(id, guardianId);
+  }
+
   @Patch(':id')
   @Roles('TEACHER', 'ADMIN')
   @ApiOperation({ summary: 'Resolve or dismiss an alert' })

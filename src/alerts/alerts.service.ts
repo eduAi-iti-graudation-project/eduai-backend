@@ -105,12 +105,62 @@ export class AlertsService {
         'The analysis for this alert could not be found.',
       );
 
+    const recommendations = await this.prisma.studyGeneration.findMany({
+      where: { recommendedForAnalysisId: analysis.id },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        topic: true,
+        status: true,
+        stage: true,
+        error: true,
+        createdAt: true,
+      },
+    });
+
     return {
       diagnosis: analysis.diagnosis,
       teacherContent: analysis.teacherContent,
       guardianContent: analysis.guardianContent,
       teacherFeedback: analysis.teacherFeedback,
       managementSummary: analysis.managementSummary,
+      recommendations: recommendations.map((r) => ({
+        id: r.id,
+        topic: r.topic,
+        status: r.status,
+        stage: r.stage,
+        error: r.error,
+        createdAt: r.createdAt.toISOString(),
+      })),
+    };
+  }
+
+  async getGuardianDetail(id: string, guardianId: string) {
+    const analysis = await this.prisma.studentAnalysis.findFirst({
+      where: {
+        alertId: id,
+        alert: { student: { guardianId } },
+      },
+      include: {
+        alert: {
+          include: { student: { select: { id: true, name: true } } },
+        },
+      },
+    });
+    if (!analysis || !analysis.alert)
+      throw new ApiError(
+        ErrorCode.ALERT_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'The analysis for this alert could not be found.',
+      );
+
+    const diagnosis = analysis.diagnosis as
+      { summary?: string | null } | undefined;
+    return {
+      studentId: analysis.alert.student.id,
+      studentName: analysis.alert.student.name,
+      diagnosis: { summary: diagnosis?.summary ?? null },
+      guardianContent: analysis.guardianContent,
     };
   }
 }

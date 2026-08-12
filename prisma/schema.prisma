@@ -89,10 +89,34 @@ enum EnrollmentStatus {
   REJECTED
 }
 
+enum JoinRequestSource {
+  ROSTER
+  SELF
+}
+
+enum JoinRequestKind {
+  STUDENT
+  GUARDIAN
+}
+
+enum JoinRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 enum QuizStatus {
   DRAFT
   PUBLISHED
   CLOSED
+}
+
+enum LabStatus {
+  GENERATING
+  AI_REVIEW_FAILED
+  PENDING_TEACHER_REVIEW
+  PUBLISHED
+  REJECTED
 }
 
 enum QuestionType {
@@ -126,6 +150,11 @@ model Organization {
   id                   String             @id @default(uuid()) @db.Uuid
   name                 String
   joinCode             String             @unique
+  // Login identity domain for school-provisioned accounts (students/guardians).
+  // Derived at creation as slugify(name) + ".org"; editable by admins.
+  emailDomain          String?
+  groupId              String?            @db.Uuid
+  group                SchoolGroup?       @relation(fields: [groupId], references: [id], onDelete: SetNull)
   stripeCustomerId     String?            @unique
   stripeSubscriptionId String?            @unique
   subscriptionTier     SubscriptionTier   @default(TRIAL)
@@ -143,8 +172,25 @@ model Organization {
   subscriptionEvents SubscriptionEvent[]
   membershipRequests MembershipRequest[]
   studentDocuments   StudentDocument[]
+  joinRequests       JoinRequest[]
 
+  @@index([groupId])
   @@map("organizations")
+}
+
+model SchoolGroup {
+  id                   String             @id @default(uuid()) @db.Uuid
+  name                 String
+  stripeCustomerId     String?            @unique
+  stripeSubscriptionId String?            @unique
+  subscriptionTier     SubscriptionTier   @default(TRIAL)
+  subscriptionStatus   SubscriptionStatus @default(TRIALING)
+  seatLimit            Int?
+  createdAt            DateTime           @default(now())
+
+  organizations Organization[]
+
+  @@map("school_groups")
 }
 
 model MembershipRequest {
@@ -156,12 +202,118 @@ model MembershipRequest {
   status         EnrollmentStatus @default(PENDING)
   gradeLevel     Int?
   authId         String?
+  photoUrl       String?
+  ssnEncrypted   String?
+  ssnTail4       String?
+  phone          String?
+  street         String?
+  city           String?
+  nationality    String?
+  personalEmail  String?
+  dateOfBirth    DateTime?
+  emergencyContactName         String?
+  emergencyContactPhone        String?
+  emergencyContactRelationship  String?
   createdAt      DateTime         @default(now())
   resolvedAt     DateTime?
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@map("membership_requests")
+}
+
+model TeacherProfile {
+  id                          String    @id @default(uuid()) @db.Uuid
+  teacherId                   String    @unique @db.Uuid
+  ssnEncrypted                String?
+  ssnTail4                    String?
+  phone                       String?
+  street                      String?
+  city                        String?
+  nationality                 String?
+  personalEmail               String?
+  dateOfBirth                 DateTime?
+  emergencyContactName        String?
+  emergencyContactPhone       String?
+  emergencyContactRelationship String?
+  createdAt                   DateTime  @default(now())
+  updatedAt                   DateTime  @updatedAt
+
+  teacher User @relation("TeacherProfile", fields: [teacherId], references: [id], onDelete: Cascade)
+
+  @@map("teacher_profiles")
+}
+
+model GuardianProfile {
+  id                          String    @id @default(uuid()) @db.Uuid
+  guardianId                  String    @unique @db.Uuid
+  ssnEncrypted                String?
+  ssnTail4                    String?
+  phone                       String?
+  street                      String?
+  city                        String?
+  nationality                 String?
+  personalEmail               String?
+  dateOfBirth                 DateTime?
+  emergencyContactName        String?
+  emergencyContactPhone       String?
+  emergencyContactRelationship String?
+  profileComplete             Boolean   @default(false)
+  createdAt                   DateTime  @default(now())
+  updatedAt                   DateTime  @updatedAt
+
+  guardian User @relation("GuardianProfile", fields: [guardianId], references: [id], onDelete: Cascade)
+
+  @@map("guardian_profiles")
+}
+
+model JoinRequest {
+  id             String            @id @default(uuid()) @db.Uuid
+  organizationId String            @db.Uuid
+  source         JoinRequestSource
+  kind           JoinRequestKind   @default(STUDENT)
+  status         JoinRequestStatus @default(PENDING)
+  email          String
+  name           String
+  authId         String?           @unique
+  gradeId        String?           @db.Uuid
+  gradeLevelName String?
+  sectionId      String?           @db.Uuid
+  sectionName    String?
+  decidedById    String?           @db.Uuid
+  decidedAt      DateTime?
+  note           String?
+  appliedAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  // The applicant's chosen password, encrypted — kept as the school login
+  // password when the account is provisioned with a school email on approval.
+  chosenPasswordEncrypted String?
+  // GUARDIAN-kind requests: the child's school email to link on approval.
+  targetStudentEmail       String?
+
+  guardianName                String?
+  guardianEmail               String?
+  guardianSsnEncrypted        String?
+  guardianSsnTail4            String?
+  guardianPhone               String?
+  guardianNationality         String?
+  guardianStreet              String?
+  guardianCity                String?
+  guardianDateOfBirth         DateTime?
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  grade        GradeLevel?   @relation(fields: [gradeId], references: [id])
+  section      Section?      @relation(fields: [sectionId], references: [id])
+  decidedBy    User?         @relation("JoinRequestDecidedBy", fields: [decidedById], references: [id])
+  // Set on approval: links the row to the provisioned user, so credential
+  // recovery ("resend") can resolve the real inbox back to the account.
+  user         User?         @relation("JoinRequestUser", fields: [userId], references: [id], onDelete: SetNull)
+  userId       String?       @db.Uuid
+
+  @@index([organizationId, status])
+  @@index([organizationId, email])
+  @@index([userId])
+  @@map("join_requests")
 }
 
 model SubscriptionEvent {
@@ -189,6 +341,7 @@ model GradeLevel {
   students     User[]
   sections     Section[]
   courses      Course[]
+  joinRequests JoinRequest[]
 
   @@unique([organizationId, level])
   @@index([organizationId])
@@ -204,11 +357,12 @@ model Section {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  organization Organization @relation(fields: [organizationId], references: [id])
+  organization Organization     @relation(fields: [organizationId], references: [id])
   gradeLevel   GradeLevel       @relation(fields: [gradeLevelId], references: [id], onDelete: Cascade)
   enrollments  Enrollment[]
   attendance   Attendance[]
   offerings    CourseOffering[]
+  joinRequests JoinRequest[]
 
   @@unique([organizationId, gradeLevelId, name])
   @@index([organizationId])
@@ -221,12 +375,15 @@ model Course {
   gradeLevelId   String   @db.Uuid
   name           String
   description    String?
+  colorTag       String
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  organization Organization @relation(fields: [organizationId], references: [id])
+  organization Organization     @relation(fields: [organizationId], references: [id])
   gradeLevel   GradeLevel       @relation(fields: [gradeLevelId], references: [id], onDelete: Cascade)
   offerings    CourseOffering[]
+  materials    Material[]
+  chapters     MaterialChapter[]
 
   @@unique([organizationId, gradeLevelId, name])
   @@index([organizationId])
@@ -242,23 +399,220 @@ model CourseOffering {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  organization Organization @relation(fields: [organizationId], references: [id])
-  course        Course                   @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  section       Section                  @relation(fields: [sectionId], references: [id], onDelete: Cascade)
-  teacher       User                     @relation("CourseOfferingTeacher", fields: [teacherId], references: [id])
-  assignments   Assignment[]
-  materials     Material[]
-  quizzes       Quiz[]
-  alerts        Alert[]
-  chatThreads   ChatThread[]
-  teacherLogs   ClassTeacherLog[]
-  analyses      StudentAnalysis[]
-  homeworkHelp  HomeworkHelpInteraction[]
+  organization     Organization              @relation(fields: [organizationId], references: [id])
+  course           Course                    @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  section          Section                   @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  teacher          User                      @relation("CourseOfferingTeacher", fields: [teacherId], references: [id])
+  assignments      Assignment[]
+  materials        Material[]
+  chapters         MaterialChapter[]
+  quizzes          Quiz[]
+  alerts           Alert[]
+  chatThreads      ChatThread[]
+  teacherLogs      ClassTeacherLog[]
+  analyses         StudentAnalysis[]
+  homeworkHelp     HomeworkHelpInteraction[]
+  timetableSlots   TimetableSlot[]
+  studyGenerations StudyGeneration[]
+  meetings         Meeting[]
+  labs             Lab[]
 
   @@unique([courseId, sectionId])
   @@index([organizationId])
   @@index([teacherId])
   @@map("course_offerings")
+}
+
+model Meeting {
+  id                            String           @id @default(uuid()) @db.Uuid
+  organizationId                String           @db.Uuid
+  title                         String
+  type                          MeetingType
+  courseOfferingId              String?          @db.Uuid
+  createdBy                     String           @db.Uuid
+  scheduledStart                DateTime
+  scheduledEnd                  DateTime
+  status                        MeetingStatus    @default(SCHEDULED)
+  roomName                      String           @unique
+  recordingEnabled              Boolean          @default(false)
+  recordingUrl                  String?
+  recordingEgressId             String?
+  transcriptStatus              TranscriptStatus @default(PENDING)
+  // Per-participant track transcriptions still in flight; struggle-signal
+  // extraction runs once this reaches 0 after a recorded meeting.
+  pendingParticipantTranscripts Int              @default(0)
+  // True once struggle-signal extraction has run for this meeting (one-shot).
+  struggleSignalsProcessed      Boolean          @default(false)
+  createdAt                     DateTime         @default(now())
+
+  courseOffering     CourseOffering?            @relation(fields: [courseOfferingId], references: [id], onDelete: Cascade)
+  createdByUser      User                       @relation("MeetingHost", fields: [createdBy], references: [id])
+  participants       MeetingParticipant[]
+  attendance         MeetingAttendance[]
+  chatMessages       MeetingChatMessage[]
+  transcripts        MeetingTranscript[]
+  transcriptSegments MeetingTranscriptSegment[]
+  struggleSignals    StruggleSignal[]
+
+  @@index([organizationId])
+  @@index([courseOfferingId])
+  @@index([createdBy])
+  @@index([scheduledStart])
+  @@map("meetings")
+}
+
+model MeetingParticipant {
+  id        String @id @default(uuid()) @db.Uuid
+  meetingId String @db.Uuid
+  userId    String @db.Uuid
+
+  meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([meetingId, userId])
+  @@index([userId])
+  @@map("meeting_participants")
+}
+
+model MeetingAttendance {
+  id        String    @id @default(uuid()) @db.Uuid
+  meetingId String    @db.Uuid
+  userId    String    @db.Uuid
+  joinedAt  DateTime  @default(now())
+  leftAt    DateTime?
+
+  meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([meetingId])
+  @@index([userId])
+  @@map("meeting_attendance")
+}
+
+model MeetingChatMessage {
+  id        String   @id @default(uuid()) @db.Uuid
+  meetingId String   @db.Uuid
+  userId    String   @db.Uuid
+  text      String
+  createdAt DateTime @default(now())
+
+  meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([meetingId, createdAt])
+  @@map("meeting_chat_messages")
+}
+
+model MeetingTranscript {
+  id        String @id @default(uuid()) @db.Uuid
+  meetingId String @db.Uuid
+  order     Int
+  startMs   Int
+  endMs     Int
+  text      String
+
+  meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+
+  @@index([meetingId])
+  @@map("meeting_transcripts")
+}
+
+/**
+ * Per-participant transcript segment: produced from each participant's own
+ * audio track (per-track egress), so speaker attribution is deterministic —
+ * the userId comes from that participant's join token, never from AI
+ * speaker diarization.
+ */
+model MeetingTranscriptSegment {
+  id        String   @id @default(uuid()) @db.Uuid
+  meetingId String   @db.Uuid
+  userId    String   @db.Uuid
+  text      String   @db.Text
+  // Seconds from meeting start (Whisper timestamps on the participant's track).
+  timestamp Int
+  // The role of the user at the time of the meeting.
+  role      UserRole
+
+  meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([meetingId])
+  @@index([userId, meetingId])
+  @@map("meeting_transcript_segments")
+}
+
+/**
+ * A teacher-reviewable, per-student note about a concept a student seemed
+ * confused about during a recorded meeting. Extracted from the redacted
+ * per-participant transcript; only dispatched to the student when a teacher
+ * explicitly sends it (status PENDING -> SENT), or dismissed (DISMISSED).
+ */
+model StruggleSignal {
+  id            String   @id @default(uuid()) @db.Uuid
+  meetingId     String   @db.Uuid
+  studentId     String   @db.Uuid
+  concept       String
+  explanation   String   @db.Text
+  status        String   @default("PENDING") // PENDING / SENT / DISMISSED
+  // True when >= 3 students shared fuzzy-matched concepts (class-wide note).
+  classWide     Boolean  @default(false)
+  quizId        String?  @db.Uuid
+  interactionId String?  @db.Uuid
+  createdAt     DateTime @default(now())
+
+  meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  student User    @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@index([meetingId, status])
+  @@index([studentId])
+  @@map("struggle_signals")
+}
+
+model TimetableSlot {
+  id               String    @id @default(uuid()) @db.Uuid
+  courseOfferingId String    @db.Uuid
+  organizationId   String    @db.Uuid
+  dayOfWeek        DayOfWeek
+  startTime        DateTime  @db.Time
+  endTime          DateTime  @db.Time
+  room             String?
+  createdAt        DateTime  @default(now())
+
+  courseOffering CourseOffering @relation(fields: [courseOfferingId], references: [id], onDelete: Cascade)
+
+  @@index([courseOfferingId])
+  @@index([organizationId, dayOfWeek])
+  @@index([courseOfferingId, dayOfWeek])
+  @@map("timetable_slots")
+}
+
+enum DayOfWeek {
+  MONDAY
+  TUESDAY
+  WEDNESDAY
+  THURSDAY
+  FRIDAY
+  SATURDAY
+  SUNDAY
+}
+
+enum MeetingType {
+  CLASS
+  AD_HOC
+}
+
+enum MeetingStatus {
+  SCHEDULED
+  LIVE
+  ENDED
+  CANCELED
+}
+
+enum TranscriptStatus {
+  PENDING
+  PROCESSING
+  READY
+  FAILED
 }
 
 model User {
@@ -271,36 +625,61 @@ model User {
   guardianId     String?  @db.Uuid
   organizationId String   @db.Uuid
   gender         Gender?
+  avatarUrl      String?
+  // AES-256-GCM of the generated school credential (key CREDENTIALS_ENCRYPTION_KEY).
+  // School mailboxes are not real, so this is the recovery path for "resend".
+  credentialEncrypted String?
+  // One-time reveal flow: verify-by-token then reveal credentials once.
+  verifyToken          String?   @unique
+  verifyTokenExpiresAt DateTime?
+  emailVerifiedAt      DateTime?
+  // Self-service password reset for school accounts: a self-issued token
+  // delivered to the verified real inbox (school mailboxes don't exist, so
+  // Supabase reset links can never arrive).
+  resetToken          String?   @unique
+  resetTokenExpiresAt DateTime?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  grade                    GradeLevel?               @relation(fields: [gradeId], references: [id])
-  organization             Organization              @relation(fields: [organizationId], references: [id])
-  teacherOfferings         CourseOffering[]          @relation("CourseOfferingTeacher")
-  teacherQuizzes           Quiz[]                    @relation("TeacherQuizzes")
-  enrollments              Enrollment[]
-  submissions              Submission[]
-  quizAttempts             QuizAttempt[]
-  alerts                   Alert[]
-  analyses                 StudentAnalysis[]
-  notifications            Notification[]
-  reports                  StudentReport[]
-  deviceTokens             DeviceToken[]
-  attendance               Attendance[]
-  homeworkHelpInteractions HomeworkHelpInteraction[]
-  guardian                 User?                     @relation("GuardianWards", fields: [guardianId], references: [id])
-  wards                    User[]                    @relation("GuardianWards")
-  threadsAsTeacher         ChatThread[]              @relation("ThreadTeacher")
-  threadsAsStudent         ChatThread[]              @relation("ThreadStudent")
-  chatMessages             ChatMessage[]
-  documents                StudentDocument[]         @relation("StudentDocuments")
-  uploadedDocuments        StudentDocument[]         @relation("DocumentsUploadedBy")
-  aiSuggestedDocuments     StudentDocument[]         @relation("DocumentsAiSuggestedStudent")
-  feePayments              FeePayment[]
-  classTeacherLogs         ClassTeacherLog[]         @relation("TeacherClassLogs")
-  teacherDocuments         TeacherDocument[]         @relation("TeacherDocuments")
-  uploadedTeacherDocuments TeacherDocument[]         @relation("TeacherDocumentsUploadedBy")
-  salaryRecords            SalaryRecord[]
+grade                     GradeLevel?                @relation(fields: [gradeId], references: [id])
+  organization              Organization               @relation(fields: [organizationId], references: [id])
+  teacherProfile            TeacherProfile?            @relation("TeacherProfile")
+  guardianProfile           GuardianProfile?           @relation("GuardianProfile")
+  teacherOfferings          CourseOffering[]           @relation("CourseOfferingTeacher")
+  teacherQuizzes            Quiz[]                     @relation("TeacherQuizzes")
+  assignedQuizzes           Quiz[]                     @relation("StudentAssignedQuizzes")
+  enrollments               Enrollment[]
+  submissions               Submission[]
+  quizAttempts              QuizAttempt[]
+  alerts                    Alert[]
+  analyses                  StudentAnalysis[]
+  notifications             Notification[]
+  reports                   StudentReport[]
+  deviceTokens              DeviceToken[]
+  attendance                Attendance[]
+  homeworkHelpInteractions  HomeworkHelpInteraction[]
+  studyGenerations          StudyGeneration[]
+  guardian                  User?                      @relation("GuardianWards", fields: [guardianId], references: [id])
+  wards                     User[]                     @relation("GuardianWards")
+  threadsAsTeacher          ChatThread[]               @relation("ThreadTeacher")
+  threadsAsStudent          ChatThread[]               @relation("ThreadStudent")
+  chatMessages              ChatMessage[]
+  documents                 StudentDocument[]          @relation("StudentDocuments")
+  uploadedDocuments         StudentDocument[]          @relation("DocumentsUploadedBy")
+  aiSuggestedDocuments      StudentDocument[]          @relation("DocumentsAiSuggestedStudent")
+  feePayments               FeePayment[]
+  classTeacherLogs          ClassTeacherLog[]          @relation("TeacherClassLogs")
+  teacherDocuments          TeacherDocument[]          @relation("TeacherDocuments")
+  uploadedTeacherDocuments  TeacherDocument[]          @relation("TeacherDocumentsUploadedBy")
+  salaryRecords             SalaryRecord[]
+  meetingsHosted            Meeting[]                  @relation("MeetingHost")
+  meetingParticipants       MeetingParticipant[]
+  meetingAttendance         MeetingAttendance[]
+  meetingChatMessages       MeetingChatMessage[]
+  meetingTranscriptSegments MeetingTranscriptSegment[]
+  struggleSignals           StruggleSignal[]
+  joinRequestsDecided       JoinRequest[]              @relation("JoinRequestDecidedBy")
+  joinRequestsCreated       JoinRequest[]              @relation("JoinRequestUser")
 
   @@index([organizationId])
   @@map("users")
@@ -339,17 +718,26 @@ model Attendance {
 }
 
 model Material {
-  id              String   @id @default(uuid()) @db.Uuid
-  title           String
-  fileUrl         String?
+  id               String   @id @default(uuid()) @db.Uuid
+  title            String
+  fileUrl          String?
   courseOfferingId String   @db.Uuid
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  courseId         String?  @db.Uuid
+  assignmentId     String?  @db.Uuid
+  chapterId        String?  @db.Uuid
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
   // Relations
-  offering CourseOffering @relation(fields: [courseOfferingId], references: [id], onDelete: Cascade)
-  chunks   MaterialChunk[]
+  offering   CourseOffering      @relation(fields: [courseOfferingId], references: [id], onDelete: Cascade)
+  course     Course?             @relation(fields: [courseId], references: [id], onDelete: SetNull)
+  assignment Assignment?         @relation(fields: [assignmentId], references: [id], onDelete: SetNull)
+  chapter    MaterialChapter?    @relation(fields: [chapterId], references: [id], onDelete: SetNull)
+  chunks     MaterialChunk[]
 
+  @@index([assignmentId])
+  @@index([chapterId])
+  @@index([courseId])
   @@map("materials")
 }
 
@@ -366,6 +754,25 @@ model MaterialChunk {
   @@map("material_chunks")
 }
 
+model MaterialChapter {
+  id               String   @id @default(uuid()) @db.Uuid
+  courseOfferingId String?  @db.Uuid
+  courseId         String?  @db.Uuid
+  title            String
+  order            Int      @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  // Relations
+  offering  CourseOffering? @relation(fields: [courseOfferingId], references: [id], onDelete: Cascade)
+  course    Course?         @relation(fields: [courseId], references: [id], onDelete: SetNull)
+  materials Material[]
+
+  @@index([courseOfferingId, order])
+  @@index([courseId, order])
+  @@map("material_chapters")
+}
+
 model Assignment {
   id               String   @id @default(uuid()) @db.Uuid
   title            String
@@ -377,9 +784,10 @@ model Assignment {
   updatedAt        DateTime @updatedAt
 
   // Relations
-  offering  CourseOffering @relation(fields: [courseOfferingId], references: [id], onDelete: Cascade)
-  rubrics   Rubric[]
+  offering    CourseOffering @relation(fields: [courseOfferingId], references: [id], onDelete: Cascade)
+  rubrics     Rubric[]
   submissions Submission[]
+  materials   Material[]
 
   @@map("assignments")
 }
@@ -467,19 +875,19 @@ model GradingScore {
 }
 
 model Alert {
-  id              String      @id @default(uuid()) @db.Uuid
-  type            String
-  reason          String
-  status          AlertStatus @default(ACTIVE)
-  studentId       String      @db.Uuid
-  courseOfferingId String?    @db.Uuid
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
+  id               String      @id @default(uuid()) @db.Uuid
+  type             String
+  reason           String
+  status           AlertStatus @default(ACTIVE)
+  studentId        String      @db.Uuid
+  courseOfferingId String?     @db.Uuid
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
 
-  student     User              @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  offering    CourseOffering?   @relation(fields: [courseOfferingId], references: [id])
-  reports     StudentReport[]
-  analyses    StudentAnalysis[]
+  student  User              @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  offering CourseOffering?   @relation(fields: [courseOfferingId], references: [id])
+  reports  StudentReport[]
+  analyses StudentAnalysis[]
 
   @@map("alerts")
 }
@@ -497,9 +905,10 @@ model StudentAnalysis {
   managementSummary Json?
   createdAt         DateTime @default(now())
 
-  student User   @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  alert   Alert? @relation(fields: [alertId], references: [id])
-  offering CourseOffering? @relation(fields: [courseOfferingId], references: [id])
+  student  User              @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  alert    Alert?            @relation(fields: [alertId], references: [id])
+  offering CourseOffering?   @relation(fields: [courseOfferingId], references: [id])
+  practiceRecommendations StudyGeneration[]
 
   @@map("student_analyses")
 }
@@ -536,23 +945,49 @@ model StudentReport {
 }
 
 model Quiz {
-  id          String     @id @default(uuid()) @db.Uuid
-  title       String
-  description String?
-  courseOfferingId String  @db.Uuid
-  teacherId   String     @db.Uuid
-  timeLimit   Int?
-  passingScore Int?
-  status      QuizStatus @default(DRAFT)
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  id               String     @id @default(uuid()) @db.Uuid
+  title            String
+  description      String?
+  courseOfferingId String     @db.Uuid
+  teacherId        String     @db.Uuid
+  // When set, this quiz was generated for one specific student (e.g. a
+  // post-meeting follow-up), and is only visible to that student.
+  studentId        String?    @db.Uuid
+  timeLimit        Int?
+  passingScore     Int?
+  status           QuizStatus @default(DRAFT)
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
 
   offering  CourseOffering @relation(fields: [courseOfferingId], references: [id], onDelete: Cascade)
   teacher   User           @relation("TeacherQuizzes", fields: [teacherId], references: [id], onDelete: Cascade)
+  student   User?          @relation("StudentAssignedQuizzes", fields: [studentId], references: [id], onDelete: Cascade)
   questions QuizQuestion[]
   attempts  QuizAttempt[]
 
+  @@index([studentId])
   @@map("quizzes")
+}
+
+model Lab {
+  id               String    @id @default(uuid()) @db.Uuid
+  organizationId   String    @db.Uuid
+  courseOfferingId String    @db.Uuid
+  createdBy        String    @db.Uuid
+  topic            String
+  status           LabStatus @default(GENERATING)
+  generatedCode    String?   @db.Text
+  reviewApproved   Boolean?
+  reviewFlags      Json?
+  teacherNotes     String?   @db.Text
+  publishedAt      DateTime?
+  createdAt        DateTime  @default(now())
+
+  courseOffering CourseOffering @relation(fields: [courseOfferingId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([courseOfferingId])
+  @@map("labs")
 }
 
 model QuizQuestion {
@@ -631,10 +1066,38 @@ model HomeworkHelpInteraction {
   feedback         String?
   createdAt        DateTime @default(now())
 
-  student User           @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  student  User           @relation(fields: [studentId], references: [id], onDelete: Cascade)
   offering CourseOffering @relation(fields: [courseOfferingId], references: [id], onDelete: Cascade)
 
   @@map("homework_help_interactions")
+}
+
+model StudyGeneration {
+  id                     String   @id @default(uuid()) @db.Uuid
+  studentId              String   @db.Uuid
+  courseOfferingId       String   @db.Uuid
+  kind                   String
+  materialKind           String?
+  preset                 String?
+  topic                  String
+  status                 String   @default("PROCESSING")
+  stage                  String   @default("QUEUED")
+  error                  String?
+  sources                Json     @default("[]")
+  payload                Json?
+  audioUrl               String?
+  fileUrl                String?
+  durationSeconds        Int?
+  recommendedForAnalysisId String? @db.Uuid
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  student  User            @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  offering CourseOffering  @relation(fields: [courseOfferingId], references: [id], onDelete: Cascade)
+  recommendedFor StudentAnalysis? @relation(fields: [recommendedForAnalysisId], references: [id], onDelete: SetNull)
+
+  @@index([studentId, createdAt(sort: Desc)])
+  @@index([recommendedForAnalysisId])
 }
 
 model ChatThread {
@@ -645,8 +1108,8 @@ model ChatThread {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  teacher  User          @relation("ThreadTeacher", fields: [teacherId], references: [id], onDelete: Cascade)
-  student  User          @relation("ThreadStudent", fields: [studentId], references: [id], onDelete: Cascade)
+  teacher  User           @relation("ThreadTeacher", fields: [teacherId], references: [id], onDelete: Cascade)
+  student  User           @relation("ThreadStudent", fields: [studentId], references: [id], onDelete: Cascade)
   offering CourseOffering @relation(fields: [courseOfferingId], references: [id], onDelete: Cascade)
   messages ChatMessage[]
 
@@ -761,16 +1224,16 @@ model TeacherDocument {
 }
 
 model SalaryRecord {
-  id           String       @id @default(uuid()) @db.Uuid
-  teacherId    String       @db.Uuid
-  period       String
-  amount       Decimal      @db.Decimal(12, 2)
-  amountPaid   Decimal?     @db.Decimal(12, 2)
-  status       SalaryStatus @default(UNPAID)
-  body         String?
-  paidAt       DateTime?
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
+  id         String       @id @default(uuid()) @db.Uuid
+  teacherId  String       @db.Uuid
+  period     String
+  amount     Decimal      @db.Decimal(12, 2)
+  amountPaid Decimal?     @db.Decimal(12, 2)
+  status     SalaryStatus @default(UNPAID)
+  body       String?
+  paidAt     DateTime?
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
 
   teacher User @relation(fields: [teacherId], references: [id], onDelete: Cascade)
 

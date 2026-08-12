@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import type { User } from '@prisma/client';
 import { ReportsService } from './reports.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { LlmService } from '../common/llm/llm.service';
@@ -13,13 +14,37 @@ describe('ReportsService', () => {
     studentReport: {
       create: jest.fn(),
       findMany: jest.fn(),
-      findUnique: jest.fn(),
+      findFirst: jest.fn(),
     },
   };
 
   const mockLlmService = {
     generateStructured: jest.fn(),
   };
+
+  const userRow = (id: string, role: User['role']): User => ({
+    id,
+    authId: `${id}-auth`,
+    email: `${id}@eduai.test`,
+    name: id,
+    role,
+    gradeId: null,
+    guardianId: null,
+    organizationId: 'org-1',
+    gender: null,
+    avatarUrl: null,
+    createdAt: new Date('2026-01-01'),
+    updatedAt: new Date('2026-01-01'),
+    credentialEncrypted: null,
+    verifyToken: null,
+    verifyTokenExpiresAt: null,
+    emailVerifiedAt: null,
+    resetToken: null,
+    resetTokenExpiresAt: null,
+  });
+  const teacher = userRow('teacher-1', 'TEACHER');
+  const student = userRow('student-1', 'STUDENT');
+  const guardian = userRow('guardian-1', 'GUARDIAN');
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -104,6 +129,76 @@ describe('ReportsService', () => {
       await expect(
         service.generate('student-id', 'bad-alert-id'),
       ).rejects.toMatchObject({ code: 'ALERT_NOT_FOUND' });
+    });
+  });
+
+  describe('findAll', () => {
+    it('scopes a student to their own reports', async () => {
+      mockPrisma.studentReport.findMany.mockResolvedValue([]);
+
+      await service.findAll(student);
+
+      expect(mockPrisma.studentReport.findMany).toHaveBeenCalledWith({
+        where: { studentId: 'student-1' },
+        orderBy: { createdAt: 'desc' },
+      });
+    });
+
+    it('scopes a guardian to their linked children', async () => {
+      mockPrisma.studentReport.findMany.mockResolvedValue([]);
+
+      await service.findAll(guardian);
+
+      expect(mockPrisma.studentReport.findMany).toHaveBeenCalledWith({
+        where: { student: { guardianId: 'guardian-1' } },
+        orderBy: { createdAt: 'desc' },
+      });
+    });
+
+    it('scopes a guardian to a specific child', async () => {
+      mockPrisma.studentReport.findMany.mockResolvedValue([]);
+
+      await service.findAll(guardian, 'child-1');
+
+      expect(mockPrisma.studentReport.findMany).toHaveBeenCalledWith({
+        where: { student: { id: 'child-1', guardianId: 'guardian-1' } },
+        orderBy: { createdAt: 'desc' },
+      });
+    });
+
+    it('scopes a teacher to their organization', async () => {
+      mockPrisma.studentReport.findMany.mockResolvedValue([]);
+
+      await service.findAll(teacher, 'some-student');
+
+      expect(mockPrisma.studentReport.findMany).toHaveBeenCalledWith({
+        where: {
+          student: { id: 'some-student', organizationId: 'org-1' },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+    });
+  });
+
+  describe('findOne', () => {
+    it('returns the report when accessible', async () => {
+      const report = { id: 'r1', studentId: 'student-1' };
+      mockPrisma.studentReport.findFirst.mockResolvedValue(report);
+
+      const result = await service.findOne('r1', student);
+
+      expect(result).toEqual(report);
+      expect(mockPrisma.studentReport.findFirst).toHaveBeenCalledWith({
+        where: { id: 'r1', studentId: 'student-1' },
+      });
+    });
+
+    it('throws REPORT_NOT_FOUND for inaccessible reports', async () => {
+      mockPrisma.studentReport.findFirst.mockResolvedValue(null);
+
+      await expect(service.findOne('r1', student)).rejects.toMatchObject({
+        code: 'REPORT_NOT_FOUND',
+      });
     });
   });
 });

@@ -12,6 +12,7 @@ export class ProviderService {
   private readonly baseUrl: string;
   private readonly apiKey: string;
   private readonly chatModel: string;
+  private readonly maxTokens: number;
   private readonly hfToken: string;
   private readonly hfEmbedModel: string;
 
@@ -19,6 +20,8 @@ export class ProviderService {
     this.baseUrl = process.env.CUSTOM_PROVIDER_BASE_URL!.replace(/\/+$/, '');
     this.apiKey = process.env.OPENAI_API_KEY!;
     this.chatModel = process.env.CUSTOM_CHAT_MODEL || 'openai.gpt-oss-20b-1:0';
+    // Generators emit long artifacts (lab sim code, JSON), so default high.
+    this.maxTokens = Number(process.env.CUSTOM_CHAT_MAX_TOKENS) || 8192;
     this.hfToken = process.env.HF_TOKEN || '';
     this.hfEmbedModel =
       process.env.HF_EMBED_MODEL || 'mixedbread-ai/mxbai-embed-large-v1';
@@ -33,7 +36,7 @@ export class ProviderService {
           text: `${systemPrompt}\n\n${userPrompt}`,
         },
       ],
-      max_tokens: 2048,
+      max_tokens: this.maxTokens,
     };
 
     console.log('[ProviderService] request:', JSON.stringify(body, null, 2));

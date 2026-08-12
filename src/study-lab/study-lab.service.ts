@@ -1,0 +1,666 @@
+import {
+  Injectable,
+  Logger,
+  HttpStatus,
+  NotFoundException,
+  BadGatewayException,
+  OnModuleInit,
+} from '@nestjs/common';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { mkdtemp, writeFile, rm, readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import PptxGenJS from 'pptxgenjs';
+import { PrismaService } from '../prisma/prisma.service';
+import { SupabaseService } from '../auth/supabase.service';
+import { ApiError } from '../common/errors/api-error';
+import { ErrorCode } from '../common/errors/codes';
+import { StudyLabGenerators } from './study-lab.generators';
+import { StudyLabGatewayService } from './study-lab.gateway.service';
+import type { Prisma } from '@prisma/client';
+import type { GenerateStudyDto } from './dto';
+import type { Deck } from './schemas';
+
+const execFileAsync = promisify(execFile);
+const DEFAULT_BUCKET = 'materials';
+const MAX_GENERATION_MS = 5 * 60 * 1000;
+
+@Injectable()
+export class StudyLabService implements OnModuleInit {
+  private readonly logger = new Logger(StudyLabService.name);
+  private readonly bucket: string;
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly generators: StudyLabGenerators,
+    private readonly gateway: StudyLabGatewayService,
+    private readonly supabase: SupabaseService,
+  ) {
+    this.bucket = process.env.SUPABASE_STORAGE_BUCKET || DEFAULT_BUCKET;
+  }
+
+  async onModuleInit(): Promise<void> {
+    const cutoff = new Date(Date.now() - MAX_GENERATION_MS);
+    const stuck = await this.prisma.studyGeneration.updateMany({
+      where: {
+        status: 'PROCESSING',
+        updatedAt: { lt: cutoff },
+      },
+      data: {
+        status: 'FAILED',
+        error: 'Generation timed out; please try again.',
+        stage: 'FAILED',
+      },
+    });
+    if (stuck.count > 0) {
+      this.logger.warn(
+        `[study-lab] recovered ${stuck.count} stale generation(s) from a previous run`,
+      );
+    }
+  }
+
+  async submit(
+    studentId: string,
+    dto: GenerateStudyDto,
+  ): Promise<{ generationId: string; status: string }> {
+    const activeAttempt = await this.prisma.quizAttempt.findFirst({
+      where: { studentId, status: 'IN_PROGRESS' },
+      select: { id: true },
+    });
+    if (activeAttempt) {
+      throw new ApiError(
+        ErrorCode.HOMEWORK_FORBIDDEN,
+        HttpStatus.CONFLICT,
+        'You cannot generate study materials while a quiz is in progress.',
+      );
+    }
+
+    const offering = await this.prisma.courseOffering.findUnique({
+      where: { id: dto.courseOfferingId },
+      select: { id: true },
+    });
+    if (!offering) {
+      throw new ApiError(
+        ErrorCode.OFFERING_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This course offering could not be found.',
+      );
+    }
+
+    if (dto.kind === 'STUDY_MATERIAL' && !dto.materialKind) {
+      throw new ApiError(
+        ErrorCode.BAD_REQUEST,
+        HttpStatus.BAD_REQUEST,
+        'materialKind is required when kind is STUDY_MATERIAL.',
+      );
+    }
+
+    const generation = await this.launchGeneration(
+      studentId,
+      dto.courseOfferingId,
+      {
+        kind: dto.kind,
+        materialKind: dto.materialKind ?? null,
+        preset: dto.preset ?? null,
+        topic: dto.topic,
+      },
+    );
+
+    return { generationId: generation.id, status: 'PROCESSING' };
+  }
+
+  async recommend(
+    studentId: string,
+    courseOfferingId: string,
+    topic: string,
+    analysisId: string,
+  ): Promise<string> {
+    const existing = await this.prisma.studyGeneration.findFirst({
+      where: {
+        studentId,
+        recommendedForAnalysisId: analysisId,
+        status: { in: ['PROCESSING', 'READY'] },
+      },
+      select: { id: true },
+    });
+    if (existing) {
+      this.logger.log(
+        `[study-lab] recommendation already exists (${existing.id}) for analysis ${analysisId}`,
+      );
+      return existing.id;
+    }
+
+    const generation = await this.launchGeneration(
+      studentId,
+      courseOfferingId,
+      {
+        kind: 'STUDY_MATERIAL',
+        materialKind: 'PRACTICE_QUESTIONS',
+        preset: null,
+        topic,
+        recommendedForAnalysisId: analysisId,
+      },
+    );
+    return generation.id;
+  }
+
+  private async launchGeneration(
+    studentId: string,
+    courseOfferingId: string,
+    input: {
+      kind: string;
+      materialKind: string | null;
+      preset: string | null;
+      topic: string;
+      recommendedForAnalysisId?: string;
+    },
+  ) {
+    const generation = await this.prisma.studyGeneration.create({
+      data: {
+        studentId,
+        courseOfferingId,
+        kind: input.kind,
+        materialKind: input.materialKind,
+        preset: input.preset,
+        topic: input.topic,
+        recommendedForAnalysisId: input.recommendedForAnalysisId ?? null,
+        status: 'PROCESSING',
+        stage: 'QUEUED',
+        sources: [],
+      },
+    });
+
+    void this.processGeneration(generation.id).catch((err: unknown) => {
+      this.logger.error(
+        `[study-lab] background pipeline crashed for ${generation.id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
+
+    return generation;
+  }
+
+  private async processGeneration(generationId: string): Promise<void> {
+    const generation = await this.prisma.studyGeneration.findUnique({
+      where: { id: generationId },
+    });
+    if (!generation || generation.status !== 'PROCESSING') return;
+
+    try {
+      await this.updateStage(generationId, 'GROUNDING');
+      const chunks = await this.generators.ground(
+        generation.courseOfferingId,
+        generation.topic,
+        12,
+      );
+      if (chunks.chunks.length === 0) {
+        this.logger.warn(
+          `[study-lab] no curriculum material found for "${generation.topic}" in ${generation.courseOfferingId} — generating from general knowledge (ungrounded).`,
+        );
+        await this.prisma.studyGeneration.update({
+          where: { id: generationId },
+          data: { sources: [] },
+        });
+      } else {
+        await this.prisma.studyGeneration.update({
+          where: { id: generationId },
+          data: { sources: chunks.sources },
+        });
+      }
+
+      await this.updateStage(generationId, 'GENERATING');
+      const { payload, audioUrl, fileUrl, durationSeconds } =
+        await this.generatePayload(generationId, generation);
+
+      await this.updateStage(generationId, 'BUILDING');
+      const built = await this.buildArtifacts(
+        generationId,
+        generation,
+        payload,
+        audioUrl,
+        fileUrl,
+        durationSeconds,
+      );
+
+      await this.prisma.studyGeneration.update({
+        where: { id: generationId },
+        data: {
+          status: 'READY',
+          stage: 'DONE',
+          payload: built.payload as Prisma.InputJsonValue,
+          audioUrl: built.audioUrl ?? null,
+          fileUrl: built.fileUrl ?? null,
+          durationSeconds: built.durationSeconds ?? null,
+        },
+      });
+      this.logger.log(`[study-lab] generation ${generationId} completed`);
+    } catch (err: unknown) {
+      const message =
+        err instanceof ApiError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : 'Generation failed unexpectedly.';
+      this.logger.error(
+        `[study-lab] generation ${generationId} failed: ${message}`,
+      );
+      await this.prisma.studyGeneration.update({
+        where: { id: generationId },
+        data: { status: 'FAILED', stage: 'FAILED', error: message },
+      });
+    }
+  }
+
+  private async generatePayload(
+    generationId: string,
+    generation: {
+      kind: string;
+      materialKind: string | null;
+      preset: string | null;
+      courseOfferingId: string;
+      topic: string;
+    },
+  ): Promise<{
+    payload: unknown;
+    audioUrl?: string;
+    fileUrl?: string;
+    durationSeconds?: number;
+  }> {
+    switch (generation.kind) {
+      case 'PODCAST': {
+        const script = await this.generators.podcastScript(
+          generation.courseOfferingId,
+          generation.topic,
+          generation.preset ?? 'OVERVIEW',
+        );
+        const audio = await this.buildPodcastAudio(generationId, script);
+        return {
+          payload: { ...script, audioAvailable: audio?.url ? true : false },
+          audioUrl: audio?.url,
+          durationSeconds: audio?.durationSeconds,
+        };
+      }
+      case 'SLIDES': {
+        const deck = await this.generators.deck(
+          generation.courseOfferingId,
+          generation.topic,
+        );
+        return { payload: deck };
+      }
+      case 'STUDY_MATERIAL': {
+        const payload = await this.generateMaterial(
+          generation.courseOfferingId,
+          generation.topic,
+          generation.materialKind,
+        );
+        return { payload };
+      }
+      default:
+        throw new Error(`Unknown generation kind: ${generation.kind}`);
+    }
+  }
+
+  private async generateMaterial(
+    courseOfferingId: string,
+    topic: string,
+    materialKind: string | null,
+  ): Promise<unknown> {
+    switch (materialKind) {
+      case 'STUDY_GUIDE':
+        return this.generators.studyGuide(courseOfferingId, topic);
+      case 'FLASHCARDS':
+        return this.generators.flashcards(courseOfferingId, topic);
+      case 'PRACTICE_QUESTIONS':
+        return this.generators.practiceSet(courseOfferingId, topic);
+      case 'CHEAT_SHEET':
+        return this.generators.cheatSheet(courseOfferingId, topic);
+      default:
+        throw new Error(`Unknown material kind: ${materialKind}`);
+    }
+  }
+
+  private async buildArtifacts(
+    generationId: string,
+    generation: { kind: string; courseOfferingId: string },
+    payload: unknown,
+    audioUrl?: string,
+    fileUrl?: string,
+    durationSeconds?: number,
+  ): Promise<{
+    payload: unknown;
+    audioUrl?: string | null;
+    fileUrl?: string | null;
+    durationSeconds?: number;
+  }> {
+    if (generation.kind !== 'SLIDES') {
+      return { payload, audioUrl, fileUrl, durationSeconds };
+    }
+
+    try {
+      const buffer = await this.buildPptx(payload as Deck);
+      const objectPath = `${this.bucket}/${generation.courseOfferingId}/study-lab/${generationId}.pptx`;
+      const { error } = await this.supabase
+        .getStorageClient()
+        .storage.from(this.bucket)
+        .upload(objectPath, buffer, {
+          contentType:
+            'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+          upsert: true,
+        });
+      if (error) {
+        throw new Error(`Slide storage upload failed: ${error.message}`);
+      }
+      this.logger.log(`[study-lab] slides uploaded to ${objectPath}`);
+      return { payload, audioUrl, fileUrl: objectPath };
+    } catch (err) {
+      this.logger.warn(
+        `[study-lab] pptx build failed for ${generationId}: ${err instanceof Error ? err.message : String(err)} — slides remain available as JSON`,
+      );
+      return { payload, audioUrl, fileUrl: null };
+    }
+  }
+
+  private async buildPodcastAudio(
+    generationId: string,
+    script: { segments: { speaker: 'HOST' | 'GUEST'; text: string }[] },
+  ): Promise<{ url?: string; durationSeconds?: number }> {
+    if (!this.gateway.audioEnabled) {
+      this.logger.log(
+        '[study-lab] audio disabled (no TTS provider configured — set STUDY_AUDIO_MODEL or KOKORO_TTS_URL) — script-only podcast',
+      );
+      return {};
+    }
+
+    this.logger.log(
+      `[study-lab] podcast audio via provider=${this.gateway.providerName}`,
+    );
+
+    const dir = await mkdtemp(join(tmpdir(), 'study-lab-'));
+    const segmentFiles: string[] = [];
+    try {
+      for (let i = 0; i < script.segments.length; i++) {
+        const seg = script.segments[i];
+        const { buffer } = await this.gateway.synthesizeSpeech(
+          seg.text,
+          this.gateway.voicesFor(seg.speaker),
+        );
+        const file = join(dir, `seg-${String(i).padStart(3, '0')}.mp3`);
+        await writeFile(file, buffer);
+        segmentFiles.push(file);
+      }
+
+      const listFile = join(dir, 'list.txt');
+      await writeFile(
+        listFile,
+        segmentFiles.map((f) => `file '${f}'`).join('\n'),
+      );
+      const outFile = join(dir, 'podcast.mp3');
+      await execFileAsync('ffmpeg', [
+        '-y',
+        '-f',
+        'concat',
+        '-safe',
+        '0',
+        '-i',
+        listFile,
+        '-c:a',
+        'libmp3lame',
+        '-q:a',
+        '4',
+        outFile,
+      ]);
+
+      const audio = await readFile(outFile);
+      const duration = await this.probeDuration(outFile);
+      const objectPath = `${this.bucket}/study-lab/${generationId}.mp3`;
+      const { error } = await this.supabase
+        .getStorageClient()
+        .storage.from(this.bucket)
+        .upload(objectPath, audio, {
+          contentType: 'audio/mpeg',
+          upsert: true,
+        });
+      if (error) {
+        throw new Error(`Audio storage upload failed: ${error.message}`);
+      }
+      this.logger.log(
+        `[study-lab] podcast audio uploaded to ${objectPath} (${duration}s)`,
+      );
+      return { url: objectPath, durationSeconds: duration };
+    } catch (err) {
+      this.logger.error(
+        `[study-lab] podcast audio pipeline failed for ${generationId}: ${err instanceof Error ? err.message : String(err)} — falling back to script-only`,
+      );
+      return {};
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  private async buildPptx(deck: Deck): Promise<Buffer> {
+    const pptx = new PptxGenJS();
+    pptx.layout = 'LAYOUT_WIDE';
+    const theme = {
+      primary: '2563EB',
+      text: '1F2937',
+      muted: '6B7280',
+      background: 'FFFFFF',
+      accent: '10B981',
+    };
+
+    const addBodySlide = (title: string, bullets: string[], note?: string) => {
+      const slide = pptx.addSlide();
+      slide.background = { color: theme.background };
+      slide.addText(title, {
+        x: 0.6,
+        y: 0.4,
+        w: 12.3,
+        h: 0.9,
+        fontSize: 28,
+        bold: true,
+        color: theme.primary,
+      });
+      slide.addShape(pptx.ShapeType.rect, {
+        x: 0.6,
+        y: 1.35,
+        w: 12.3,
+        h: 0.03,
+        fill: { color: theme.accent },
+      });
+      const body = bullets.map((b) => ({ text: b, options: { bullet: true } }));
+      slide.addText(body, {
+        x: 0.7,
+        y: 1.7,
+        w: 11.9,
+        h: 4.4,
+        fontSize: 16,
+        color: theme.text,
+        lineSpacingMultiple: 1.4,
+      });
+      if (note) {
+        slide.addNotes(note);
+      }
+    };
+
+    deck.slides.forEach((s, i) => {
+      if (i === 0) {
+        const slide = pptx.addSlide();
+        slide.background = { color: theme.primary };
+        slide.addText(deck.title, {
+          x: 0.8,
+          y: 2.2,
+          w: 11.8,
+          h: 1.4,
+          fontSize: 40,
+          bold: true,
+          color: 'FFFFFF',
+        });
+        slide.addText(s.bullets.join('  ·  '), {
+          x: 0.8,
+          y: 3.8,
+          w: 11.8,
+          h: 0.8,
+          fontSize: 16,
+          color: 'E5E7EB',
+        });
+        if (s.speakerNote) slide.addNotes(s.speakerNote);
+        return;
+      }
+      addBodySlide(s.title, s.bullets, s.speakerNote ?? undefined);
+    });
+
+    return Buffer.from(
+      (await pptx.write({ outputType: 'nodebuffer' })) as Buffer,
+    );
+  }
+
+  private async probeDuration(file: string): Promise<number> {
+    try {
+      const { stdout } = await execFileAsync('ffprobe', [
+        '-v',
+        'error',
+        '-show_entries',
+        'format=duration',
+        '-of',
+        'csv=p=0',
+        file,
+      ]);
+      return Math.round(parseFloat(stdout.trim()));
+    } catch {
+      return 0;
+    }
+  }
+
+  private async updateStage(
+    generationId: string,
+    stage: string,
+  ): Promise<void> {
+    await this.prisma.studyGeneration.update({
+      where: { id: generationId },
+      data: { stage },
+    });
+  }
+
+  async getStudentOfferings(studentId: string) {
+    const sections = await this.prisma.section.findMany({
+      where: {
+        enrollments: {
+          some: { studentId, status: 'APPROVED' },
+        },
+      },
+      include: {
+        offerings: {
+          include: { course: true, teacher: true },
+        },
+      },
+    });
+
+    return {
+      offerings: sections.flatMap((s) =>
+        s.offerings.map((o) => ({
+          id: o.id,
+          courseName: o.course.name,
+          sectionName: s.name,
+          teacherName: o.teacher?.name ?? null,
+        })),
+      ),
+    };
+  }
+
+  async getHistory(studentId: string, courseOfferingId?: string) {
+    const generations = await this.prisma.studyGeneration.findMany({
+      where: {
+        studentId,
+        ...(courseOfferingId ? { courseOfferingId } : {}),
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+    });
+    return {
+      generations: generations.map((g) => this.serialize(g)),
+    };
+  }
+
+  async getDetail(studentId: string, generationId: string) {
+    const generation = await this.prisma.studyGeneration.findFirst({
+      where: { id: generationId, studentId },
+    });
+    if (!generation) {
+      throw new NotFoundException('This study generation could not be found.');
+    }
+    return { generation: this.serialize(generation) };
+  }
+
+  async remove(studentId: string, generationId: string): Promise<void> {
+    const generation = await this.prisma.studyGeneration.findFirst({
+      where: { id: generationId, studentId },
+      select: { id: true, audioUrl: true, fileUrl: true },
+    });
+    if (!generation) {
+      throw new NotFoundException('This study generation could not be found.');
+    }
+    for (const path of [generation.audioUrl, generation.fileUrl]) {
+      if (path) {
+        try {
+          await this.supabase
+            .getStorageClient()
+            .storage.from(this.bucket)
+            .remove([path]);
+        } catch {
+          this.logger.warn(`[study-lab] failed to remove ${path}`);
+        }
+      }
+    }
+    await this.prisma.studyGeneration.delete({ where: { id: generationId } });
+  }
+
+  async download(studentId: string, generationId: string) {
+    const generation = await this.prisma.studyGeneration.findFirst({
+      where: { id: generationId, studentId },
+    });
+    if (!generation) {
+      throw new NotFoundException('This study generation could not be found.');
+    }
+    const fileUrl = generation.fileUrl ?? generation.audioUrl;
+    if (!fileUrl) {
+      throw new BadGatewayException(
+        'This generation has no downloadable file. If it is a podcast, open it in the player instead.',
+      );
+    }
+    const { data, error } = await this.supabase
+      .getStorageClient()
+      .storage.from(this.bucket)
+      .download(fileUrl);
+    if (error || !data) {
+      throw new BadGatewayException(
+        'Failed to download the file from storage.',
+      );
+    }
+    return {
+      buffer: Buffer.from(await data.arrayBuffer()),
+      contentType: fileUrl.endsWith('.pptx')
+        ? 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+        : 'audio/mpeg',
+      filename: fileUrl.split('/').pop() ?? 'study-file',
+    };
+  }
+
+  private serialize(g: Prisma.StudyGenerationGetPayload<true>) {
+    return {
+      id: g.id,
+      kind: g.kind,
+      materialKind: g.materialKind,
+      preset: g.preset,
+      topic: g.topic,
+      status: g.status,
+      stage: g.stage,
+      error: g.error,
+      recommendedForAnalysisId: g.recommendedForAnalysisId,
+      createdAt: g.createdAt.toISOString(),
+      completedAt: null,
+      payload: g.payload ?? null,
+      audioUrl: g.audioUrl,
+      fileUrl: g.fileUrl,
+    };
+  }
+}

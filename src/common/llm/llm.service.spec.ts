@@ -60,6 +60,41 @@ describe('LlmService', () => {
     });
   });
 
+  describe('chat', () => {
+    it('should redact, call the provider, and restore', async () => {
+      mockRedact.mockImplementation((text: string) => ({
+        redacted: text.replace('Jane Doe', '[REDACTED_0]'),
+        replacements: new Map([['[REDACTED_0]', 'Jane Doe']]),
+      }));
+      mockRestore.mockImplementation((text: string) =>
+        text.replace('[REDACTED_0]', 'Jane Doe'),
+      );
+      mockChat.mockResolvedValueOnce('Hello [REDACTED_0], here is help');
+
+      const result = await service.chat('You help Jane Doe', 'Hi Jane Doe');
+
+      expect(mockRedact).toHaveBeenCalled();
+      expect(mockChat).toHaveBeenCalled();
+      expect(result).toBe('Hello Jane Doe, here is help');
+      expect(result).not.toContain('[REDACTED_0]');
+      expect(result).toContain('Jane Doe');
+    });
+
+    it('should pass text through untouched when nothing is redacted', async () => {
+      mockRedact.mockImplementation((text: string) => ({
+        redacted: text,
+        replacements: new Map(),
+      }));
+      mockRestore.mockImplementation((text: string) => text);
+      mockChat.mockResolvedValueOnce('plain reply');
+
+      const result = await service.chat('system', 'user');
+
+      expect(result).toBe('plain reply');
+      expect(mockRestore).not.toHaveBeenCalled();
+    });
+  });
+
   describe('generateStructured', () => {
     const schema = z.object({
       name: z.string(),

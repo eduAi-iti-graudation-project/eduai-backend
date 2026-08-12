@@ -4,9 +4,16 @@ import { ReportsModule } from '../reports/reports.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { LlmModule } from '../common/llm/llm.module';
+import { StudyLabModule } from '../study-lab/study-lab.module';
 
 @Module({
-  imports: [PrismaModule, LlmModule, ReportsModule, NotificationsModule],
+  imports: [
+    PrismaModule,
+    LlmModule,
+    ReportsModule,
+    NotificationsModule,
+    StudyLabModule,
+  ],
   providers: [CommunicationAgentService],
   exports: [CommunicationAgentService],
 })

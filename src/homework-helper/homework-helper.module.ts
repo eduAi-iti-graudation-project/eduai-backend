@@ -10,5 +10,6 @@ import { ChatModule } from '../chat/chat.module';
   imports: [MaterialsModule, NotificationsModule, ChatModule],
   controllers: [HomeworkHelperController],
   providers: [HomeworkHelperService, HomeworkHelperAgent],
+  exports: [HomeworkHelperAgent],
 })
 export class HomeworkHelperModule {}

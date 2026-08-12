@@ -79,7 +79,7 @@ describe('DashboardController', () => {
       const user = { id: 'u1', role: 'STUDENT' } as User;
 
       expect(() => controller.getInsights(user, 'year')).toThrow(
-        expect.objectContaining({ code: 'VALIDATION_FAILED' }),
+        expect.objectContaining({ code: 'VALIDATION_FAILED' }) as Error,
       );
       expect(mockInsightsService.getInsights).not.toHaveBeenCalled();
     });
@@ -106,7 +106,7 @@ describe('DashboardController', () => {
       const user = { id: 't1', role: 'TEACHER' } as User;
 
       expect(() => controller.getStudentInsights(user, 's1', 'daily')).toThrow(
-        expect.objectContaining({ code: 'VALIDATION_FAILED' }),
+        expect.objectContaining({ code: 'VALIDATION_FAILED' }) as Error,
       );
       expect(mockInsightsService.getStudentInsights).not.toHaveBeenCalled();
     });

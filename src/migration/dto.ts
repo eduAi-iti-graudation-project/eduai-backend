@@ -6,6 +6,10 @@ export const AnalyzeCsvSchema = z.object({
   csv: z.string().min(1),
 });
 
+export const AnalyzePastedSchema = z.object({
+  text: z.string().min(1),
+});
+
 export const ImportCsvSchema = z.object({
   csv: z.string().min(1),
   mapping: z.array(
@@ -17,4 +21,5 @@ export const ImportCsvSchema = z.object({
 });
 
 export class AnalyzeCsvDto extends createZodDto(AnalyzeCsvSchema) {}
+export class AnalyzePastedDto extends createZodDto(AnalyzePastedSchema) {}
 export class ImportCsvDto extends createZodDto(ImportCsvSchema) {}

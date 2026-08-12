@@ -22,6 +22,32 @@ export class LlmService {
     return this.providerService.hfEmbed(text);
   }
 
+  /**
+   * Plain chat through the provider with PII redaction on the way out and
+   * restoration on the way back. Used by Mastra agents whose `LanguageModelV2`
+   * adapter needs a `(system, user) => text` chat surface (same guarantees as
+   * `generateStructured`, without JSON parsing).
+   */
+  async chat(systemPrompt: string, userPrompt: string): Promise<string> {
+    const redactedSystem = this.piiService.redact(systemPrompt);
+    const redactedUser = this.piiService.redact(
+      userPrompt,
+      redactedSystem.replacements.size,
+    );
+    const replacements = new Map([
+      ...redactedSystem.replacements,
+      ...redactedUser.replacements,
+    ]);
+
+    const content = await this.providerService.chat(
+      redactedSystem.redacted,
+      redactedUser.redacted,
+    );
+
+    if (replacements.size === 0) return content;
+    return this.piiService.restore(content, replacements);
+  }
+
   async generateStructured<T>(params: {
     systemPrompt: string;
     userPrompt: string;

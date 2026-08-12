@@ -87,7 +87,7 @@ export class WebhooksService {
     }
 
     const subscriptionId = this.subscriptionId(session.subscription);
-    await this.persistAndUpdate(event, organizationId, {
+    await this.persistAndUpdate(event, organizationId, organizationId, {
       subscriptionStatus: 'ACTIVE',
       subscriptionTier: planId.toUpperCase() as SubscriptionTier,
       seatLimit: PLAN_LIMITS[planId],
@@ -99,14 +99,15 @@ export class WebhooksService {
   private async handleSubscriptionUpdated(event: Stripe.Event) {
     const subscription = event.data.object as Stripe.Subscription;
     const customer = this.customerId(subscription.customer);
-    const organization = customer ? await this.findByCustomer(customer) : null;
-    if (!organization) return { received: true, ignored: true };
+    const found = customer ? await this.findByCustomer(customer) : null;
+    if (!found) return { received: true, ignored: true };
+    const { organization, homeId } = found;
 
     const priceId = subscription.items?.data?.[0]?.price?.id;
     const planId = priceId ? this.planFromPrice(priceId) : null;
     if (!planId) return { received: true, ignored: true };
 
-    await this.persistAndUpdate(event, organization.id, {
+    await this.persistAndUpdate(event, organization.id, homeId, {
       subscriptionStatus: organization.subscriptionStatus,
       subscriptionTier: planId.toUpperCase() as SubscriptionTier,
       seatLimit: PLAN_LIMITS[planId],
@@ -118,11 +119,12 @@ export class WebhooksService {
   private async handleInvoicePaid(event: Stripe.Event) {
     const invoice = event.data.object as Stripe.Invoice;
     const customer = this.customerId(invoice.customer);
-    const organization = customer ? await this.findByCustomer(customer) : null;
-    if (!organization) return { received: true, ignored: true };
+    const found = customer ? await this.findByCustomer(customer) : null;
+    if (!found) return { received: true, ignored: true };
+    const { organization, homeId } = found;
 
     const wasPastDue = organization.subscriptionStatus === 'PAST_DUE';
-    await this.persistAndUpdate(event, organization.id, {
+    await this.persistAndUpdate(event, organization.id, homeId, {
       subscriptionStatus: 'ACTIVE',
     });
 
@@ -140,10 +142,11 @@ export class WebhooksService {
   private async handlePaymentFailed(event: Stripe.Event) {
     const invoice = event.data.object as Stripe.Invoice;
     const customer = this.customerId(invoice.customer);
-    const organization = customer ? await this.findByCustomer(customer) : null;
-    if (!organization) return { received: true, ignored: true };
+    const found = customer ? await this.findByCustomer(customer) : null;
+    if (!found) return { received: true, ignored: true };
+    const { organization, homeId } = found;
 
-    await this.persistAndUpdate(event, organization.id, {
+    await this.persistAndUpdate(event, organization.id, homeId, {
       subscriptionStatus: 'PAST_DUE',
     });
 
@@ -165,10 +168,11 @@ export class WebhooksService {
   private async handleSubscriptionDeleted(event: Stripe.Event) {
     const subscription = event.data.object as Stripe.Subscription;
     const customer = this.customerId(subscription.customer);
-    const organization = customer ? await this.findByCustomer(customer) : null;
-    if (!organization) return { received: true, ignored: true };
+    const found = customer ? await this.findByCustomer(customer) : null;
+    if (!found) return { received: true, ignored: true };
+    const { organization, homeId } = found;
 
-    await this.persistAndUpdate(event, organization.id, {
+    await this.persistAndUpdate(event, organization.id, homeId, {
       subscriptionStatus: 'CANCELED',
     });
     return { received: true };
@@ -218,16 +222,38 @@ export class WebhooksService {
     return prices[priceId] ?? null;
   }
 
-  private findByCustomer(customer: string | null) {
+  private async findByCustomer(customer: string | null) {
     if (!customer) return Promise.resolve(null);
-    return this.prisma.organization.findFirst({
+    // WP5: a SchoolGroup owns billing; resolve the group first, then fall
+    // back to a lone organization. The billing representative is the first
+    // (creator) organization of the group.
+    const group = await this.prisma.schoolGroup.findFirst({
       where: { stripeCustomerId: customer },
+      include: {
+        organizations: { orderBy: { createdAt: 'asc' }, take: 1 },
+      },
     });
+    if (group?.organizations[0]) {
+      return {
+        organization: group.organizations[0] as {
+          id: string;
+          subscriptionStatus: SubscriptionStatus;
+          groupId: string | null;
+        },
+        homeId: group.id,
+      };
+    }
+    const organization = await this.prisma.organization.findFirst({
+      where: { stripeCustomerId: customer },
+      select: { id: true, subscriptionStatus: true, groupId: true },
+    });
+    return organization ? { organization, homeId: organization.id } : null;
   }
 
   private async persistAndUpdate(
     event: Stripe.Event,
     organizationId: string,
+    homeId: string,
     data: {
       subscriptionStatus: SubscriptionStatus;
       subscriptionTier?: SubscriptionTier;
@@ -245,10 +271,18 @@ export class WebhooksService {
             raw: event as unknown as Prisma.InputJsonValue,
           },
         });
-        await tx.organization.update({
-          where: { id: organizationId },
-          data,
-        });
+        // WP5: write billing home fields to the SchoolGroup when grouped.
+        if (homeId !== organizationId) {
+          await tx.schoolGroup.update({
+            where: { id: homeId },
+            data,
+          });
+        } else {
+          await tx.organization.update({
+            where: { id: organizationId },
+            data,
+          });
+        }
       });
     } catch (err) {
       if (

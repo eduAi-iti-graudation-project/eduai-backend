@@ -83,6 +83,26 @@ const AdminDashboardSchema = z.object({
   averagePassRate: z.number(),
   pendingReportCount: z.number(),
   teachers: z.array(AdminTeacherSummarySchema),
+  activeAlertCount: z.number(),
+  resolvedAlertCount: z.number(),
+  recentAlerts: z.array(
+    z.object({
+      id: z.string().uuid(),
+      studentName: z.string(),
+      type: z.string(),
+      reason: z.string(),
+      createdAt: z.string(),
+    }),
+  ),
+  submissionsNeedingReview: z.array(
+    z.object({
+      id: z.string().uuid(),
+      studentName: z.string(),
+      assignmentTitle: z.string(),
+      createdAt: z.string(),
+    }),
+  ),
+  pendingConfirmations: z.number(),
   unreadNotifications: z.number(),
 });
 

@@ -2,12 +2,53 @@ import { PrismaService } from '../prisma/prisma.service';
 import { Injectable, HttpStatus } from '@nestjs/common';
 import { ApiError } from '../common/errors/api-error';
 import { ErrorCode } from '../common/errors/codes';
+import {
+  encryptSsn,
+  decryptSsn,
+  maskSsn,
+  ssnTail4,
+} from '../common/crypto/ssn';
 import * as path from 'path';
 import * as fs from 'fs';
 
 @Injectable()
 export class TeachersService {
   constructor(private readonly prisma: PrismaService) {}
+
+  private formatPersonal(
+    profile: {
+      phone: string | null;
+      street: string | null;
+      city: string | null;
+      nationality: string | null;
+      personalEmail: string | null;
+      dateOfBirth: Date | null;
+      ssnEncrypted: string | null;
+      ssnTail4: string | null;
+      emergencyContactName: string | null;
+      emergencyContactPhone: string | null;
+      emergencyContactRelationship: string | null;
+    } | null,
+  ) {
+    return {
+      phone: profile?.phone ?? null,
+      street: profile?.street ?? null,
+      city: profile?.city ?? null,
+      nationality: profile?.nationality ?? null,
+      personalEmail: profile?.personalEmail ?? null,
+      dateOfBirth: profile?.dateOfBirth
+        ? profile.dateOfBirth.toISOString().slice(0, 10)
+        : null,
+      ssnMasked: profile
+        ? maskSsn(profile.ssnEncrypted, profile.ssnTail4)
+        : null,
+      emergencyContact: {
+        name: profile?.emergencyContactName ?? null,
+        phone: profile?.emergencyContactPhone ?? null,
+        relationship: profile?.emergencyContactRelationship ?? null,
+      },
+    };
+  }
 
   async getGrades(teacherId: string) {
     const teacher = await this.prisma.user.findUnique({
@@ -25,31 +66,177 @@ export class TeachersService {
       where: { teacherId },
       include: {
         course: true,
-        section: { include: { gradeLevel: true } },
+        section: {
+          include: {
+            gradeLevel: true,
+            _count: { select: { enrollments: true } },
+          },
+        },
       },
     });
+
+    // Grades the teacher actually teaches, with per-grade counts scoped to
+    // the teacher's own sections/courses in that grade.
+    const byGrade = new Map<
+      string,
+      {
+        grade: {
+          id: string;
+          level: number;
+          name: string | null;
+          createdAt: Date;
+        };
+        sections: Set<string>;
+        courses: Set<string>;
+        offeringId: string;
+      }
+    >();
+    for (const o of offerings) {
+      const gradeLevel = o.section.gradeLevel;
+      if (!gradeLevel) continue;
+      let entry = byGrade.get(gradeLevel.id);
+      if (!entry) {
+        entry = {
+          grade: gradeLevel,
+          sections: new Set(),
+          courses: new Set(),
+          offeringId: o.id,
+        };
+        byGrade.set(gradeLevel.id, entry);
+      }
+      entry.sections.add(o.section.id);
+      entry.courses.add(o.course.id);
+    }
 
     const rows: Array<{
       id: string;
       teacherId: string;
       gradeId: string | null;
       grade: object | null;
+      _count: { sections: number; courses: number; students: number };
     }> = [];
-    const seen = new Set<string>();
 
-    for (const o of offerings) {
-      if (!o.section.gradeLevel) continue;
-      if (seen.has(o.section.gradeLevel.id)) continue;
-      seen.add(o.section.gradeLevel.id);
+    for (const [gradeId, entry] of byGrade) {
+      const students = await this.prisma.enrollment.count({
+        where: {
+          sectionId: { in: [...entry.sections] },
+          status: 'APPROVED',
+        },
+      });
       rows.push({
-        id: o.id,
+        id: entry.offeringId,
         teacherId,
-        gradeId: o.section.gradeLevel.id,
-        grade: o.section.gradeLevel,
+        gradeId,
+        grade: entry.grade,
+        _count: {
+          sections: entry.sections.size,
+          courses: entry.courses.size,
+          students,
+        },
       });
     }
 
     return rows;
+  }
+
+  async getGrade(teacherId: string, gradeId: string) {
+    const teacher = await this.prisma.user.findUnique({
+      where: { id: teacherId },
+    });
+    if (!teacher) {
+      throw new ApiError(
+        ErrorCode.TEACHER_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This teacher could not be found.',
+      );
+    }
+
+    const gradeLevel = await this.prisma.gradeLevel.findUnique({
+      where: { id: gradeId },
+    });
+    if (!gradeLevel) {
+      throw new ApiError(
+        ErrorCode.GRADE_LEVEL_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This grade could not be found.',
+      );
+    }
+
+    const offerings = await this.prisma.courseOffering.findMany({
+      where: { teacherId, section: { gradeLevelId: gradeId } },
+      include: {
+        course: true,
+        section: {
+          select: {
+            id: true,
+            name: true,
+            description: true,
+          },
+        },
+      },
+    });
+
+    const sectionMap = new Map<
+      string,
+      {
+        id: string;
+        name: string;
+        description: string | null;
+        courses: Set<string>;
+      }
+    >();
+    const courseMap = new Map<
+      string,
+      { id: string; name: string; description: string | null }
+    >();
+    for (const o of offerings) {
+      const s = o.section;
+      let entry = sectionMap.get(s.id);
+      if (!entry) {
+        entry = {
+          id: s.id,
+          name: s.name,
+          description: s.description,
+          courses: new Set(),
+        };
+        sectionMap.set(s.id, entry);
+      }
+      entry.courses.add(o.course.id);
+      if (!courseMap.has(o.course.id)) {
+        courseMap.set(o.course.id, {
+          id: o.course.id,
+          name: o.course.name,
+          description: o.course.description,
+        });
+      }
+    }
+
+    const enrollments = await this.prisma.enrollment.findMany({
+      where: {
+        sectionId: { in: [...sectionMap.keys()] },
+        status: 'APPROVED',
+      },
+      select: { sectionId: true },
+    });
+    const perSection = new Map<string, number>();
+    for (const e of enrollments) {
+      perSection.set(e.sectionId, (perSection.get(e.sectionId) ?? 0) + 1);
+    }
+
+    return {
+      id: gradeLevel.id,
+      level: gradeLevel.level,
+      name: gradeLevel.name,
+      students: enrollments.length,
+      sections: [...sectionMap.values()].map((s) => ({
+        id: s.id,
+        name: s.name,
+        description: s.description,
+        enrollments: perSection.get(s.id) ?? 0,
+        courses: [...s.courses].map((cid) => courseMap.get(cid)!),
+      })),
+      courses: [...courseMap.values()],
+    };
   }
 
   async addGrade(teacherId: string, offeringId: string) {
@@ -120,27 +307,29 @@ export class TeachersService {
   async getAdminProfile(teacherId: string, organizationId: string) {
     const teacher = await this.ensureTeacher(teacherId, organizationId);
 
-    const [offerings, quizzes, docsCount, salaryCount] = await Promise.all([
-      this.prisma.courseOffering.findMany({
-        where: { teacherId, organizationId },
-        include: {
-          course: true,
-          section: {
-            include: {
-              gradeLevel: true,
-              enrollments: { select: { id: true } },
+    const [offerings, quizzes, docsCount, salaryCount, profile] =
+      await Promise.all([
+        this.prisma.courseOffering.findMany({
+          where: { teacherId, organizationId },
+          include: {
+            course: true,
+            section: {
+              include: {
+                gradeLevel: true,
+                enrollments: { select: { id: true } },
+              },
             },
+            quizzes: { select: { id: true } },
+            assignments: { select: { id: true } },
           },
-          quizzes: { select: { id: true } },
-          assignments: { select: { id: true } },
-        },
-      }),
-      this.prisma.quiz.count({
-        where: { teacherId, offering: { organizationId } },
-      }),
-      this.prisma.teacherDocument.count({ where: { teacherId } }),
-      this.prisma.salaryRecord.count({ where: { teacherId } }),
-    ]);
+        }),
+        this.prisma.quiz.count({
+          where: { teacherId, offering: { organizationId } },
+        }),
+        this.prisma.teacherDocument.count({ where: { teacherId } }),
+        this.prisma.salaryRecord.count({ where: { teacherId } }),
+        this.prisma.teacherProfile.findUnique({ where: { teacherId } }),
+      ]);
 
     const grades = Array.from(
       new Map(
@@ -156,7 +345,9 @@ export class TeachersService {
       name: teacher.name,
       email: teacher.email,
       gender: teacher.gender,
+      avatarUrl: teacher.avatarUrl,
       createdAt: teacher.createdAt,
+      ...this.formatPersonal(profile),
       grades,
       classes: offerings.map((o) => ({
         id: o.id,
@@ -240,19 +431,193 @@ export class TeachersService {
     }));
   }
 
+  async getMyProfile(userId: string, organizationId: string) {
+    const teacher = await this.ensureTeacher(userId, organizationId);
+    const profile = await this.prisma.teacherProfile.findUnique({
+      where: { teacherId: userId },
+    });
+    return {
+      id: teacher.id,
+      name: teacher.name,
+      email: teacher.email,
+      gender: teacher.gender,
+      avatarUrl: teacher.avatarUrl,
+      createdAt: teacher.createdAt,
+      ...this.formatPersonal(profile),
+    };
+  }
+
+  async updateMyProfile(
+    userId: string,
+    organizationId: string,
+    dto: Parameters<TeachersService['updateProfile']>[2],
+  ) {
+    await this.ensureTeacher(userId, organizationId);
+    return this.updateProfile(userId, organizationId, dto);
+  }
+
   async updateProfile(
     teacherId: string,
     organizationId: string,
-    dto: { gender?: 'MALE' | 'FEMALE' | 'OTHER' | null },
+    dto: {
+      gender?: 'MALE' | 'FEMALE' | 'OTHER' | null;
+      ssn?: string;
+      phone?: string | null;
+      street?: string | null;
+      city?: string | null;
+      nationality?: string | null;
+      personalEmail?: string | null;
+      dateOfBirth?: string | null;
+      emergencyContactName?: string | null;
+      emergencyContactPhone?: string | null;
+      emergencyContactRelationship?: string | null;
+    },
   ) {
     await this.ensureTeacher(teacherId, organizationId);
     const data: { gender?: 'MALE' | 'FEMALE' | 'OTHER' | null } = {};
     if (dto.gender !== undefined) data.gender = dto.gender;
-    return this.prisma.user.update({
-      where: { id: teacherId },
-      data,
-      select: { id: true, name: true, gender: true },
+
+    const profileData: {
+      phone?: string | null;
+      street?: string | null;
+      city?: string | null;
+      nationality?: string | null;
+      personalEmail?: string | null;
+      dateOfBirth?: Date | null;
+      ssnEncrypted?: string;
+      ssnTail4?: string;
+      emergencyContactName?: string | null;
+      emergencyContactPhone?: string | null;
+      emergencyContactRelationship?: string | null;
+    } = {};
+    if (dto.phone !== undefined) profileData.phone = dto.phone;
+    if (dto.street !== undefined) profileData.street = dto.street;
+    if (dto.city !== undefined) profileData.city = dto.city;
+    if (dto.nationality !== undefined)
+      profileData.nationality = dto.nationality;
+    if (dto.personalEmail !== undefined)
+      profileData.personalEmail = dto.personalEmail?.trim()
+        ? dto.personalEmail
+        : null;
+    if (dto.dateOfBirth !== undefined)
+      profileData.dateOfBirth = dto.dateOfBirth
+        ? new Date(`${dto.dateOfBirth}T00:00:00.000Z`)
+        : null;
+    if (dto.emergencyContactName !== undefined)
+      profileData.emergencyContactName = dto.emergencyContactName;
+    if (dto.emergencyContactPhone !== undefined)
+      profileData.emergencyContactPhone = dto.emergencyContactPhone;
+    if (dto.emergencyContactRelationship !== undefined)
+      profileData.emergencyContactRelationship =
+        dto.emergencyContactRelationship;
+    if (dto.ssn !== undefined) {
+      profileData.ssnEncrypted = encryptSsn(dto.ssn);
+      profileData.ssnTail4 = ssnTail4(dto.ssn);
+    }
+
+    const [, profile] = await this.prisma.$transaction([
+      this.prisma.user.update({ where: { id: teacherId }, data }),
+      this.prisma.teacherProfile.upsert({
+        where: { teacherId },
+        create: { teacherId, ...profileData },
+        update: profileData,
+      }),
+    ]);
+
+    return this.formatPersonal(profile);
+  }
+
+  async getSsn(teacherId: string, organizationId: string) {
+    await this.ensureTeacher(teacherId, organizationId);
+    const profile = await this.prisma.teacherProfile.findUnique({
+      where: { teacherId },
     });
+    if (!profile?.ssnEncrypted) {
+      throw new ApiError(
+        ErrorCode.SSN_INVALID,
+        HttpStatus.NOT_FOUND,
+        'No SSN is stored for this teacher.',
+      );
+    }
+    return { ssn: decryptSsn(profile.ssnEncrypted) };
+  }
+
+  private async saveAvatar(
+    teacher: { id: string },
+    file: Express.Multer.File | undefined,
+    removeOld: boolean,
+  ) {
+    if (!file || !file.mimetype.startsWith('image/')) {
+      throw new ApiError(
+        ErrorCode.PHOTO_INVALID,
+        HttpStatus.BAD_REQUEST,
+        'The photo must be a JPEG or PNG image.',
+      );
+    }
+    const ext =
+      file.mimetype === 'image/png'
+        ? 'png'
+        : file.mimetype === 'image/jpeg' || file.mimetype === 'image/jpg'
+          ? 'jpg'
+          : null;
+    if (!ext) {
+      throw new ApiError(
+        ErrorCode.PHOTO_INVALID,
+        HttpStatus.BAD_REQUEST,
+        'The photo must be a JPEG or PNG image.',
+      );
+    }
+    const dir = path.resolve(
+      process.cwd(),
+      process.env.PHOTO_UPLOAD_DIR ?? 'uploads/photos',
+    );
+    fs.mkdirSync(dir, { recursive: true });
+    const fileName = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+    const fileUrl = path.join(dir, fileName);
+    try {
+      fs.writeFileSync(fileUrl, file.buffer);
+    } catch {
+      throw new ApiError(
+        ErrorCode.PHOTO_UPLOAD_FAILED,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+        'Could not save the photo. Please try again.',
+      );
+    }
+    const existing = await this.prisma.user.findUnique({
+      where: { id: teacher.id },
+      select: { avatarUrl: true },
+    });
+    const updated = await this.prisma.user.update({
+      where: { id: teacher.id },
+      data: { avatarUrl: fileUrl },
+      select: { avatarUrl: true },
+    });
+    if (removeOld && existing?.avatarUrl && existing.avatarUrl !== fileUrl) {
+      try {
+        fs.unlinkSync(existing.avatarUrl);
+      } catch {
+        /* best-effort cleanup */
+      }
+    }
+    return updated.avatarUrl;
+  }
+
+  async updateAvatar(
+    teacherId: string,
+    organizationId: string,
+    file: Express.Multer.File | undefined,
+  ) {
+    const teacher = await this.ensureTeacher(teacherId, organizationId);
+    return this.saveAvatar({ id: teacher.id }, file, true);
+  }
+
+  async updateMyAvatar(
+    userId: string,
+    organizationId: string,
+    file: Express.Multer.File | undefined,
+  ) {
+    const teacher = await this.ensureTeacher(userId, organizationId);
+    return this.saveAvatar({ id: teacher.id }, file, true);
   }
 
   async getDocuments(teacherId: string, organizationId: string) {

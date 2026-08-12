@@ -12,7 +12,14 @@ function callArgs<T>(mock: jest.Mock): T {
 describe('UsersService', () => {
   let service: UsersService;
 
-  const tx = {
+  type Tx = {
+    user: {
+      updateMany: jest.Mock;
+      delete: jest.Mock;
+    };
+  };
+
+  const tx: Tx = {
     user: {
       updateMany: jest.fn(),
       delete: jest.fn(),
@@ -31,7 +38,7 @@ describe('UsersService', () => {
     alert: { count: jest.fn() },
     quiz: { count: jest.fn() },
     courseOffering: { count: jest.fn() },
-    $transaction: jest.fn((cb: (tx: typeof tx) => unknown) => cb(tx)),
+    $transaction: jest.fn((cb: (tx: Tx) => unknown) => cb(tx)),
   };
 
   const mockAuthClient = {
@@ -149,7 +156,7 @@ describe('UsersService', () => {
 
       expect(result).toEqual([userRow]);
       expect(result[0].grade).toEqual({ id: 'g-1', level: 5, name: null });
-      expect(result[0].guardian.name).toBe('Guardian');
+      expect(result[0].guardian?.name).toBe('Guardian');
     });
   });
 

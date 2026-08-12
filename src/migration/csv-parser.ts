@@ -1,4 +1,7 @@
-export function parseCsv(text: string): string[][] {
+export function parseDelimited(
+  text: string,
+  delimiter: ',' | '\t',
+): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];
   let field = '';
@@ -33,7 +36,7 @@ export function parseCsv(text: string): string[][] {
       inQuotes = true;
       continue;
     }
-    if (char === ',') {
+    if (char === delimiter) {
       pushField();
       continue;
     }
@@ -50,6 +53,22 @@ export function parseCsv(text: string): string[][] {
     .map((r) => r.map((cell) => cell.trim()))
     .filter((r) => r.some((cell) => cell.length > 0));
   return cleaned;
+}
+
+export function parseCsv(text: string): string[][] {
+  return parseDelimited(text, ',');
+}
+
+/**
+ * Paste from a spreadsheet (Excel/Google Sheets copies a selection as
+ * tab-separated text). Sniff the delimiter from the first non-empty line:
+ * tabs win, comma is the fallback — both end up as the same string[][]
+ * shape, so pasted and uploaded data hit the exact same analysis pipeline.
+ */
+export function parsePasted(text: string): string[][] {
+  const firstLine = text.split(/\r?\n/).find((l) => l.trim().length > 0) ?? '';
+  const delimiter = firstLine.includes('\t') ? '\t' : ',';
+  return parseDelimited(text, delimiter);
 }
 
 export function isEmailLike(value: string): boolean {
