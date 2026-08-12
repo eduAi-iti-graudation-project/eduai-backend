@@ -77,10 +77,15 @@ export class QuizzesService {
     return quiz;
   }
 
-  async findAll(courseOfferingId?: string, teacherId?: string) {
+  async findAll(courseOfferingId?: string, studentId?: string) {
     const where: Prisma.QuizWhereInput = {};
     if (courseOfferingId) where.courseOfferingId = courseOfferingId;
-    if (teacherId) where.teacherId = teacherId;
+    if (studentId) {
+      // Students only see published quizzes, and only if the quiz is either
+      // class-wide or explicitly scoped to them (struggle-signal dispatch).
+      where.status = 'PUBLISHED';
+      where.OR = [{ studentId: null }, { studentId }];
+    }
 
     const quizzes = await this.prisma.quiz.findMany({
       where,
@@ -103,7 +108,7 @@ export class QuizzesService {
     }));
   }
 
-  async findOne(id: string, studentView = false) {
+  async findOne(id: string, studentView = false, studentId?: string) {
     const quiz = await this.prisma.quiz.findUnique({
       where: { id },
       include: {
@@ -120,6 +125,15 @@ export class QuizzesService {
     }
 
     if (studentView) {
+      // Struggle-signal quizzes are scoped to one student: anyone else
+      // (including a class-wide student) is not allowed to see it.
+      if (quiz.studentId && studentId && quiz.studentId !== studentId) {
+        throw new ApiError(
+          ErrorCode.QUIZ_NOT_FOUND,
+          HttpStatus.NOT_FOUND,
+          'This quiz could not be found.',
+        );
+      }
       return {
         ...quiz,
         questions: quiz.questions.map((q) => ({
@@ -255,6 +269,15 @@ export class QuizzesService {
         ErrorCode.QUIZ_NOT_FOUND,
         HttpStatus.NOT_FOUND,
         'This quiz could not be found.',
+      );
+    }
+    // A quiz scoped to a specific student (struggle-signal dispatch) can
+    // only be attempted by that student.
+    if (quiz.studentId && quiz.studentId !== studentId) {
+      throw new ApiError(
+        ErrorCode.QUIZ_FORBIDDEN,
+        HttpStatus.FORBIDDEN,
+        'This quiz is not assigned to you.',
       );
     }
     if (quiz.status !== 'PUBLISHED')

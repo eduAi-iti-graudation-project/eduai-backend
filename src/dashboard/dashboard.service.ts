@@ -271,15 +271,18 @@ export class DashboardService {
         const [
           confirmedScores,
           attendanceRecords,
-          activeAlerts,
+          activeAlertRows,
           unreadReports,
         ] = await Promise.all([
           this.prisma.gradingScore.findMany({
             where: { isConfirmed: true, submission: { studentId: ward.id } },
           }),
           this.prisma.attendance.findMany({ where: { studentId: ward.id } }),
-          this.prisma.alert.count({
+          this.prisma.alert.findMany({
             where: { studentId: ward.id, status: 'ACTIVE' },
+            select: { id: true },
+            orderBy: { createdAt: 'desc' },
+            take: 1,
           }),
           this.prisma.studentReport.count({
             where: { studentId: ward.id, status: { not: 'VIEWED' } },
@@ -311,7 +314,8 @@ export class DashboardService {
           className,
           overallAverage: Math.round(overallAverage * 100) / 100,
           attendanceRate: Math.round(attendanceRate * 100) / 100,
-          activeAlertCount: activeAlerts,
+          activeAlertCount: activeAlertRows.length,
+          activeAlertId: activeAlertRows[0]?.id ?? null,
           unreadReportCount: unreadReports,
         };
       }),
@@ -328,17 +332,27 @@ export class DashboardService {
     const [
       teacherCount,
       studentCount,
+      studentsWithoutGuardian,
       classCount,
       flaggedStudents,
       pendingReports,
       unreadNotifications,
       teachers,
+      activeAlertCount,
+      resolvedAlertCount,
+      recentAlerts,
+      submissionsNeedingReview,
+      pendingConfirmations,
     ] = await Promise.all([
       this.prisma.user.count({
         where: { role: 'TEACHER', organizationId },
       }),
       this.prisma.user.count({
         where: { role: 'STUDENT', organizationId },
+      }),
+      // WP2: "students without a guardian" widget — work queue for admins.
+      this.prisma.user.count({
+        where: { role: 'STUDENT', organizationId, guardianId: null },
       }),
       this.prisma.courseOffering.count({ where: { organizationId } }),
       this.prisma.user.count({
@@ -368,6 +382,42 @@ export class DashboardService {
               },
             },
           },
+        },
+      }),
+      this.prisma.alert.count({
+        where: {
+          status: 'ACTIVE',
+          student: { organizationId },
+        },
+      }),
+      this.prisma.alert.count({
+        where: {
+          status: { in: ['RESOLVED', 'DISMISSED'] },
+          student: { organizationId },
+        },
+      }),
+      this.prisma.alert.findMany({
+        where: { student: { organizationId } },
+        include: { student: true },
+        orderBy: { createdAt: 'desc' },
+        take: 10,
+      }),
+      this.prisma.submission.findMany({
+        where: {
+          status: 'REVIEW_READY',
+          assignment: { offering: { organizationId } },
+        },
+        include: {
+          student: true,
+          assignment: true,
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 10,
+      }),
+      this.prisma.gradingScore.count({
+        where: {
+          isConfirmed: false,
+          submission: { assignment: { offering: { organizationId } } },
         },
       }),
     ]);
@@ -402,9 +452,33 @@ export class DashboardService {
       studentCount,
       classCount,
       flaggedStudentCount: flaggedStudents,
+      studentsWithoutGuardian,
       averagePassRate: passRate,
       pendingReportCount: pendingReports,
       teachers: teacherSummaries,
+      activeAlertCount,
+      resolvedAlertCount,
+      recentAlerts: recentAlerts.map((a) => ({
+        id: a.id,
+        studentName: a.student.name,
+        type: a.type,
+        reason: a.reason,
+        createdAt: a.createdAt.toISOString(),
+      })),
+      submissionsNeedingReview: (
+        submissionsNeedingReview as {
+          student: { name: string };
+          assignment: { title: string };
+          createdAt: Date;
+          id: string;
+        }[]
+      ).map((s) => ({
+        id: s.id,
+        studentName: s.student.name,
+        assignmentTitle: s.assignment.title,
+        createdAt: s.createdAt.toISOString(),
+      })),
+      pendingConfirmations,
       unreadNotifications,
     };
   }

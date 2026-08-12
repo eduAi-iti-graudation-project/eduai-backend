@@ -166,6 +166,13 @@ export class UsersService {
     }
   }
 
+  async getAvatarById(id: string) {
+    return this.prisma.user.findFirst({
+      where: { id },
+      select: { avatarUrl: true },
+    });
+  }
+
   async remove(id: string, organizationId: string, adminId: string) {
     const user = await this.prisma.user.findFirst({
       where: { id, organizationId },

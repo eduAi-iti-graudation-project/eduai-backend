@@ -13,6 +13,12 @@ describe('AlertsService', () => {
       findMany: jest.fn(),
       update: jest.fn(),
     },
+    studentAnalysis: {
+      findFirst: jest.fn(),
+    },
+    studyGeneration: {
+      findMany: jest.fn(),
+    },
   };
 
   beforeEach(async () => {
@@ -181,6 +187,81 @@ describe('AlertsService', () => {
       ).rejects.toMatchObject({ code: 'ALERT_NOT_FOUND' });
       expect(mockPrisma.alert.findFirst).toHaveBeenCalledWith({
         where: { id: 'org-b-alert', student: { organizationId } },
+      });
+    });
+  });
+
+  describe('getGuardianDetail', () => {
+    it('returns guardian-facing content for a linked child', async () => {
+      mockPrisma.studentAnalysis.findFirst.mockResolvedValue({
+        alert: {
+          student: { id: 'child-1', name: 'Jamie S.' },
+        },
+        diagnosis: { summary: 'Jamie is falling behind in math.' },
+        guardianContent: {
+          message: 'Hi parent, ...',
+          homeSupport: ['Set a study routine'],
+        },
+      });
+
+      const result = await service.getGuardianDetail('a1', 'guardian-1');
+
+      expect(mockPrisma.studentAnalysis.findFirst).toHaveBeenCalledWith({
+        where: {
+          alertId: 'a1',
+          alert: { student: { guardianId: 'guardian-1' } },
+        },
+        include: {
+          alert: { include: { student: { select: { id: true, name: true } } } },
+        },
+      });
+      expect(result).toEqual({
+        studentId: 'child-1',
+        studentName: 'Jamie S.',
+        diagnosis: { summary: 'Jamie is falling behind in math.' },
+        guardianContent: {
+          message: 'Hi parent, ...',
+          homeSupport: ['Set a study routine'],
+        },
+      });
+    });
+
+    it('throws ALERT_NOT_FOUND for alerts of other students', async () => {
+      mockPrisma.studentAnalysis.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.getGuardianDetail('other-alert', 'guardian-1'),
+      ).rejects.toMatchObject({ code: 'ALERT_NOT_FOUND' });
+    });
+  });
+
+  describe('getTeacherDetail', () => {
+    it('returns diagnosis content and recommended practice generations', async () => {
+      mockPrisma.studentAnalysis.findFirst.mockResolvedValue({
+        id: 'analysis-1',
+        diagnosis: { severity: 'HIGH' },
+        teacherContent: { analysis: 'needs support' },
+        guardianContent: { message: 'hi' },
+        teacherFeedback: null,
+        managementSummary: null,
+      });
+      mockPrisma.studyGeneration.findMany.mockResolvedValue([
+        {
+          id: 'gen-1',
+          topic: 'Using evidence',
+          status: 'READY',
+          stage: 'DONE',
+          error: null,
+          createdAt: new Date('2026-08-29'),
+        },
+      ]);
+
+      const result = await service.getTeacherDetail('alert-1', organizationId);
+
+      expect(result.recommendations).toHaveLength(1);
+      expect(result.recommendations[0]).toMatchObject({
+        id: 'gen-1',
+        topic: 'Using evidence',
       });
     });
   });

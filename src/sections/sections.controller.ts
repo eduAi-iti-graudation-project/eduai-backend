@@ -35,19 +35,12 @@ export class SectionsController {
     return this.sectionsService.create(dto, organizationId);
   }
 
-  @Roles('TEACHER', 'STUDENT', 'GUARDIAN', 'ADMIN')
+  @Roles('TEACHER', 'ADMIN')
   @Get()
   @ApiOperation({ summary: 'List all sections' })
   @ApiOkResponse({ type: SectionDto, isArray: true })
   findAll(@CurrentUser('organizationId') organizationId: string) {
     return this.sectionsService.findAll(organizationId);
-  }
-
-  @Roles('STUDENT')
-  @Get('available')
-  @ApiOperation({ summary: 'List available sections for self-enrollment' })
-  findAvailable(@CurrentUser('id') studentId: string) {
-    return this.sectionsService.findAvailable(studentId);
   }
 
   @Roles('TEACHER', 'STUDENT', 'GUARDIAN', 'ADMIN')
@@ -98,23 +91,6 @@ export class SectionsController {
       dto.studentId,
       organizationId,
     );
-  }
-
-  @Roles('STUDENT')
-  @Post(':id/join')
-  @ApiOperation({ summary: 'Student self-join a section' })
-  join(@Param('id') id: string, @CurrentUser('id') studentId: string) {
-    return this.sectionsService.joinSection(id, studentId);
-  }
-
-  @Roles('TEACHER', 'ADMIN')
-  @Get(':id/requests')
-  @ApiOperation({ summary: 'List pending section enrollment requests' })
-  getRequests(
-    @Param('id') id: string,
-    @CurrentUser('organizationId') organizationId: string,
-  ) {
-    return this.sectionsService.getRequests(id, organizationId);
   }
 
   @Roles('TEACHER', 'ADMIN')

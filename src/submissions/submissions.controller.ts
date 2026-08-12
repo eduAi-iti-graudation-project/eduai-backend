@@ -22,6 +22,7 @@ import {
 import { SubmissionsService } from './submissions.service';
 import { CreateSubmissionDto, SubmissionDto } from './dto';
 import { Roles } from '../auth/roles.decorator';
+import { AllowGuardianless } from '../auth/allow-guardianless.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { ApiError } from '../common/errors/api-error';
 import { ErrorCode } from '../common/errors/codes';
@@ -114,6 +115,7 @@ export class SubmissionsController {
 
   @Roles('STUDENT')
   @Get('mine')
+  @AllowGuardianless()
   @ApiOperation({
     summary: "List the current student's own submissions",
   })

@@ -23,6 +23,10 @@ describe('WebhooksService', () => {
       findFirst: jest.fn(),
       update: jest.fn(),
     },
+    schoolGroup: {
+      findFirst: jest.fn(),
+      update: jest.fn(),
+    },
     user: {
       findMany: jest.fn(),
     },
@@ -63,14 +67,18 @@ describe('WebhooksService', () => {
         cb: (tx: {
           subscriptionEvent: typeof mockPrisma.subscriptionEvent;
           organization: typeof mockPrisma.organization;
+          schoolGroup: typeof mockPrisma.schoolGroup;
         }) => Promise<unknown>,
       ) =>
         cb({
           subscriptionEvent: mockPrisma.subscriptionEvent,
           organization: mockPrisma.organization,
+          schoolGroup: mockPrisma.schoolGroup,
         }),
     );
     mockPrisma.organization.update.mockResolvedValue({ id: 'org-1' });
+    mockPrisma.schoolGroup.update.mockResolvedValue({ id: 'group-1' });
+    mockPrisma.schoolGroup.findFirst.mockResolvedValue(null);
     mockPrisma.subscriptionEvent.create.mockResolvedValue({ id: 'evt-row' });
     mockPrisma.user.findMany.mockResolvedValue([
       { id: 'admin-1' },
@@ -199,6 +207,7 @@ describe('WebhooksService', () => {
 
     expect(mockPrisma.organization.findFirst).toHaveBeenCalledWith({
       where: { stripeCustomerId: 'cus_123' },
+      select: { id: true, subscriptionStatus: true, groupId: true },
     });
     expect(mockPrisma.organization.update).toHaveBeenCalledWith({
       where: { id: 'org-1' },
@@ -225,6 +234,36 @@ describe('WebhooksService', () => {
     expect(mockPrisma.organization.update).toHaveBeenCalledWith({
       where: { id: 'org-1' },
       data: { subscriptionStatus: 'CANCELED' },
+    });
+    expect(result).toEqual({ received: true });
+  });
+
+  it('resolves the SchoolGroup first and updates group billing on payment_failed', async () => {
+    mockStripe.webhooks.constructEvent.mockReturnValue(
+      event('invoice.payment_failed', { customer: 'cus_123' }),
+    );
+    mockPrisma.subscriptionEvent.findUnique.mockResolvedValue(null);
+    mockPrisma.schoolGroup.findFirst.mockResolvedValue({
+      id: 'group-1',
+      organizations: [
+        { id: 'org-1', subscriptionStatus: 'ACTIVE', groupId: 'group-1' },
+      ],
+    });
+
+    const result = await service.handleStripeEvent(
+      Buffer.from('{}'),
+      'valid-sig',
+    );
+
+    expect(mockPrisma.schoolGroup.findFirst).toHaveBeenCalledWith({
+      where: { stripeCustomerId: 'cus_123' },
+      include: {
+        organizations: { orderBy: { createdAt: 'asc' }, take: 1 },
+      },
+    });
+    expect(mockPrisma.schoolGroup.update).toHaveBeenCalledWith({
+      where: { id: 'group-1' },
+      data: { subscriptionStatus: 'PAST_DUE' },
     });
     expect(result).toEqual({ received: true });
   });

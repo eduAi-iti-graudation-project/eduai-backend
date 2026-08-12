@@ -36,6 +36,7 @@ export class BillingService {
 
     const organization = await this.prisma.organization.findUnique({
       where: { id: input.organizationId },
+      include: { group: true },
     });
     if (!organization) {
       throw new ApiError(
@@ -45,17 +46,27 @@ export class BillingService {
       );
     }
 
-    let customerId = organization.stripeCustomerId;
+    // WP5: billing belongs to the SchoolGroup when the school is grouped.
+    const owner = organization.group ?? organization;
+    const persistOwnerCustomer = (customerId: string) =>
+      organization.groupId
+        ? this.prisma.schoolGroup.update({
+            where: { id: organization.groupId },
+            data: { stripeCustomerId: customerId },
+          })
+        : this.prisma.organization.update({
+            where: { id: organization.id },
+            data: { stripeCustomerId: customerId },
+          });
+
+    let customerId = owner.stripeCustomerId;
     if (!customerId) {
       const customer = await this.stripe.customers.create({
-        name: organization.name,
+        name: owner.name,
         metadata: { organizationId: organization.id },
       });
       customerId = customer.id;
-      await this.prisma.organization.update({
-        where: { id: organization.id },
-        data: { stripeCustomerId: customerId },
-      });
+      await persistOwnerCustomer(customerId);
     }
 
     const session = await this.stripe.checkout.sessions.create({
@@ -86,6 +97,7 @@ export class BillingService {
 
     const organization = await this.prisma.organization.findUnique({
       where: { id: input.organizationId },
+      include: { group: true },
     });
     if (!organization) {
       throw new ApiError(
@@ -94,7 +106,12 @@ export class BillingService {
         'Your organization could not be found.',
       );
     }
-    if (!organization.stripeSubscriptionId) {
+
+    // WP5: billing belongs to the SchoolGroup when the school is grouped.
+    const subscriptionId =
+      organization.group?.stripeSubscriptionId ??
+      organization.stripeSubscriptionId;
+    if (!subscriptionId) {
       throw new ApiError(
         ErrorCode.BILLING_NO_SUBSCRIPTION,
         HttpStatus.BAD_REQUEST,
@@ -102,9 +119,8 @@ export class BillingService {
       );
     }
 
-    const subscription = await this.stripe.subscriptions.retrieve(
-      organization.stripeSubscriptionId,
-    );
+    const subscription =
+      await this.stripe.subscriptions.retrieve(subscriptionId);
     const item = subscription.items?.data?.[0];
     if (!item) {
       throw new ApiError(
@@ -132,6 +148,7 @@ export class BillingService {
   }) {
     const organization = await this.prisma.organization.findUnique({
       where: { id: input.organizationId },
+      include: { group: true },
     });
     if (!organization) {
       throw new ApiError(
@@ -141,17 +158,27 @@ export class BillingService {
       );
     }
 
-    let customerId = organization.stripeCustomerId;
+    // WP5: billing belongs to the SchoolGroup when the school is grouped.
+    const owner = organization.group ?? organization;
+    const persistOwnerCustomer = (customerId: string) =>
+      organization.groupId
+        ? this.prisma.schoolGroup.update({
+            where: { id: organization.groupId },
+            data: { stripeCustomerId: customerId },
+          })
+        : this.prisma.organization.update({
+            where: { id: organization.id },
+            data: { stripeCustomerId: customerId },
+          });
+
+    let customerId = owner.stripeCustomerId;
     if (!customerId) {
       const customer = await this.stripe.customers.create({
-        name: organization.name,
+        name: owner.name,
         metadata: { organizationId: organization.id },
       });
       customerId = customer.id;
-      await this.prisma.organization.update({
-        where: { id: organization.id },
-        data: { stripeCustomerId: customerId },
-      });
+      await persistOwnerCustomer(customerId);
     }
 
     const session = await this.stripe.billingPortal.sessions.create({

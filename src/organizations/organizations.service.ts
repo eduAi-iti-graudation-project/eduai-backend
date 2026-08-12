@@ -106,6 +106,19 @@ export class OrganizationsService {
     throw new Error('Could not allocate a unique join code');
   }
 
+  /**
+   * Set the school login-identity domain (e.g. "westside.edu"). Only affects
+   * newly provisioned accounts — existing logins are not re-keyed.
+   */
+  async setEmailDomain(organizationId: string, emailDomain: string) {
+    const domain = emailDomain.trim().toLowerCase();
+    const organization = await this.prisma.organization.update({
+      where: { id: organizationId },
+      data: { emailDomain: domain },
+    });
+    return { emailDomain: organization.emailDomain };
+  }
+
   async listRequests(
     organizationId: string,
     status: 'PENDING' | 'APPROVED' | 'REJECTED' = 'PENDING',
@@ -185,6 +198,45 @@ export class OrganizationsService {
         data: { status: 'APPROVED', resolvedAt: new Date() },
       }),
     ]);
+
+    const hasTeacherProfile =
+      request.role === 'TEACHER' &&
+      (request.photoUrl ||
+        request.ssnEncrypted ||
+        request.phone ||
+        request.street ||
+        request.city ||
+        request.nationality ||
+        request.personalEmail ||
+        request.dateOfBirth ||
+        request.emergencyContactName);
+
+    if (hasTeacherProfile) {
+      await this.prisma.$transaction([
+        this.prisma.teacherProfile.upsert({
+          where: { teacherId: user.id },
+          create: {
+            teacherId: user.id,
+            ssnEncrypted: request.ssnEncrypted,
+            ssnTail4: request.ssnTail4,
+            phone: request.phone,
+            street: request.street,
+            city: request.city,
+            nationality: request.nationality,
+            personalEmail: request.personalEmail,
+            dateOfBirth: request.dateOfBirth,
+            emergencyContactName: request.emergencyContactName,
+            emergencyContactPhone: request.emergencyContactPhone,
+            emergencyContactRelationship: request.emergencyContactRelationship,
+          },
+          update: {},
+        }),
+        this.prisma.user.update({
+          where: { id: user.id },
+          data: { avatarUrl: request.photoUrl ?? null },
+        }),
+      ]);
+    }
 
     return {
       id: user.id,

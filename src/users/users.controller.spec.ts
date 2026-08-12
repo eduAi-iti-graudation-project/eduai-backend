@@ -88,8 +88,8 @@ describe('UsersController', () => {
 
   it('requires the ADMIN role on every endpoint', () => {
     const handler = (name: string) =>
-      Object.getOwnPropertyDescriptor(UsersController.prototype, name)
-        ?.value as (() => void) | undefined;
+      Object.getOwnPropertyDescriptor(UsersController.prototype, name)!
+        .value as () => void;
 
     expect(Reflect.getMetadata('roles', handler('findAll'))).toEqual(['ADMIN']);
     expect(Reflect.getMetadata('roles', handler('findOne'))).toEqual(['ADMIN']);

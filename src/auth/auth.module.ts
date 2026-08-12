@@ -4,8 +4,10 @@ import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { SupabaseService } from './supabase.service';
 import { RolesGuard } from './roles.guard';
+import { MailerModule } from '../common/mailer/mailer.module';
 
 @Module({
+  imports: [MailerModule],
   providers: [
     AuthService,
     SupabaseService,

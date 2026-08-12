@@ -6,12 +6,14 @@ import {
   Delete,
   Param,
   Body,
+  Query,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiOkResponse, ApiBody } from '@nestjs/swagger';
 import { OfferingsService } from './offerings.service';
 import { CreateOfferingDto, UpdateOfferingDto, OfferingDto } from './dto';
 import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
+import type { User } from '@prisma/client';
 
 @ApiTags('offerings')
 @Controller('offerings')
@@ -32,10 +34,27 @@ export class OfferingsController {
 
   @Roles('TEACHER', 'STUDENT', 'GUARDIAN', 'ADMIN')
   @Get()
-  @ApiOperation({ summary: 'List all course offerings' })
+  @ApiOperation({
+    summary: 'List all course offerings',
+    description:
+      'Optionally filter by courseId, or by teacherId (ADMIN only; teachers are always scoped to themselves).',
+  })
   @ApiOkResponse({ type: OfferingDto, isArray: true })
-  findAll(@CurrentUser('organizationId') organizationId: string) {
-    return this.offeringsService.findAll(organizationId);
+  findAll(
+    @CurrentUser() user: User,
+    @Query('teacherId') teacherId?: string,
+    @Query('courseId') courseId?: string,
+  ) {
+    const effectiveTeacherId =
+      user.role === 'TEACHER'
+        ? user.id
+        : user.role === 'ADMIN'
+          ? teacherId
+          : undefined;
+    return this.offeringsService.findAll(user.organizationId, {
+      teacherId: effectiveTeacherId,
+      courseId,
+    });
   }
 
   @Roles('TEACHER', 'STUDENT', 'GUARDIAN', 'ADMIN')

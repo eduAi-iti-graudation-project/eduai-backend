@@ -11,5 +11,8 @@ export default defineConfig({
   },
   datasource: {
     url: process.env['DATABASE_URL'],
+    shadowDatabaseUrl:
+      process.env['SHADOW_DATABASE_URL'] ??
+      'postgresql://postgres:development_password@localhost:5432/eduai_shadow',
   },
 });

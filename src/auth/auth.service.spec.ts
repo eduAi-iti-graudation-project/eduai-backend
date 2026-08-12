@@ -3,6 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { AuthService } from './auth.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SupabaseService } from './supabase.service';
+import { MailerService } from '../common/mailer/mailer.service';
 import { ApiError } from '../common/errors/api-error';
 import { ErrorCode } from '../common/errors/codes';
 
@@ -48,6 +49,13 @@ describe('AuthService', () => {
       findFirst: jest.fn(),
       create: jest.fn(),
     },
+    guardianProfile: {
+      findFirst: jest.fn(),
+      findUnique: jest.fn(),
+    },
+    joinRequest: {
+      findFirst: jest.fn(),
+    },
     $transaction: jest.fn(),
   };
 
@@ -56,6 +64,7 @@ describe('AuthService', () => {
       signInWithPassword: jest.fn(),
       admin: {
         createUser: jest.fn(),
+        updateUserById: jest.fn(),
         signOut: jest.fn(),
       },
     },
@@ -67,6 +76,13 @@ describe('AuthService', () => {
     exchangeCodeForSession: jest.fn(),
     refreshSession: jest.fn(),
     signOut: jest.fn(),
+    resetPasswordForEmail: jest.fn(),
+    getUserByToken: jest.fn(),
+    updatePassword: jest.fn(),
+  };
+
+  const mockMailer = {
+    send: jest.fn().mockResolvedValue(undefined),
   };
 
   const originalProviders = process.env.OAUTH_PROVIDERS;
@@ -78,6 +94,7 @@ describe('AuthService', () => {
         AuthService,
         { provide: PrismaService, useValue: mockPrisma },
         { provide: SupabaseService, useValue: mockSupabase },
+        { provide: MailerService, useValue: mockMailer },
       ],
     }).compile();
 
@@ -703,40 +720,260 @@ describe('AuthService', () => {
     });
   });
 
-  describe('refresh', () => {
-    it('returns new tokens on success', async () => {
-      mockSupabase.refreshSession.mockResolvedValue({
-        data: {
-          session: {
-            access_token: 'new-access-token',
-            refresh_token: 'new-refresh-token',
-          },
-          user: { id: 'supabase-auth-id-1' },
-        },
+  describe('signupTeacher', () => {
+    const validDto = {
+      email: 'New.Teacher@eduai.test',
+      password: 'Passw0rd!123',
+      name: 'New Teacher',
+      joinCode: 'TEAM2026',
+      ssn: '123-45-6789',
+      phone: '+15551234567',
+      street: '1 Main St',
+      city: 'Springfield',
+      nationality: 'US',
+      personalEmail: 'teacher.personal@example.com',
+      dateOfBirth: new Date('1990-05-15T00:00:00.000Z'),
+      emergencyContactName: 'Jane Doe',
+      emergencyContactPhone: '+15559876543',
+      emergencyContactRelationship: 'Spouse',
+    };
+    const validFile = {
+      mimetype: 'image/jpeg',
+      originalname: 'me.jpg',
+      buffer: Buffer.from('fake-jpeg-bytes'),
+    } as Express.Multer.File;
+
+    let originalKey: string | undefined;
+    let originalPhotoDir: string | undefined;
+
+    beforeAll(() => {
+      originalKey = process.env.TEACHER_SSN_ENCRYPTION_KEY;
+      originalPhotoDir = process.env.PHOTO_UPLOAD_DIR;
+      process.env.TEACHER_SSN_ENCRYPTION_KEY = 'test-ssn-key-123456';
+      process.env.PHOTO_UPLOAD_DIR = '/tmp/eduai-teacher-photos-test';
+    });
+
+    afterAll(() => {
+      if (originalKey === undefined)
+        delete process.env.TEACHER_SSN_ENCRYPTION_KEY;
+      else process.env.TEACHER_SSN_ENCRYPTION_KEY = originalKey;
+      if (originalPhotoDir === undefined) delete process.env.PHOTO_UPLOAD_DIR;
+      else process.env.PHOTO_UPLOAD_DIR = originalPhotoDir;
+    });
+
+    it('creates a pending teacher membership request with encrypted SSN and photo', async () => {
+      mockPrisma.organization.findUnique.mockResolvedValue({
+        id: 'org-1',
+        joinCode: 'TEAM2026',
+      });
+      mockPrisma.user.findFirst.mockResolvedValue(null);
+      mockPrisma.membershipRequest.findFirst.mockResolvedValue(null);
+      mockAuthClient.auth.admin.createUser.mockResolvedValue({
+        data: { user: { id: 'auth-teacher-1' } },
         error: null,
       });
 
-      const result = await service.refresh('old-refresh-token');
+      const result = await service.signupTeacher(validDto, validFile);
 
-      expect(mockSupabase.refreshSession).toHaveBeenCalledWith(
-        'old-refresh-token',
-      );
-      expect(result).toEqual({
-        accessToken: 'new-access-token',
-        refreshToken: 'new-refresh-token',
+      expect(result.status).toBe('PENDING');
+      expect(result.message).toContain('submitted');
+      const createCalls = mockPrisma.membershipRequest.create.mock.calls as [
+        { data: Record<string, unknown> },
+      ][];
+      const createArgs = createCalls[0][0];
+      expect(createArgs.data).toMatchObject({
+        organizationId: 'org-1',
+        email: 'new.teacher@eduai.test',
+        role: 'TEACHER',
+        authId: 'auth-teacher-1',
+        ssnTail4: '6789',
+        phone: '+15551234567',
+        dateOfBirth: new Date('1990-05-15T00:00:00.000Z'),
       });
+      expect(typeof createArgs.data.ssnEncrypted).toBe('string');
+      expect(createArgs.data.ssnEncrypted).not.toContain('123-45-6789');
+      expect(createArgs.data.photoUrl).toMatch(/\.jpg$/);
     });
 
-    it('throws a 401 when the refresh token is invalid or expired', async () => {
-      mockSupabase.refreshSession.mockResolvedValue({
-        data: { session: null, user: null },
-        error: { message: 'Invalid Refresh Token' },
+    it('rejects when the photo is missing', async () => {
+      mockPrisma.organization.findUnique.mockResolvedValue({
+        id: 'org1',
+        joinCode: 'TEAM2026',
+      });
+      await expectApiError(
+        service.signupTeacher(validDto, undefined),
+        ErrorCode.PHOTO_REQUIRED,
+        400,
+      );
+    });
+  });
+
+  describe('forgotPassword / resetPassword (school accounts)', () => {
+    const originalFrontendUrl = process.env.FRONTEND_URL;
+
+    beforeEach(() => {
+      process.env.FRONTEND_URL = 'https://app.example.edu';
+    });
+
+    afterEach(() => {
+      if (originalFrontendUrl === undefined) {
+        delete process.env.FRONTEND_URL;
+      } else {
+        process.env.FRONTEND_URL = originalFrontendUrl;
+      }
+    });
+
+    it('routes a student real email to a self-issued reset link', async () => {
+      mockPrisma.guardianProfile.findFirst.mockResolvedValue(null);
+      mockPrisma.joinRequest.findFirst.mockResolvedValue({ userId: 'u-1' });
+      mockPrisma.user.findUnique.mockResolvedValue({
+        id: 'u-1',
+        name: 'Jane Doe',
+        email: 'jane.doe@eduai.org',
+      });
+      mockPrisma.user.update.mockResolvedValue({});
+
+      const result = await service.forgotPassword({
+        email: 'jane@example.com',
+        origin: 'http://api.local',
+      });
+
+      expect(result.message).toContain('If an account exists');
+      const updateCalls = mockPrisma.user.update.mock.calls as [
+        { where: { id: string }; data: Record<string, unknown> },
+      ][];
+      expect(updateCalls[0][0].where.id).toBe('u-1');
+      expect(updateCalls[0][0].data.resetToken).toBeTruthy();
+      expect(updateCalls[0][0].data.resetTokenExpiresAt).toBeInstanceOf(Date);
+      const sendCalls = mockMailer.send.mock.calls as [
+        { to: string; html: string },
+      ][];
+      expect(sendCalls[0][0].to).toBe('jane@example.com');
+      expect(sendCalls[0][0].html).toContain('forgot-password?resetToken=');
+      expect(mockSupabase.resetPasswordForEmail).not.toHaveBeenCalled();
+    });
+
+    it('routes a student school login back to its real inbox', async () => {
+      mockPrisma.guardianProfile.findFirst.mockResolvedValue(null);
+      mockPrisma.joinRequest.findFirst
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ email: 'jane@example.com' });
+      mockPrisma.user.findUnique.mockResolvedValue({
+        id: 'u-1',
+        name: 'Jane Doe',
+        role: 'STUDENT',
+      });
+      mockPrisma.user.update.mockResolvedValue({});
+
+      await service.forgotPassword({
+        email: 'jane.doe@eduai.org',
+        origin: 'http://api.local',
+      });
+
+      const sendCalls = mockMailer.send.mock.calls as [
+        { to: string; html: string },
+      ][];
+      expect(sendCalls[0][0].to).toBe('jane@example.com');
+    });
+
+    it('routes a guardian personal email to a self-issued reset link', async () => {
+      mockPrisma.guardianProfile.findFirst.mockResolvedValue({
+        guardianId: 'g-1',
+      });
+      mockPrisma.user.findUnique.mockResolvedValue({
+        id: 'g-1',
+        name: 'Mom',
+      });
+      mockPrisma.user.update.mockResolvedValue({});
+
+      await service.forgotPassword({
+        email: 'mom@example.com',
+        origin: 'http://api.local',
+      });
+
+      const sendCalls = mockMailer.send.mock.calls as [
+        { to: string; html: string },
+      ][];
+      expect(sendCalls[0][0].to).toBe('mom@example.com');
+    });
+
+    it('falls back to Supabase for accounts without a stored real inbox', async () => {
+      mockPrisma.guardianProfile.findFirst.mockResolvedValue(null);
+      mockPrisma.joinRequest.findFirst.mockResolvedValue(null);
+      mockPrisma.user.findUnique.mockResolvedValue(null);
+      mockSupabase.resetPasswordForEmail.mockResolvedValue(undefined);
+
+      await service.forgotPassword({
+        email: 'teacher@realschool.com',
+        origin: 'http://api.local',
+      });
+
+      expect(mockSupabase.resetPasswordForEmail).toHaveBeenCalledWith(
+        'teacher@realschool.com',
+        'https://app.example.edu/forgot-password',
+      );
+      expect(mockMailer.send).not.toHaveBeenCalled();
+    });
+
+    it('resets a school-account password with a self-issued token', async () => {
+      const storedUser = {
+        id: 'u-1',
+        authId: 'auth-1',
+        email: 'jane.doe@eduai.org',
+        name: 'Jane Doe',
+        resetToken: 'reset-tok',
+        resetTokenExpiresAt: new Date(Date.now() + 60_000),
+      };
+      mockPrisma.user.findUnique.mockResolvedValue(storedUser);
+      mockAuthClient.auth.admin.updateUserById.mockResolvedValue({
+        data: {},
+        error: null,
+      });
+      mockPrisma.user.update.mockResolvedValue(storedUser);
+      mockAuthClient.auth.signInWithPassword.mockResolvedValue({
+        data: { session: { access_token: 'access-1', refresh_token: 'r' } },
+        error: null,
+      });
+
+      const result = await service.resetPassword({
+        token: 'reset-tok',
+        password: 'Newpass123',
+        origin: 'http://api.local',
+      });
+
+      expect(result.accessToken).toBe('access-1');
+      const updateCalls = mockPrisma.user.update.mock.calls as [
+        { where: { id: string }; data: Record<string, unknown> },
+      ][];
+      expect(updateCalls[0][0].data.resetToken).toBeNull();
+      expect(updateCalls[0][0].data.resetTokenExpiresAt).toBeNull();
+      expect(updateCalls[0][0].data.credentialEncrypted).toBeTruthy();
+      const passwordCalls = mockSupabase.updatePassword.mock.calls as [
+        string,
+        string,
+      ][];
+      expect(passwordCalls[0][0]).toBe('auth-1');
+      expect(passwordCalls[0][1]).toBe('Newpass123');
+      expect(mockSupabase.getUserByToken).not.toHaveBeenCalled();
+    });
+
+    it('rejects an expired self-issued reset token', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({
+        id: 'u-1',
+        authId: 'auth-1',
+        email: 'jane.doe@eduai.org',
+        resetToken: 'reset-tok',
+        resetTokenExpiresAt: new Date(Date.now() - 60_000),
       });
 
       await expectApiError(
-        service.refresh('bad-token'),
-        ErrorCode.AUTH_TOKEN_INVALID,
-        401,
+        service.resetPassword({
+          token: 'reset-tok',
+          password: 'Newpass123',
+          origin: 'http://api.local',
+        }),
+        ErrorCode.RESET_TOKEN_EXPIRED,
+        410,
       );
     });
   });

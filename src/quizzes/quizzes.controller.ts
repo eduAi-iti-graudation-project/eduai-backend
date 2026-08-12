@@ -11,6 +11,7 @@ import {
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { QuizzesService } from './quizzes.service';
 import { Roles } from '../auth/roles.decorator';
+import { AllowGuardianless } from '../auth/allow-guardianless.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { RequiresTier } from '../auth/requires-tier.decorator';
 import {
@@ -46,16 +47,33 @@ export class QuizzesController {
 
   @Roles('TEACHER', 'STUDENT')
   @Get()
+  @AllowGuardianless()
   @ApiOperation({ summary: 'List quizzes' })
-  findAll(@Query('classId') classId?: string) {
-    return this.quizzesService.findAll(classId);
+  findAll(
+    @Query('courseOfferingId') courseOfferingId: string | undefined,
+    @CurrentUser('role') role: string,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.quizzesService.findAll(
+      courseOfferingId,
+      role === 'STUDENT' ? userId : undefined,
+    );
   }
 
   @Roles('TEACHER', 'STUDENT')
   @Get(':id')
+  @AllowGuardianless()
   @ApiOperation({ summary: 'Get quiz with questions' })
-  findOne(@Param('id') id: string, @CurrentUser('role') role: string) {
-    return this.quizzesService.findOne(id, role === 'STUDENT');
+  findOne(
+    @Param('id') id: string,
+    @CurrentUser('role') role: string,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.quizzesService.findOne(
+      id,
+      role === 'STUDENT',
+      role === 'STUDENT' ? userId : undefined,
+    );
   }
 
   @Roles('TEACHER')
@@ -111,6 +129,7 @@ export class QuizzesController {
 
   @Roles('TEACHER', 'STUDENT')
   @Get('attempts/:id')
+  @AllowGuardianless()
   @ApiOperation({ summary: 'Get attempt with answers' })
   getAttempt(@Param('id') id: string) {
     return this.quizzesService.getAttempt(id);

@@ -48,6 +48,9 @@ describe('BillingService', () => {
       findUnique: jest.fn(),
       update: jest.fn(),
     },
+    schoolGroup: {
+      update: jest.fn().mockResolvedValue({ id: 'group-1' }),
+    },
   };
 
   const originalPrices = {
@@ -105,6 +108,7 @@ describe('BillingService', () => {
 
     expect(mockPrisma.organization.findUnique).toHaveBeenCalledWith({
       where: { id: 'org-1' },
+      include: { group: true },
     });
     expect(mockStripe.customers.create).not.toHaveBeenCalled();
     expect(mockStripe.checkout.sessions.create).toHaveBeenCalledWith({
@@ -356,6 +360,107 @@ describe('BillingService', () => {
         service.createBillingPortalSession(portalInput),
         ErrorCode.ORG_NOT_FOUND,
         404,
+      );
+    });
+  });
+
+  describe('SchoolGroup resolution (WP5)', () => {
+    const groupedOrg = {
+      id: 'org-1',
+      name: 'Demo School',
+      stripeCustomerId: null,
+      stripeSubscriptionId: null,
+      groupId: 'group-1',
+      group: {
+        id: 'group-1',
+        name: 'Edu Chain',
+        stripeCustomerId: 'cus_group',
+        stripeSubscriptionId: 'sub_group',
+      },
+    };
+
+    function mockSchoolGroupUpdate() {
+      return mockPrisma.schoolGroup.update;
+    }
+
+    it('uses the group customer for checkout and never persists to the org', async () => {
+      mockPrisma.organization.findUnique.mockResolvedValue(groupedOrg);
+      mockStripe.checkout.sessions.create.mockResolvedValue({
+        id: 'cs_g',
+        url: 'https://checkout.stripe.com/pay/cs_g',
+      });
+
+      const result = await service.createCheckoutSession(input);
+
+      expect(mockStripe.checkout.sessions.create).toHaveBeenCalledWith(
+        expect.objectContaining({ customer: 'cus_group' }),
+      );
+      expect(mockStripe.customers.create).not.toHaveBeenCalled();
+      expect(result.url).toBe('https://checkout.stripe.com/pay/cs_g');
+    });
+
+    it('persists a new Stripe customer onto the group, not the org', async () => {
+      mockPrisma.organization.findUnique.mockResolvedValue({
+        ...groupedOrg,
+        group: { ...groupedOrg.group, stripeCustomerId: null },
+      });
+      mockStripe.customers.create.mockResolvedValue({ id: 'cus_new' });
+      const update = mockSchoolGroupUpdate();
+
+      await service.createBillingPortalSession({
+        organizationId: 'org-1',
+        returnUrl: 'https://app.example.com/settings',
+      });
+
+      expect(update).toHaveBeenCalledWith({
+        where: { id: 'group-1' },
+        data: { stripeCustomerId: 'cus_new' },
+      });
+    });
+
+    it('changes the plan through the group subscription', async () => {
+      mockPrisma.organization.findUnique.mockResolvedValue({
+        ...groupedOrg,
+        group: { ...groupedOrg.group, stripeSubscriptionId: 'sub_group' },
+      });
+      mockStripe.subscriptions.retrieve.mockResolvedValue({
+        id: 'sub_group',
+        items: { data: [{ id: 'item_g', price: { id: 'price_basic' } }] },
+        status: 'active',
+        cancel_at_period_end: false,
+      });
+      mockStripe.subscriptions.update.mockResolvedValue({
+        id: 'sub_group',
+        status: 'active',
+        cancel_at_period_end: false,
+      });
+
+      await service.changePlan({
+        organizationId: 'org-1',
+        planId: 'pro',
+        atPeriodEnd: false,
+      });
+
+      expect(mockStripe.subscriptions.retrieve).toHaveBeenCalledWith(
+        'sub_group',
+      );
+    });
+
+    it('throws BILLING_NO_SUBSCRIPTION when neither the group nor the org has one', async () => {
+      mockPrisma.organization.findUnique.mockResolvedValue({
+        ...groupedOrg,
+        group: { ...groupedOrg.group, stripeSubscriptionId: null },
+        stripeSubscriptionId: null,
+      });
+
+      await expectApiError(
+        service.changePlan({
+          organizationId: 'org-1',
+          planId: 'pro',
+          atPeriodEnd: false,
+        }),
+        ErrorCode.BILLING_NO_SUBSCRIPTION,
+        400,
       );
     });
   });

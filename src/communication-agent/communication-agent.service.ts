@@ -4,6 +4,7 @@ import { LlmService } from '../common/llm/llm.service';
 import { FORMATTING_RULES } from '../common/llm/formatting-rules';
 import { ReportsService } from '../reports/reports.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { StudyLabService } from '../study-lab/study-lab.service';
 import {
   ExplanationSchema,
   TeacherStudentContentSchema,
@@ -56,6 +57,7 @@ export class CommunicationAgentService {
     private readonly llmService: LlmService,
     private readonly reportsService: ReportsService,
     private readonly notificationsService: NotificationsService,
+    private readonly studyLabService: StudyLabService,
   ) {
     this.getStudentProfileTool = createGetStudentProfileTool(this.prisma);
     this.createAlertTool = createCreateAlertTool(this.prisma);
@@ -94,6 +96,17 @@ export class CommunicationAgentService {
 
     const studentId = submission.studentId;
     const courseOfferingId = submission.assignment.offering.id;
+
+    const alreadyAnalyzed = await this.prisma.studentAnalysis.findFirst({
+      where: { submissionId, alertId: { not: null } },
+      select: { id: true },
+    });
+    if (alreadyAnalyzed) {
+      this.logger.log(
+        `Skipping communication agent for ${submissionId}: already analyzed`,
+      );
+      return;
+    }
 
     const confirmedCount = await this.prisma.submission.count({
       where: {
@@ -168,35 +181,47 @@ export class CommunicationAgentService {
       return;
     }
 
-    const explanation = await this.llmService.generateStructured<Explanation>({
-      systemPrompt:
-        'You are an educational analyst. Turn the numbers below into a precise, scannable brief for a teacher and a parent. ' +
-        'Reference the actual numbers. Keep every bullet short (a few words), never sentences longer than ~15 words.\n' +
-        'Return valid JSON with EXACTLY these fields:\n' +
-        '{\n' +
-        '  "reason": "string — one paragraph (3-5 sentences) explaining what the numbers show",\n' +
-        '  "headline": "string — short one-line verdict, e.g. "Omar is at risk in English Literature"",\n' +
-        '  "highlights": ["string — 3-5 short factual bullets citing the numbers"],\n' +
-        '  "strengths": ["string — 1-3 skills done well, with percentage when known"],\n' +
-        '  "concerns": ["string — 1-4 skills needing work, with percentage when known"],\n' +
-        '  "recommendation": "string — one short actionable next step"\n' +
-        '}\n' +
-        'Do not omit any fields.' +
-        FORMATTING_RULES,
-      userPrompt: JSON.stringify({
-        studentName: profile.studentName,
+    const explanation = await this.safeStructured<Explanation>(
+      'explanation',
+      () =>
+        this.llmService.generateStructured<Explanation>({
+          systemPrompt:
+            'You are an educational analyst. Turn the numbers below into a precise, scannable brief for a teacher and a parent. ' +
+            'Reference the actual numbers. Keep every bullet short (a few words), never sentences longer than ~15 words.\n' +
+            'Return valid JSON with EXACTLY these fields:\n' +
+            '{\n' +
+            '  "reason": "string — one paragraph (3-5 sentences) explaining what the numbers show",\n' +
+            '  "headline": "string — short one-line verdict, e.g. "Omar is at risk in English Literature"",\n' +
+            '  "highlights": ["string — 3-5 short factual bullets citing the numbers"],\n' +
+            '  "strengths": ["string — 1-3 skills done well, with percentage when known"],\n' +
+            '  "concerns": ["string — 1-4 skills needing work, with percentage when known"],\n' +
+            '  "recommendation": "string — one short actionable next step"\n' +
+            '}\n' +
+            'Do not omit any fields.' +
+            FORMATTING_RULES,
+          userPrompt: JSON.stringify({
+            studentName: profile.studentName,
+            studentStats,
+            classStats,
+            criterionStats,
+            weakCriteria: weakCriteria.map((c) => ({
+              criteriaId: c.criteriaId,
+              description: c.criteriaDescription,
+              avgPct: Math.round(c.last3AvgPct),
+            })),
+            recentGrades: profile.grades.slice(0, 5),
+          }),
+          schema: ExplanationSchema,
+        }),
+      this.buildFallbackExplanation(
+        profile.studentName,
+        decision,
         studentStats,
         classStats,
         criterionStats,
-        weakCriteria: weakCriteria.map((c) => ({
-          criteriaId: c.criteriaId,
-          description: c.criteriaDescription,
-          avgPct: Math.round(c.last3AvgPct),
-        })),
-        recentGrades: profile.grades.slice(0, 5),
-      }),
-      schema: ExplanationSchema,
-    });
+        weakCriteria,
+      ),
+    );
 
     const flagged: FlaggedVerdict = decision;
     this.logger.debug(
@@ -226,7 +251,7 @@ export class CommunicationAgentService {
         : Promise.resolve(null),
     ]);
 
-    await this.prisma.studentAnalysis.create({
+    const analysis = await this.prisma.studentAnalysis.create({
       data: {
         submissionId,
         studentId,
@@ -259,6 +284,52 @@ export class CommunicationAgentService {
         managementSummary: teacherResult?.managementSummary ?? undefined,
       },
     });
+
+    await this.recommendPractice(
+      profile.studentName,
+      studentId,
+      courseOfferingId,
+      analysis.id,
+      weakCriteria,
+      explanation.concerns,
+    );
+  }
+
+  private async recommendPractice(
+    studentName: string,
+    studentId: string,
+    courseOfferingId: string,
+    analysisId: string,
+    weakCriteria: CriterionStat[],
+    concerns: string[],
+  ): Promise<void> {
+    const focus = weakCriteria[0]?.criteriaDescription ?? concerns[0];
+    if (!focus) {
+      this.logger.log(`[agent] no practice topic detected for ${studentId}`);
+      return;
+    }
+
+    try {
+      const generationId = await this.studyLabService.recommend(
+        studentId,
+        courseOfferingId,
+        focus,
+        analysisId,
+      );
+      this.logger.log(
+        `[agent] recommended practice ${generationId} for ${studentId} on "${focus}"`,
+      );
+      await this.notificationsService.notifyUser(
+        studentId,
+        'AGENT_ALERT',
+        `New practice recommended for you`,
+        `We found one area to work on: "${focus}". Open Study Lab → Practice questions to train on it before the next assessment.`,
+      );
+    } catch (err: unknown) {
+      this.logger.error(
+        `[agent] failed to recommend practice for ${studentId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   private async buildClassStats(courseOfferingId: string): Promise<ClassStats> {
@@ -316,47 +387,64 @@ export class CommunicationAgentService {
     }));
 
     const [teacherContent, guardianContent] = await Promise.all([
-      this.llmService.generateStructured<TeacherStudentContent>({
-        systemPrompt:
-          'You are a teacher advisor. Given a student diagnosis and their actual performance numbers, ' +
-          'provide detailed analysis, skill gaps, interventions, and resource suggestions.\n' +
-          'Return valid JSON with EXACTLY these fields:\n' +
-          '{\n' +
-          '  "analysis": "string — detailed analysis grounded in the numbers",\n' +
-          '  "skillGaps": ["string array of identified skill gaps"],\n' +
-          '  "interventions": ["string array of suggested interventions"],\n' +
-          '  "resourceSuggestions": ["string array of recommended resources"]\n' +
-          '}\n' +
-          'Do not omit any fields.',
-        userPrompt: JSON.stringify({
-          studentName: profile.studentName,
-          issueType: decision.type,
-          summary: reason,
-          severity: decision.severity,
+      this.safeStructured<TeacherStudentContent>(
+        'teacher content',
+        () =>
+          this.llmService.generateStructured<TeacherStudentContent>({
+            systemPrompt:
+              'You are a teacher advisor. Given a student diagnosis and their actual performance numbers, ' +
+              'provide detailed analysis, skill gaps, interventions, and resource suggestions.\n' +
+              'Return valid JSON with EXACTLY these fields:\n' +
+              '{\n' +
+              '  "analysis": "string — detailed analysis grounded in the numbers",\n' +
+              '  "skillGaps": ["string array of identified skill gaps"],\n' +
+              '  "interventions": ["string array of suggested interventions"],\n' +
+              '  "resourceSuggestions": ["string array of recommended resources"]\n' +
+              '}\n' +
+              'Do not omit any fields.',
+            userPrompt: JSON.stringify({
+              studentName: profile.studentName,
+              issueType: decision.type,
+              summary: reason,
+              severity: decision.severity,
+              studentStats,
+              classStats,
+              criterionStats,
+              recentGrades,
+            }),
+            schema: TeacherStudentContentSchema,
+          }),
+        this.buildTeacherStudentContent(
+          profile.studentName,
+          decision,
+          reason,
           studentStats,
           classStats,
           criterionStats,
-          recentGrades,
-        }),
-        schema: TeacherStudentContentSchema,
-      }),
-      this.llmService.generateStructured<GuardianStudentContent>({
-        systemPrompt:
-          'You are a parent liaison. Given a student diagnosis, write an empathetic, specific message ' +
-          'for the parent and suggest home support strategies.\n' +
-          'Return valid JSON with EXACTLY these fields:\n' +
-          '{\n' +
-          '  "message": "string with empathetic message for the parent",\n' +
-          '  "homeSupport": ["string array of home support strategies"]\n' +
-          '}\n' +
-          'Do not omit any fields.',
-        userPrompt: JSON.stringify({
-          studentName: profile.studentName,
-          summary: reason,
-          severity: decision.severity,
-        }),
-        schema: GuardianStudentContentSchema,
-      }),
+        ),
+      ),
+      this.safeStructured<GuardianStudentContent>(
+        'guardian content',
+        () =>
+          this.llmService.generateStructured<GuardianStudentContent>({
+            systemPrompt:
+              'You are a parent liaison. Given a student diagnosis, write an empathetic, specific message ' +
+              'for the parent and suggest home support strategies.\n' +
+              'Return valid JSON with EXACTLY these fields:\n' +
+              '{\n' +
+              '  "message": "string with empathetic message for the parent",\n' +
+              '  "homeSupport": ["string array of home support strategies"]\n' +
+              '}\n' +
+              'Do not omit any fields.',
+            userPrompt: JSON.stringify({
+              studentName: profile.studentName,
+              summary: reason,
+              severity: decision.severity,
+            }),
+            schema: GuardianStudentContentSchema,
+          }),
+        this.buildGuardianContent(profile.studentName, reason, decision),
+      ),
     ]);
 
     const alert = await this.createAlertTool.execute({
@@ -485,5 +573,101 @@ export class CommunicationAgentService {
     }
 
     return { teacherFeedback, managementSummary };
+  }
+
+  private async safeStructured<T>(
+    label: string,
+    generate: () => Promise<T>,
+    fallback: T,
+  ): Promise<T> {
+    try {
+      return await generate();
+    } catch (err: unknown) {
+      this.logger.error(
+        `[agent] ${label} generation failed — using deterministic fallback: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return fallback;
+    }
+  }
+
+  private buildFallbackExplanation(
+    studentName: string,
+    flagged: FlaggedVerdict,
+    studentStats: StudentStats,
+    classStats: ClassStats,
+    criterionStats: CriterionStat[],
+    weakCriteria: CriterionStat[],
+  ): Explanation {
+    const weakest = weakCriteria[0]?.criteriaDescription;
+    const head = weakest
+      ? `Weakest area: ${weakest}`
+      : 'Recent scores are below the class average';
+    const highlights = [
+      `Average of last ${studentStats.count} graded submissions: ${Math.round(studentStats.last3AvgPct)}%`,
+      `Class average: ${Math.round(classStats.classAvgPct)}%`,
+    ];
+    if (weakCriteria.length > 0) {
+      highlights.push(
+        `${weakCriteria[0]?.criteriaDescription} — ${Math.round(weakCriteria[0]?.last3AvgPct ?? 0)}%`,
+      );
+    }
+    const concerns = weakCriteria
+      .slice(0, 4)
+      .map((c) => `${c.criteriaDescription} (${Math.round(c.last3AvgPct)}%)`);
+    const strengths = criterionStats
+      .filter((c) => c.last3AvgPct >= 70)
+      .slice(0, 3)
+      .map((c) => `${c.criteriaDescription} (${Math.round(c.last3AvgPct)}%)`);
+    return {
+      reason: `${studentName} is flagged (${flagged.type.toLowerCase().replace('_', ' ')}). Over the last ${studentStats.count} graded submissions the average is ${Math.round(studentStats.last3AvgPct)}%, compared with a class average of ${Math.round(classStats.classAvgPct)}%. The pattern indicates the student needs targeted support.`,
+      headline: `${studentName} is at risk and needs support`,
+      highlights,
+      strengths: strengths.length > 0 ? strengths : ['—'],
+      concerns:
+        concerns.length > 0 ? concerns : ['Overall performance below target'],
+      recommendation: `${head}. Assign the recommended practice set and schedule a check-in.`,
+    };
+  }
+
+  private buildTeacherStudentContent(
+    studentName: string,
+    decision: FlaggedVerdict,
+    reason: string,
+    studentStats: StudentStats,
+    classStats: ClassStats,
+    criterionStats: CriterionStat[],
+  ): TeacherStudentContent {
+    const below = criterionStats
+      .filter((c) => c.last3AvgPct < 60)
+      .slice(0, 3)
+      .map((c) => c.criteriaDescription);
+    return {
+      analysis: `${studentName} is showing a ${decision.type.toLowerCase().replace('_', ' ')} pattern (${Math.round(studentStats.last3AvgPct)}% vs class ${Math.round(classStats.classAvgPct)}%). ${reason}`,
+      skillGaps:
+        below.length > 0 ? below : ['Core concepts need reinforcement'],
+      interventions: [
+        'Generate the recommended practice set and have the student complete it',
+        'Hold a 1:1 check-in to identify the root cause',
+      ],
+      resourceSuggestions: [
+        'Study Lab practice questions on the weak criteria',
+        'Office hours before the next assessment',
+      ],
+    };
+  }
+
+  private buildGuardianContent(
+    studentName: string,
+    reason: string,
+    decision: FlaggedVerdict,
+  ): GuardianStudentContent {
+    return {
+      message: `We have observed that ${studentName} is having difficulty in at least one area (${decision.type.toLowerCase().replace('_', ' ')}). ${reason} We are adding a recommended practice set in Study Lab and will follow up with you.`,
+      homeSupport: [
+        'Help your child complete the recommended practice set in Study Lab',
+        'Create a quiet, consistent study schedule this week',
+        'Reach out to the teacher with any questions after the alert',
+      ],
+    };
   }
 }

@@ -45,13 +45,13 @@ export class HomeworkHelperController {
   @Get('homework-help/history')
   @Roles('STUDENT')
   @ApiOperation({ summary: 'Get past homework help interactions' })
-  @ApiQuery({ name: 'classId', required: false })
+  @ApiQuery({ name: 'courseOfferingId', required: false })
   @ApiOkResponse({ type: HomeworkHelpHistoryResponseDto })
   async getHistory(
     @CurrentUser() user: User,
-    @Query('classId') classId?: string,
+    @Query('courseOfferingId') courseOfferingId?: string,
   ): Promise<HomeworkHelpHistoryResponseDto> {
-    return this.homeworkHelperService.getHistory(user.id, classId);
+    return this.homeworkHelperService.getHistory(user.id, courseOfferingId);
   }
 
   @Patch('homework-help/:interactionId/feedback')
