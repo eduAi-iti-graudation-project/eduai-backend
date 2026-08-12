@@ -41,6 +41,7 @@ import { BillingModule } from './billing/billing.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
 import { GroupsModule } from './groups/groups.module';
 import { OrganizationsModule } from './organizations/organizations.module';
+import { DocumentsModule } from './documents/documents.module';
 import { TimetableModule } from './timetable/timetable.module';
 import { MeetingsModule } from './meetings/meetings.module';
 import { StruggleSignalsModule } from './struggle-signals/struggle-signals.module';
@@ -90,6 +91,7 @@ import { GradeConsoleModule } from './grade-console/grade-console.module';
     WebhooksModule,
     GroupsModule,
     OrganizationsModule,
+DocumentsModule,
     TimetableModule,
     MeetingsModule,
     StruggleSignalsModule,

@@ -37,17 +37,16 @@ export const LinkGuardianSchema = z
   );
 
 export const CreateDocumentSchema = z.object({
-  type: z.enum([
-    'CERTIFICATE',
-    'REPORT_CARD',
-    'TRANSCRIPT',
-    'IMMUNIZATION',
-    'TRANSFER',
-    'ENROLLMENT_FORM',
-    'ID',
-    'MEDICAL',
-    'OTHER',
-  ]),
+  category: z
+    .enum([
+      'BIRTH_CERTIFICATE',
+      'IMMUNIZATION_RECORD',
+      'PREVIOUS_TRANSCRIPT',
+      'PAYMENT_RECEIPT',
+      'ID_DOCUMENT',
+      'OTHER',
+    ])
+    .optional(),
   title: z.string().min(1),
   academicYear: z.string().min(2).max(20).optional().nullable(),
 });

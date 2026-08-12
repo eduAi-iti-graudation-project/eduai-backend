@@ -2,6 +2,8 @@ import { ApiError } from '../common/errors/api-error';
 import { Test, TestingModule } from '@nestjs/testing';
 import { StudentsService } from './students.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { Readable } from 'stream';
+import { DocumentsService } from '../documents/documents.service';
 import { EnrollSyncService } from '../roster/enroll-sync.service';
 import { SupabaseService } from '../auth/supabase.service';
 import { JoinRequestsService } from '../join-requests/join-requests.service';
@@ -19,10 +21,25 @@ describe('StudentsService', () => {
       findFirst: jest.fn(),
     },
     user: {
+      findFirst: jest.fn(),
       findMany: jest.fn(),
       create: jest.fn(),
       update: jest.fn(),
     },
+    studentDocument: {
+      findMany: jest.fn(),
+      findFirst: jest.fn(),
+      create: jest.fn(),
+      delete: jest.fn(),
+    },
+  };
+
+  const mockDocumentsService = {
+    storeFile: jest.fn(),
+    extractText: jest.fn(),
+    suggestCategory: jest.fn(),
+    createSignedUrl: jest.fn(),
+    removeFromStorage: jest.fn(),
   };
 
   const mockEnrollSync = {
@@ -45,6 +62,7 @@ describe('StudentsService', () => {
       providers: [
         StudentsService,
         { provide: PrismaService, useValue: mockPrisma },
+{ provide: DocumentsService, useValue: mockDocumentsService },
         { provide: EnrollSyncService, useValue: mockEnrollSync },
         { provide: SupabaseService, useValue: mockSupabase },
         { provide: JoinRequestsService, useValue: mockJoinRequests },
@@ -211,9 +229,155 @@ describe('StudentsService', () => {
     });
   });
 
+  describe('student documents', () => {
+    const studentId = 'student-uuid';
+    const ownStudent = {
+      id: studentId,
+      role: 'STUDENT',
+      organizationId,
+      grade: null,
+      guardian: null,
+      enrollments: [],
+    };
+
+    describe('getDocuments', () => {
+      it('should reject documents of a student in another organization', async () => {
+        mockPrisma.user.findFirst.mockImplementation(
+          ({ where }: { where: { organizationId: string } }) =>
+            where.organizationId === 'org-2' ? ownStudent : null,
+        );
+
+        try {
+          await service.getDocuments(studentId, organizationId);
+          throw new Error('expected getDocuments to throw');
+        } catch (err) {
+          expect(err).toBeInstanceOf(ApiError);
+          expect((err as ApiError).code).toBe('STUDENT_NOT_FOUND');
+        }
+        expect(mockPrisma.user.findFirst).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: { id: studentId, role: 'STUDENT', organizationId },
+          }),
+        );
+        expect(mockPrisma.studentDocument.findMany).not.toHaveBeenCalled();
+      });
+
+      it('should list documents for a student in the organization', async () => {
+        mockPrisma.user.findFirst.mockResolvedValue(ownStudent);
+        mockPrisma.studentDocument.findMany.mockResolvedValue([
+          { id: 'd1', title: 'Birth certificate' },
+        ]);
+
+        const result = await service.getDocuments(studentId, organizationId);
+
+        expect(mockPrisma.studentDocument.findMany).toHaveBeenCalledWith({
+          where: { studentId },
+          orderBy: { createdAt: 'desc' },
+          include: { uploadedBy: { select: { id: true, name: true } } },
+        });
+        expect(result).toHaveLength(1);
+        expect(result[0]).toMatchObject({
+          id: 'd1',
+          title: 'Birth certificate',
+        });
+      });
+    });
+
+    describe('createDocument', () => {
+      const file = {
+        fieldname: 'file',
+        originalname: 'birth.pdf',
+        encoding: '7bit',
+        mimetype: 'application/pdf',
+        size: 100,
+        buffer: Buffer.from('pdf-bytes'),
+        stream: Readable.from([]),
+        destination: '',
+        filename: 'birth.pdf',
+        path: 'birth.pdf',
+      };
+
+      it('should store the file and classify when no category is given', async () => {
+        mockPrisma.user.findFirst.mockResolvedValue(ownStudent);
+        mockDocumentsService.storeFile.mockResolvedValue(
+          'documents/org-1/abc-birth.pdf',
+        );
+        mockDocumentsService.extractText.mockResolvedValue('extracted text');
+        mockDocumentsService.suggestCategory.mockResolvedValue(
+          'BIRTH_CERTIFICATE',
+        );
+        mockPrisma.studentDocument.create.mockResolvedValue({
+          id: 'd1',
+          studentId,
+          organizationId,
+          category: 'OTHER',
+          aiSuggestedCategory: 'BIRTH_CERTIFICATE',
+        });
+
+        const result = await service.createDocument(
+          studentId,
+          organizationId,
+          'admin-1',
+          file,
+          {
+            title: 'Birth certificate',
+          },
+        );
+
+        expect(mockDocumentsService.storeFile).toHaveBeenCalledWith(
+          organizationId,
+          file.buffer,
+          'birth.pdf',
+          'application/pdf',
+        );
+        expect(mockDocumentsService.suggestCategory).toHaveBeenCalledWith(
+          'extracted text',
+        );
+        expect(mockPrisma.studentDocument.create).toHaveBeenCalledWith({
+          data: {
+            studentId,
+            organizationId,
+            uploadedById: 'admin-1',
+            category: 'OTHER',
+            title: 'Birth certificate',
+            academicYear: null,
+            fileName: 'birth.pdf',
+            fileUrl: 'documents/org-1/abc-birth.pdf',
+            mimeType: 'application/pdf',
+            sizeBytes: 100,
+            aiSuggestedCategory: 'BIRTH_CERTIFICATE',
+          },
+        });
+        expect(result).toMatchObject({ id: 'd1' });
+      });
+
+      it('should not run classification when a category is given', async () => {
+        mockPrisma.user.findFirst.mockResolvedValue(ownStudent);
+        mockDocumentsService.storeFile.mockResolvedValue(
+          'documents/org-1/abc-birth.pdf',
+        );
+        mockPrisma.studentDocument.create.mockResolvedValue({ id: 'd1' });
+
+        await service.createDocument(
+          studentId,
+          organizationId,
+          'admin-1',
+          file,
+          {
+            title: 'Report card',
+            category: 'OTHER',
+          },
+        );
+
+        expect(mockDocumentsService.extractText).not.toHaveBeenCalled();
+        expect(mockDocumentsService.suggestCategory).not.toHaveBeenCalled();
+      });
+    });
+  });
   describe('listUnassignedStudents', () => {
     it('should only query students of the caller organization', async () => {
       mockPrisma.user = {
+        findFirst: jest.fn(),
         findMany: jest.fn().mockResolvedValue([
           {
             id: 'u1',
@@ -248,6 +412,7 @@ describe('StudentsService', () => {
 
     it('should include students with a grade but no approved section', async () => {
       mockPrisma.user = {
+        findFirst: jest.fn(),
         findMany: jest.fn().mockResolvedValue([
           {
             id: 'u2',

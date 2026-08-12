@@ -9,8 +9,6 @@ import {
   Query,
   UploadedFile,
   UseInterceptors,
-  Res,
-  HttpStatus,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -23,7 +21,6 @@ import {
 } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
-import type { Response } from 'express';
 import { StudentsService } from './students.service';
 import type { User } from '@prisma/client';
 import {
@@ -220,10 +217,20 @@ export class StudentsController {
       properties: {
         file: { type: 'string', format: 'binary' },
         title: { type: 'string' },
-        type: { type: 'string' },
+        category: {
+          type: 'string',
+          enum: [
+            'BIRTH_CERTIFICATE',
+            'IMMUNIZATION_RECORD',
+            'PREVIOUS_TRANSCRIPT',
+            'PAYMENT_RECEIPT',
+            'ID_DOCUMENT',
+            'OTHER',
+          ],
+        },
         academicYear: { type: 'string', nullable: true },
       },
-      required: ['file', 'title', 'type'],
+      required: ['file', 'title'],
     },
   })
   createDocument(
@@ -244,28 +251,14 @@ export class StudentsController {
 
   @Roles('ADMIN')
   @Get(':id/documents/:documentId/file')
-  @ApiOperation({ summary: 'Stream a student document file' })
+  @ApiOperation({ summary: 'Get a signed download URL for a student document' })
   @ApiParam({ name: 'documentId', type: 'string' })
   async getDocumentFile(
     @Param('id') id: string,
     @Param('documentId') documentId: string,
     @CurrentUser('organizationId') organizationId: string,
-    @Res() res: Response,
   ) {
-    const doc = await this.studentsService.getDocumentFile(
-      id,
-      documentId,
-      organizationId,
-    );
-    res.setHeader('Content-Type', doc.mimeType ?? 'application/octet-stream');
-    res.setHeader('Content-Disposition', `inline; filename="${doc.fileName}"`);
-    res.sendFile(doc.fileUrl, (err) => {
-      if (err) {
-        res
-          .status(HttpStatus.NOT_FOUND)
-          .send({ error: 'FILE_NOT_FOUND', message: 'File is missing.' });
-      }
-    });
+    return this.studentsService.getDocumentFile(id, documentId, organizationId);
   }
 
   @Roles('ADMIN')
