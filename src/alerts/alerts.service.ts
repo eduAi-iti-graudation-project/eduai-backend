@@ -163,4 +163,32 @@ export class AlertsService {
       guardianContent: analysis.guardianContent,
     };
   }
+
+  /** List ACTIVE alerts for the guardian's linked children. */
+  async findByGuardian(guardianId: string) {
+    const alerts = await this.prisma.alert.findMany({
+      where: { status: 'ACTIVE', student: { guardianId } },
+      include: {
+        student: { select: { id: true, name: true } },
+        analyses: {
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          select: { diagnosis: true },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    return alerts.map((a) => ({
+      id: a.id,
+      type: a.type,
+      reason: a.reason,
+      status: a.status,
+      studentId: a.studentId,
+      createdAt: a.createdAt.toISOString(),
+      studentName: a.student.name,
+      severity:
+        (a.analyses[0]?.diagnosis as { severity?: string | null } | undefined)
+          ?.severity ?? null,
+    }));
+  }
 }

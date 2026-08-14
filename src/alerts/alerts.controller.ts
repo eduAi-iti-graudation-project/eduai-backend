@@ -28,6 +28,14 @@ export class AlertsController {
     return this.alertsService.findAll(status, organizationId);
   }
 
+  @Get('guardian')
+  @Roles('GUARDIAN')
+  @ApiOperation({ summary: 'List ACTIVE alerts for the guardian\'s children' })
+  @ApiOkResponse({ type: AlertDto, isArray: true })
+  findByGuardian(@CurrentUser('id') guardianId: string) {
+    return this.alertsService.findByGuardian(guardianId);
+  }
+
   @Get(':id/teacher-detail')
   @Roles('TEACHER', 'ADMIN')
   @ApiOperation({ summary: 'Get structured analysis data for an alert' })

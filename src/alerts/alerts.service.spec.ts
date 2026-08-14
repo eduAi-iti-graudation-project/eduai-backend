@@ -235,6 +235,70 @@ describe('AlertsService', () => {
     });
   });
 
+  describe('findByGuardian', () => {
+    it('returns active alerts for the guardian\'s children', async () => {
+      mockPrisma.alert.findMany.mockResolvedValue([
+        {
+          id: 'a1',
+          type: 'GRADE_DROP',
+          reason: 'Score dropped 15 points',
+          status: 'ACTIVE',
+          studentId: 'child-1',
+          createdAt: new Date('2026-01-01T00:00:00Z'),
+          student: { id: 'child-1', name: 'Jamie S.' },
+          analyses: [{ diagnosis: { severity: 'HIGH' } }],
+        },
+        {
+          id: 'a2',
+          type: 'ATTENDANCE',
+          reason: 'Absent 3 days',
+          status: 'ACTIVE',
+          studentId: 'child-2',
+          createdAt: new Date('2026-01-02T00:00:00Z'),
+          student: { id: 'child-2', name: 'Riley T.' },
+          analyses: [{ diagnosis: {} }],
+        },
+      ]);
+
+      const result = await service.findByGuardian('guardian-1');
+
+      expect(mockPrisma.alert.findMany).toHaveBeenCalledWith({
+        where: { status: 'ACTIVE', student: { guardianId: 'guardian-1' } },
+        include: {
+          student: { select: { id: true, name: true } },
+          analyses: {
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+            select: { diagnosis: true },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      expect(result).toEqual([
+        {
+          id: 'a1',
+          type: 'GRADE_DROP',
+          reason: 'Score dropped 15 points',
+          status: 'ACTIVE',
+          studentId: 'child-1',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          studentName: 'Jamie S.',
+          severity: 'HIGH',
+        },
+        {
+          id: 'a2',
+          type: 'ATTENDANCE',
+          reason: 'Absent 3 days',
+          status: 'ACTIVE',
+          studentId: 'child-2',
+          createdAt: '2026-01-02T00:00:00.000Z',
+          studentName: 'Riley T.',
+          severity: null,
+        },
+      ]);
+    });
+  });
+
   describe('getTeacherDetail', () => {
     it('returns diagnosis content and recommended practice generations', async () => {
       mockPrisma.studentAnalysis.findFirst.mockResolvedValue({
