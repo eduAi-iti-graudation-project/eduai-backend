@@ -11,6 +11,31 @@ function sanitizeControlChars(text: string): string {
     .join('');
 }
 
+function unwrapToSchema<T>(value: unknown, schema: ZodSchema<T>): unknown {
+  if (schema.safeParse(value).success) return value;
+  if (!value || typeof value !== 'object') return value;
+
+  const queue: unknown[] = [value];
+  const seen = new Set<unknown>();
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (current === null || typeof current !== 'object' || seen.has(current)) {
+      continue;
+    }
+    seen.add(current);
+    if (Array.isArray(current)) {
+      for (const item of current) queue.push(item);
+      continue;
+    }
+    for (const nested of Object.values(current as Record<string, unknown>)) {
+      if (nested === null || typeof nested !== 'object') continue;
+      if (schema.safeParse(nested).success) return nested;
+      queue.push(nested);
+    }
+  }
+  return value;
+}
+
 @Injectable()
 export class LlmService {
   constructor(
@@ -81,21 +106,24 @@ export class LlmService {
       const parsed: unknown = JSON.parse(cleaned);
 
       if (replacements.size > 0) {
-        return JSON.parse(
-          sanitizeControlChars(
-            this.piiService.restore(JSON.stringify(parsed), replacements),
+        return unwrapToSchema(
+          JSON.parse(
+            sanitizeControlChars(
+              this.piiService.restore(JSON.stringify(parsed), replacements),
+            ),
           ),
-        ) as unknown;
+          schema,
+        );
       }
 
-      return parsed;
+      return unwrapToSchema(parsed, schema);
     };
 
     const result = await validateWithRetry(
       schema,
       await callLlm().catch(() => null),
       callLlm,
-      3,
+      5,
     );
 
     return result;
