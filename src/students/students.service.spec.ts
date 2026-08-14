@@ -62,7 +62,7 @@ describe('StudentsService', () => {
       providers: [
         StudentsService,
         { provide: PrismaService, useValue: mockPrisma },
-{ provide: DocumentsService, useValue: mockDocumentsService },
+        { provide: DocumentsService, useValue: mockDocumentsService },
         { provide: EnrollSyncService, useValue: mockEnrollSync },
         { provide: SupabaseService, useValue: mockSupabase },
         { provide: JoinRequestsService, useValue: mockJoinRequests },

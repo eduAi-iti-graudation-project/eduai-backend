@@ -5,12 +5,7 @@ import { ErrorCode } from '../common/errors/codes';
 import { DocumentsService } from '../documents/documents.service';
 import { EnrollSyncService } from '../roster/enroll-sync.service';
 import { JoinRequestsService } from '../join-requests/join-requests.service';
-import { SupabaseService } from '../auth/supabase.service';
-import { encryptCredential } from '../common/crypto/credentials';
-import { generatePassword } from '../common/mailer/generated-credentials';
 import type { User } from '@prisma/client';
-import * as path from 'path';
-import * as fs from 'fs';
 
 function academicYearOf(date: Date): string {
   const y = date.getFullYear();
@@ -23,9 +18,8 @@ function academicYearOf(date: Date): string {
 export class StudentsService {
   constructor(
     private readonly prisma: PrismaService,
-private readonly documentsService: DocumentsService,
+    private readonly documentsService: DocumentsService,
     private readonly enrollSync: EnrollSyncService,
-    private readonly supabaseService: SupabaseService,
     private readonly joinRequests: JoinRequestsService,
   ) {}
 
@@ -217,6 +211,8 @@ private readonly documentsService: DocumentsService,
           include: {
             course: true,
             teacher: true,
+            materials: { select: { id: true, title: true } },
+            quizzes: { select: { id: true } },
             assignments: {
               include: {
                 rubrics: true,
@@ -241,6 +237,13 @@ private readonly documentsService: DocumentsService,
         name: s.name,
         description: s.description ?? (s.gradeLevel ? s.gradeLevel.name : null),
         teacherName: teacherNames.join(', '),
+        materialCount: s.offerings.reduce((n, o) => n + o.materials.length, 0),
+        materialTitles: [
+          ...new Set(
+            s.offerings.flatMap((o) => o.materials.map((m) => m.title)),
+          ),
+        ],
+        quizCount: s.offerings.reduce((n, o) => n + o.quizzes.length, 0),
         assignments: s.offerings.flatMap((o) =>
           o.assignments.map((a) => ({
             id: a.id,
@@ -253,6 +256,64 @@ private readonly documentsService: DocumentsService,
         ),
       };
     });
+  }
+
+  /**
+   * A student sits in exactly one section, so their real "classes" are the
+   * course offerings of that section. Returns one entry per offering (course),
+   * each scoped to its own teacher, materials, quizzes, and assignments.
+   */
+  async getCourses(
+    studentId: string,
+    organizationId: string,
+    caller?: { id: string; role: User['role'] },
+  ) {
+    await this.assertStudentReadAccess(studentId, organizationId, caller);
+    const sections = await this.prisma.section.findMany({
+      where: {
+        organizationId,
+        enrollments: {
+          some: { studentId, status: 'APPROVED' },
+        },
+      },
+      include: {
+        offerings: {
+          include: {
+            course: true,
+            teacher: true,
+            materials: { select: { id: true, title: true } },
+            quizzes: { select: { id: true } },
+            assignments: {
+              include: {
+                rubrics: true,
+                materials: { select: { id: true, title: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    return sections.flatMap((s) =>
+      s.offerings.map((o) => ({
+        id: o.id,
+        name: o.course.name,
+        description: o.course.description,
+        colorTag: o.course.colorTag,
+        teacherName: o.teacher?.name ?? null,
+        materialCount: o.materials.length,
+        materialTitles: o.materials.map((m) => m.title),
+        quizCount: o.quizzes.length,
+        assignments: o.assignments.map((a) => ({
+          id: a.id,
+          title: a.title,
+          description: a.description,
+          dueDate: a.dueDate.toISOString(),
+          totalPoints: a.totalPoints,
+          materials: a.materials.map((m) => ({ id: m.id, title: m.title })),
+        })),
+      })),
+    );
   }
 
   async update(
@@ -371,38 +432,16 @@ private readonly documentsService: DocumentsService,
   }
 
   /**
-   * WP1 admin escape hatch: regenerate a school-provisioned student's login
-   * password (Supabase) and re-encrypt the stored copy. The new password is
-   * returned ONCE to the admin (e.g. "parent lost access").
+   * WP1 admin escape hatch: email a set-password invite to the student's real
+   * inbox. No password is generated or returned — the student chooses their
+   * own via the verify link.
    */
   async resetCredentials(id: string, organizationId: string) {
-    const student = await this.prisma.user.findFirst({
-      where: { id, role: 'STUDENT', organizationId },
-      select: { id: true, authId: true, email: true },
-    });
-    if (!student) {
-      throw new ApiError(
-        ErrorCode.STUDENT_NOT_FOUND,
-        HttpStatus.NOT_FOUND,
-        'This student could not be found.',
-      );
-    }
-    if (!student.authId) {
-      throw new ApiError(
-        ErrorCode.AUTH_USER_NOT_FOUND,
-        HttpStatus.BAD_REQUEST,
-        'This student has no auth identity to reset.',
-      );
-    }
-    const password = generatePassword(10);
-    await this.supabaseService
-      .getClient()
-      .auth.admin.updateUserById(student.authId, { password });
-    await this.prisma.user.update({
-      where: { id: student.id },
-      data: { credentialEncrypted: encryptCredential(password) },
-    });
-    return { email: student.email, password };
+    const { email } = await this.joinRequests.sendSetPasswordInvite(
+      id,
+      organizationId,
+    );
+    return { invited: true, email };
   }
 
   private async ensureStudent(id: string, organizationId: string) {
