@@ -24,6 +24,9 @@ describe('MaterialsService', () => {
     courseOffering: {
       findFirst: jest.fn(),
     },
+    section: {
+      findFirst: jest.fn(),
+    },
     material: {
       create: jest.fn(),
       findMany: jest.fn(),
@@ -309,12 +312,16 @@ describe('MaterialsService', () => {
           _count: { chunks: 3 },
         },
       ]);
+      mockPrisma.courseOffering.findFirst.mockResolvedValue({ id: 'of-1' });
 
       const result = await service.findByOffering('of-1', organizationId);
 
       expect(result).toHaveLength(1);
       expect(mockPrisma.material.findMany).toHaveBeenCalledWith({
-        where: { courseOfferingId: 'of-1', offering: { organizationId } },
+        where: {
+          courseOfferingId: { in: ['of-1'] },
+          offering: { organizationId },
+        },
         include: { _count: { select: { chunks: true } } },
         orderBy: { createdAt: 'desc' },
       });
@@ -322,12 +329,15 @@ describe('MaterialsService', () => {
 
     it('should not leak materials from another organization', async () => {
       mockPrisma.material.findMany.mockResolvedValue([]);
+      mockPrisma.courseOffering.findFirst.mockResolvedValue({
+        id: 'of-other-org',
+      });
 
       await service.findByOffering('of-other-org', organizationId);
 
       expect(mockPrisma.material.findMany).toHaveBeenCalledWith({
         where: {
-          courseOfferingId: 'of-other-org',
+          courseOfferingId: { in: ['of-other-org'] },
           offering: { organizationId },
         },
         include: { _count: { select: { chunks: true } } },
@@ -545,6 +555,56 @@ describe('MaterialsService', () => {
       });
       expect(result.chapterId).toBe('auto-1');
       expect(result.detectedChapterCount).toBe(2);
+    });
+
+    it('should auto-create a single chapter when the document has one heading', async () => {
+      const text = [
+        'Chapter 1: Cell Biology —',
+        'The cell is the basic structural and functional unit of life.',
+        'The cell theory rests on three principles about living organisms.',
+        'All living organisms are composed of one or more cells.',
+        'The smallest unit of life is the cell itself.',
+        'Cells arise from pre-existing cells through cell division.',
+      ].join('\n');
+
+      mockPrisma.courseOffering.findFirst.mockResolvedValue({
+        id: courseOfferingId,
+      });
+      mockPrisma.materialChapter.aggregate.mockResolvedValue({
+        _max: { order: null },
+      });
+      mockPrisma.materialChapter.create.mockResolvedValueOnce({
+        id: 'auto-1',
+        order: 0,
+      });
+      mockPrisma.material.create.mockResolvedValue({
+        id: 'mat-1',
+        title: 'T',
+        courseOfferingId,
+        chapterId: 'auto-1',
+        chunks: [{ id: 'c1', content: 'x' }],
+      });
+      mockLlm.embed.mockResolvedValue([0.1, 0.2, 0.3]);
+      mockPrisma.$executeRawUnsafe.mockResolvedValue(undefined);
+
+      const result = await service.upload(
+        'T',
+        courseOfferingId,
+        Buffer.from(text),
+        'book.txt',
+        organizationId,
+      );
+
+      expect(mockPrisma.materialChapter.create).toHaveBeenCalledTimes(1);
+      expect(mockPrisma.materialChapter.create).toHaveBeenNthCalledWith(1, {
+        data: {
+          courseOfferingId,
+          title: 'Chapter 1: Cell Biology',
+          order: 0,
+        },
+      });
+      expect(result.chapterId).toBe('auto-1');
+      expect(result.detectedChapterCount).toBe(1);
     });
 
     it('should not auto-create chapters for flat text', async () => {
