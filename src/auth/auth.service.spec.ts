@@ -282,34 +282,21 @@ describe('AuthService', () => {
       expect(mockPrisma.user.create).not.toHaveBeenCalled();
     });
 
-    it('creates a new ADMIN user with a new organization', async () => {
+    it('creates a new org-less ADMIN user (onboarded later via oauth/onboard)', async () => {
       mockSupabase.exchangeCodeForSession.mockResolvedValue(oauthSession());
       mockPrisma.user.findUnique.mockResolvedValue(null);
-      mockPrisma.organization.create.mockResolvedValue({ id: 'org-1' });
       mockPrisma.user.create.mockResolvedValue({ id: 'local-new' });
-      mockPrisma.$transaction.mockImplementation(
-        (
-          cb: (tx: {
-            organization: typeof mockPrisma.organization;
-            user: typeof mockPrisma.user;
-          }) => Promise<unknown>,
-        ) =>
-          cb({ organization: mockPrisma.organization, user: mockPrisma.user }),
-      );
 
       await service.handleOauthCallback({ code: 'code-123' });
 
-      expect(mockPrisma.organization.create).toHaveBeenCalledTimes(1);
-      const orgArgs = orgCreateArgs(mockPrisma.organization);
-      expect(orgArgs.data.name).toBe("John Doe's School");
-      expect(orgArgs.data.joinCode).toMatch(/^[A-Z0-9]{8}$/);
+      expect(mockPrisma.organization.create).not.toHaveBeenCalled();
+      expect(mockPrisma.$transaction).not.toHaveBeenCalled();
       expect(mockPrisma.user.create).toHaveBeenCalledWith({
         data: {
           authId: 'supabase-auth-id-1',
           email: 'student@eduai.test',
           name: 'John Doe',
           role: 'ADMIN',
-          organizationId: 'org-1',
         },
       });
     });
@@ -319,31 +306,17 @@ describe('AuthService', () => {
         oauthSession({ user_metadata: { name: 'Jane Doe' } }),
       );
       mockPrisma.user.findUnique.mockResolvedValue(null);
-      mockPrisma.organization.create.mockResolvedValue({ id: 'org-1' });
       mockPrisma.user.create.mockResolvedValue({ id: 'local-new' });
-      mockPrisma.$transaction.mockImplementation(
-        (
-          cb: (tx: {
-            organization: typeof mockPrisma.organization;
-            user: typeof mockPrisma.user;
-          }) => Promise<unknown>,
-        ) =>
-          cb({ organization: mockPrisma.organization, user: mockPrisma.user }),
-      );
 
       await service.handleOauthCallback({ code: 'code-123' });
 
-      expect(mockPrisma.organization.create).toHaveBeenCalledTimes(1);
-      const orgArgs = orgCreateArgs(mockPrisma.organization);
-      expect(orgArgs.data.name).toBe("Jane Doe's School");
-      expect(orgArgs.data.joinCode).toMatch(/^[A-Z0-9]{8}$/);
+      expect(mockPrisma.organization.create).not.toHaveBeenCalled();
       expect(mockPrisma.user.create).toHaveBeenCalledWith({
         data: {
           authId: 'supabase-auth-id-1',
           email: 'student@eduai.test',
           name: 'Jane Doe',
           role: 'ADMIN',
-          organizationId: 'org-1',
         },
       });
     });
@@ -359,7 +332,7 @@ describe('AuthService', () => {
           email: 'student@eduai.test',
           role: 'STUDENT',
         });
-      mockPrisma.$transaction.mockRejectedValue(
+      mockPrisma.user.create.mockRejectedValue(
         new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
           code: 'P2002',
           clientVersion: 'test',

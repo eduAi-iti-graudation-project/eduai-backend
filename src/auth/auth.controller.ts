@@ -249,11 +249,11 @@ export class AuthController {
   @Post('verify-email')
   @ApiOperation({
     summary:
-      'Verify an invite link token and reveal the school login credentials once',
+      'Verify an invite link token — set a password or confirm the school email',
   })
   @ApiBody({ type: VerifyEmailDto })
   verifyEmail(@Body() dto: VerifyEmailDto) {
-    return this.authService.verifyEmail(dto.token);
+    return this.authService.verifyEmail(dto.token, dto.password);
   }
 
   @Public()

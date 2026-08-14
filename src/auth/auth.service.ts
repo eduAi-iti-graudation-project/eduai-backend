@@ -529,15 +529,19 @@ export class AuthService {
   }
 
   /**
-   * Verify-before-reveal: the invite link carries only this token. Validating
-   * it marks the user verified and returns the school login credentials once
-   * — the response is the sole delivery channel (school mailboxes don't
-   * exist, so they can never arrive by email).
+   * Verify invite token. If the account was provisioned without a user-chosen
+   * password (ROSTER, or SELF without one), the page shows a set-password
+   * form and calls back with the new password — only then is the token
+   * consumed and the account marked verified. SELF accounts with a chosen
+   * password just confirm the school email.
    */
-  async verifyEmail(token: string): Promise<{
+  async verifyEmail(
+    token: string,
+    password?: string,
+  ): Promise<{
     email: string;
-    password: string;
     schoolCode: string | null;
+    needsPassword: boolean;
   }> {
     const user = await this.prisma.user.findUnique({
       where: { verifyToken: token },
@@ -560,12 +564,53 @@ export class AuthService {
         { hint: ErrorHint.CONTACT_SUPPORT },
       );
     }
-    if (!user.credentialEncrypted) {
-      throw new ApiError(
-        ErrorCode.VERIFY_TOKEN_INVALID,
-        HttpStatus.GONE,
-        'This verification link is no longer valid.',
-      );
+
+    const joinRequest = await this.prisma.joinRequest.findFirst({
+      where: { userId: user.id },
+      select: { source: true, chosenPasswordEncrypted: true },
+    });
+    const needsPassword =
+      !joinRequest ||
+      joinRequest.source === 'ROSTER' ||
+      !joinRequest.chosenPasswordEncrypted;
+
+    const organization = user.organizationId
+      ? await this.prisma.organization.findUnique({
+          where: { id: user.organizationId },
+          select: { joinCode: true },
+        })
+      : null;
+    const schoolCode = organization?.joinCode ?? null;
+
+    if (password) {
+      if (password.length < 8) {
+        throw new ApiError(
+          ErrorCode.AUTH_RESET_FAILED,
+          HttpStatus.BAD_REQUEST,
+          'Password must be at least 8 characters.',
+        );
+      }
+      if (!user.authId) {
+        throw new ApiError(
+          ErrorCode.AUTH_USER_NOT_FOUND,
+          HttpStatus.BAD_REQUEST,
+          'This account has no auth identity to set a password for.',
+        );
+      }
+      await this.supabaseService.updatePassword(user.authId, password);
+      await this.prisma.user.update({
+        where: { id: user.id },
+        data: {
+          emailVerifiedAt: new Date(),
+          verifyToken: null,
+          verifyTokenExpiresAt: null,
+        },
+      });
+      return { email: user.email, schoolCode, needsPassword: false };
+    }
+
+    if (needsPassword) {
+      return { email: user.email, schoolCode, needsPassword: true };
     }
 
     await this.prisma.user.update({
@@ -576,17 +621,7 @@ export class AuthService {
         verifyTokenExpiresAt: null,
       },
     });
-
-    const organization = await this.prisma.organization.findUnique({
-      where: { id: user.organizationId },
-      select: { joinCode: true },
-    });
-
-    return {
-      email: user.email,
-      password: decryptCredential(user.credentialEncrypted),
-      schoolCode: organization?.joinCode ?? null,
-    };
+    return { email: user.email, schoolCode, needsPassword: false };
   }
 
   /**
@@ -635,10 +670,12 @@ export class AuthService {
       };
     }
 
-    const organization = await this.prisma.organization.findUnique({
-      where: { id: user.organizationId },
-      select: { joinCode: true },
-    });
+    const organization = user.organizationId
+      ? await this.prisma.organization.findUnique({
+          where: { id: user.organizationId },
+          select: { joinCode: true },
+        })
+      : null;
     const password = decryptCredential(user.credentialEncrypted);
 
     await this.mailer.send({
@@ -1133,20 +1170,13 @@ export class AuthService {
     }
 
     try {
-      await this.prisma.$transaction(async (tx) => {
-        const organization = await this.createOrganization(
-          tx,
-          `${name}'s School`,
-        );
-        await tx.user.create({
-          data: {
-            authId,
-            email,
-            name,
-            role: DEFAULT_OAUTH_ROLE,
-            organizationId: organization.id,
-          },
-        });
+      await this.prisma.user.create({
+        data: {
+          authId,
+          email,
+          name,
+          role: DEFAULT_OAUTH_ROLE,
+        },
       });
     } catch (err) {
       if (
