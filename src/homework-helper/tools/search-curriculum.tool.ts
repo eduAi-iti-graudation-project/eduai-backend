@@ -21,11 +21,12 @@ export function createSearchCurriculumTool(materialsService: MaterialsService) {
     execute: async (
       input: SearchCurriculumInput,
     ): Promise<z.infer<typeof SearchCurriculumOutputSchema>> => {
-      const chunks = await materialsService.searchChunks(
-        input.courseOfferingId,
-        input.query,
-        input.topK,
-      );
+      const chunks =
+        (await materialsService.searchChunks(
+          input.courseOfferingId,
+          input.query,
+          input.topK,
+        )) ?? [];
 
       if (chunks.length === 0) {
         return {

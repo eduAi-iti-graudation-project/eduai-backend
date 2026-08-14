@@ -177,11 +177,15 @@ describe('LlmService', () => {
       ).rejects.toThrow(ValidationError);
     });
 
-    it('should retry 3 times total before succeeding on last attempt', async () => {
+    it('should retry 5 times total before succeeding on last attempt', async () => {
       mockChat
         .mockResolvedValueOnce('not json')
         .mockResolvedValueOnce('also not json')
-        .mockResolvedValueOnce(JSON.stringify({ name: 'retried', score: 90 }));
+        .mockResolvedValueOnce('still not json')
+        .mockResolvedValueOnce('almost not json')
+        .mockResolvedValueOnce(
+          JSON.stringify({ name: 'retried', score: 90 }),
+        );
 
       const result = await service.generateStructured({
         systemPrompt: 'Test',
@@ -189,7 +193,7 @@ describe('LlmService', () => {
         schema,
       });
 
-      expect(mockChat).toHaveBeenCalledTimes(3);
+      expect(mockChat).toHaveBeenCalledTimes(5);
       expect(result).toEqual({ name: 'retried', score: 90 });
     });
 
@@ -197,7 +201,9 @@ describe('LlmService', () => {
       mockChat
         .mockResolvedValueOnce('not json')
         .mockResolvedValueOnce('also not json')
-        .mockResolvedValueOnce('definitely not json');
+        .mockResolvedValueOnce('definitely not json')
+        .mockResolvedValueOnce('still not json')
+        .mockResolvedValueOnce('almost not json');
 
       await expect(
         service.generateStructured({
@@ -207,7 +213,7 @@ describe('LlmService', () => {
         }),
       ).rejects.toThrow(ValidationError);
 
-      expect(mockChat).toHaveBeenCalledTimes(3);
+      expect(mockChat).toHaveBeenCalledTimes(5);
     });
   });
 });

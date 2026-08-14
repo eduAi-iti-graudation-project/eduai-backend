@@ -23,7 +23,22 @@ Grounding rules (strict):
 - Base ALL content ONLY on the provided curriculum chunks. Never invent facts, dates, formulas, or definitions not present in the chunks.
 - If the chunks are empty or clearly irrelevant, say so honestly in the output and keep the content minimal rather than hallucinating.
 - Write for an undergraduate student studying for an exam on this topic.
-- Output strict JSON only — no markdown fences, no commentary outside the JSON.`;
+- Output strict JSON only — no markdown fences, no commentary outside the JSON.
+- The JSON must be a single top-level object with no wrapper key: never nest it under keys like "result", "data", "podcast", "script", or "output".`;
+
+const PODCAST_OUTPUT_CONTRACT = `
+OUTPUT CONTRACT (strict):
+- Respond with exactly one JSON object and nothing else. The top-level keys are exactly:
+{
+  "title": "short episode title",
+  "description": "one-line episode description",
+  "segments": [
+    { "speaker": "HOST", "text": "first spoken turn" },
+    { "speaker": "GUEST", "text": "second spoken turn" }
+  ]
+}
+- "segments" MUST be a JSON array of 4 to 20 objects, each with exactly "speaker" ("HOST" or "GUEST", alternating, starting with HOST) and "text" (2-5 sentences, no stage directions).
+- Do not omit, rename, or wrap "segments" — it is required at the top level.`;
 
 @Injectable()
 export class StudyLabGenerators {
@@ -41,9 +56,24 @@ export class StudyLabGenerators {
       topK,
     );
     const sources = [...new Set(chunks.map((c) => c.materialTitle))];
-    const corpus = chunks
+    let corpus = chunks
       .map((c, i) => `[chunk ${i + 1}] ${c.content}`)
       .join('\n\n');
+
+    if (chunks.length < 3) {
+      const materials =
+        await this.materialsService.listMaterialTitles(courseOfferingId);
+      if (materials.length > 0) {
+        const titles = materials.map((m) => `- ${m.title}`).join('\n');
+        corpus += `
+No semantically relevant chunks were found in this course for the requested topic${
+          chunks.length > 0 ? ' (only partial matches above)' : ''
+        }. The course contains these materials:
+${titles}
+If the requested topic does not match any of these materials, say so honestly to the user and point them to the closest material instead of inventing content.`;
+      }
+    }
+
     return { chunks, sources, corpus };
   }
 
@@ -77,6 +107,8 @@ CONVERSATION FORMAT:
 - Each segment is one speaker's spoken turn, 2-5 sentences, natural conversational tone, no stage directions, no emojis.
 - Include a short title and a one-line description for the episode.
 
+${PODCAST_OUTPUT_CONTRACT}
+
 ${GROUNDING_RULES}
 
 Curriculum chunks:
@@ -100,13 +132,41 @@ ${corpus}`;
     const { corpus, sources } = await this.ground(courseOfferingId, topic);
 
     const systemPrompt = `
-You are a course designer. Create a concise slide deck for a university lecture on the given topic.
+You are a presentation designer for a premium AI study assistant. Design a polished, lecture-quality slide deck for the given topic.
 
 DECK RULES:
 - 3 to 14 slides.
-- Each slide: a short title, 2-6 tight bullets (one idea each, exam-ready phrasing), optionally a short code snippet or a one-line speaker note.
-- Slide 1 is the title slide (bullets optional, e.g. course context). End with a summary slide of key takeaways.
-- Bullets must be self-contained when read on a slide.
+- Include a "theme" at the top level: { "background": "light" | "dark" | "gradient", "accent": "#RRGGBB" (a single brand accent color that fits the topic), "motion": "fade" | "rise" | "slide" | "scale" }.
+- Slide 1 uses layout "title" (title on an accent background; keep it short). End with layout "summary" (key takeaways as a list block).
+- Each slide: pick a "layout" ("title" | "bullets" | "split" | "statement" | "summary"), an optional short "eyebrow" kicker (e.g. "Section 2 · Forces"), a concise "title", and 1-6 "blocks". Slides may include a "visual" (diagram) and a one-line "note".
+- Use blocks, never free-form markdown:
+  - heading: an intra-slide section heading (level h1-h3).
+  - paragraph: one concise sentence or two of explanation.
+  - list: 2-6 tight bullets (one idea each, exam-ready phrasing). Ordered lists only for numbered sequences.
+  - quote: a definition or key statement worth calling out (attribution optional).
+  - callout: an exam-critical idea, with tone "info" | "tip" | "warn".
+  - code: a short snippet (language optional).
+  - stat: a big number + short label (e.g. "9.8 m/s²" "acceleration due to gravity").
+  - columns: a 2-3 column comparison (heading + items per column).
+- Layout guidance:
+  - "statement": one bold idea, centered, minimal blocks — use for a memorable takeaway or definition.
+  - "split": text blocks on the left, a visual on the right (add the "visual" field).
+  - "bullets": the default teaching slide.
+- DESIGN SYSTEM: one accent color per deck (consistent across slides), generous whitespace, no more than ~70 words per slide, one idea per block. Vary block types for visual rhythm — don't make every slide a plain bullet list.
+- Keep text plain — no markdown, no **, no *italics*, no bullets characters like "-" or "•" inside block text.
+
+VISUAL RULES (optional, high value):
+- Some slides may include a "visual" field rendered as a diagram. Only attach a visual when the curriculum genuinely supports it — never force one.
+- Choose the visual type that matches the content:
+  - numeric/measurable data → chart: { kind: "bar"|"line"|"pie"|"area", categories: [...], series: [{ label, values: [...] }] }
+  - a sequence of steps or a process → flow: { kind: "flow", steps: [{ label, detail? }] }
+  - chronological events or dates → timeline: { kind: "timeline", events: [{ label, detail? }] }
+  - a side-by-side contrast (pros/cons, then/now, X vs Y) → comparison: { kind: "comparison", leftTitle, rightTitle, rows: [{ left, right }] }
+  - a set of related concepts and their connections → concept_map: { kind: "concept_map", nodes: [{ id, label }], edges: [{ from, to, label? }] }
+- Limits: charts ≤ 8 categories and ≤ 3 series; flow/timeline ≤ 8 steps or events; comparison ≤ 6 rows; concept maps ≤ 8 nodes and ≤ 12 edges.
+- CRITICAL: every number, label, and connection in a visual MUST come directly from the curriculum chunks. Never invent data, values, or dates to fill a visual. If the chunks do not support a visual, omit it.
+- The visual should complement the text blocks, not repeat them word for word.
+- Keep chart values small and simple; label axes for bar/line/area charts.
 
 ${GROUNDING_RULES}
 

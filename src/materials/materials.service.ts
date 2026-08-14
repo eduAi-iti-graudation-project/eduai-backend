@@ -487,6 +487,13 @@ export class MaterialsService {
     return material;
   }
 
+  async listMaterialTitles(courseOfferingId: string) {
+    return this.prisma.material.findMany({
+      where: { courseOfferingId },
+      select: { id: true, title: true },
+      orderBy: { createdAt: 'asc' },
+    });
+  }
 
   async searchChunks(
     courseOfferingId: string,
