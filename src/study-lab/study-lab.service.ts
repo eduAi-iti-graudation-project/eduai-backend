@@ -21,6 +21,8 @@ import { StudyLabGatewayService } from './study-lab.gateway.service';
 import type { Prisma } from '@prisma/client';
 import type { GenerateStudyDto } from './dto';
 import type { Deck } from './schemas';
+import { buildDeckModel } from './pptx-deck';
+import { renderSlideVisuals } from './visual-renderer';
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_BUCKET = 'materials';
@@ -337,7 +339,9 @@ export class StudyLabService implements OnModuleInit {
     }
 
     try {
-      const buffer = await this.buildPptx(payload as Deck);
+      const deck = payload as Deck;
+      const visualPngs = renderSlideVisuals(deck);
+      const buffer = await this.buildPptx(deck, visualPngs);
       const objectPath = `${this.bucket}/${generation.courseOfferingId}/study-lab/${generationId}.pptx`;
       const { error } = await this.supabase
         .getStorageClient()
@@ -437,77 +441,63 @@ export class StudyLabService implements OnModuleInit {
     }
   }
 
-  private async buildPptx(deck: Deck): Promise<Buffer> {
+  private async buildPptx(
+    deck: Deck,
+    visualPngs?: (Buffer | null)[],
+  ): Promise<Buffer> {
     const pptx = new PptxGenJS();
     pptx.layout = 'LAYOUT_WIDE';
-    const theme = {
-      primary: '2563EB',
-      text: '1F2937',
-      muted: '6B7280',
-      background: 'FFFFFF',
-      accent: '10B981',
-    };
+    const model = buildDeckModel(deck, visualPngs);
 
-    const addBodySlide = (title: string, bullets: string[], note?: string) => {
+    for (const slideModel of model.slides) {
       const slide = pptx.addSlide();
-      slide.background = { color: theme.background };
-      slide.addText(title, {
-        x: 0.6,
-        y: 0.4,
-        w: 12.3,
-        h: 0.9,
-        fontSize: 28,
-        bold: true,
-        color: theme.primary,
-      });
-      slide.addShape(pptx.ShapeType.rect, {
-        x: 0.6,
-        y: 1.35,
-        w: 12.3,
-        h: 0.03,
-        fill: { color: theme.accent },
-      });
-      const body = bullets.map((b) => ({ text: b, options: { bullet: true } }));
-      slide.addText(body, {
-        x: 0.7,
-        y: 1.7,
-        w: 11.9,
-        h: 4.4,
-        fontSize: 16,
-        color: theme.text,
-        lineSpacingMultiple: 1.4,
-      });
-      if (note) {
-        slide.addNotes(note);
+      if (slideModel.background) {
+        slide.background = { color: slideModel.background };
       }
-    };
-
-    deck.slides.forEach((s, i) => {
-      if (i === 0) {
-        const slide = pptx.addSlide();
-        slide.background = { color: theme.primary };
-        slide.addText(deck.title, {
-          x: 0.8,
-          y: 2.2,
-          w: 11.8,
-          h: 1.4,
-          fontSize: 40,
-          bold: true,
-          color: 'FFFFFF',
-        });
-        slide.addText(s.bullets.join('  ·  '), {
-          x: 0.8,
-          y: 3.8,
-          w: 11.8,
-          h: 0.8,
-          fontSize: 16,
-          color: 'E5E7EB',
-        });
-        if (s.speakerNote) slide.addNotes(s.speakerNote);
-        return;
+      for (const shape of slideModel.shapes) {
+        slide.addShape(
+          shape.shapeType === 'roundRect'
+            ? pptx.ShapeType.roundRect
+            : pptx.ShapeType.rect,
+          {
+            x: shape.x,
+            y: shape.y,
+            w: shape.w,
+            h: shape.h,
+            fill: { color: shape.fill ?? '000000' },
+            line: shape.line
+              ? { color: shape.line.color, width: shape.line.width }
+              : undefined,
+          },
+        );
       }
-      addBodySlide(s.title, s.bullets, s.speakerNote ?? undefined);
-    });
+      for (const tb of slideModel.textboxes) {
+        const runs = tb.runs.map((r) => ({
+          text: r.text,
+          options: r.options,
+        }));
+        slide.addText(runs, {
+          x: tb.x,
+          y: tb.y,
+          w: tb.w,
+          h: tb.h,
+          ...tb.options,
+        });
+      }
+      for (const img of slideModel.images) {
+        slide.addImage({
+          data: `image/png;base64,${img.data.toString('base64')}`,
+          x: img.x,
+          y: img.y,
+          w: img.w,
+          h: img.h,
+          sizing: { type: 'contain', w: img.w, h: img.h },
+        });
+      }
+      if (slideModel.notes) {
+        slide.addNotes(slideModel.notes);
+      }
+    }
 
     return Buffer.from(
       (await pptx.write({ outputType: 'nodebuffer' })) as Buffer,
@@ -550,7 +540,11 @@ export class StudyLabService implements OnModuleInit {
       },
       include: {
         offerings: {
-          include: { course: true, teacher: true },
+          include: {
+            course: true,
+            teacher: true,
+            _count: { select: { materials: true } },
+          },
         },
       },
     });
@@ -562,6 +556,7 @@ export class StudyLabService implements OnModuleInit {
           courseName: o.course.name,
           sectionName: s.name,
           teacherName: o.teacher?.name ?? null,
+          materialCount: o._count.materials,
         })),
       ),
     };
