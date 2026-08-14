@@ -10,7 +10,9 @@ import {
   UploadedFile,
   UseInterceptors,
   HttpCode,
+  Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import {
@@ -274,6 +276,24 @@ export class MaterialsController {
   })
   getFile(@Param('id') id: string, @CurrentUser() user: User) {
     return this.materialsService.getMaterialFileUrl(id, user);
+  }
+
+  @Roles('TEACHER', 'STUDENT', 'GUARDIAN', 'ADMIN')
+  @Get(':id/download')
+  @ApiOperation({ summary: 'Download a material file (PDF or text)' })
+  async download(
+    @Param('id') id: string,
+    @CurrentUser() user: User,
+    @Res() res: Response,
+  ) {
+    const { buffer, contentType, filename } =
+      await this.materialsService.getMaterialDownload(id, user);
+    res.setHeader('Content-Type', contentType);
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`,
+    );
+    res.send(buffer);
   }
 
   @Delete(':id')
