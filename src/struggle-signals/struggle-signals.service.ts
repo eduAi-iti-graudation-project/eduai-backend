@@ -128,6 +128,22 @@ export class StruggleSignalsService {
     }
   }
 
+  /**
+   * Manual extraction trigger (teacher-gated): run the struggle-signal
+   * pipeline for a meeting now, instead of waiting for LiveKit webhooks.
+   * Idempotent — `finalizeStruggleExtraction` no-ops once the meeting has
+   * already been processed.
+   */
+  async triggerExtraction(user: User, meetingId: string) {
+    await this.requireOwnMeeting(user, meetingId);
+    await this.finalizeStruggleExtraction(meetingId);
+    const meeting = await this.prisma.meeting.findUnique({
+      where: { id: meetingId },
+      select: { struggleSignalsProcessed: true },
+    });
+    return { extracted: meeting?.struggleSignalsProcessed ?? false };
+  }
+
   // ─── Phase 1: struggle-signal extraction ───────────────────────────
 
   /**

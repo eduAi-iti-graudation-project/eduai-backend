@@ -40,6 +40,22 @@ export class StruggleSignalsController {
     return this.struggleSignals.getSignalsForMeeting(user, meetingId);
   }
 
+  @Post('meetings/:id/struggle-signals/extract')
+  @Roles('TEACHER')
+  @ApiOperation({
+    summary:
+      'Manually trigger struggle-signal extraction for a meeting (idempotent; useful for testing without LiveKit webhooks).',
+  })
+  @ApiUnauthorizedResponse({ description: 'Not authenticated.' })
+  @ApiForbiddenResponse({ description: 'Not the meeting teacher.' })
+  @ApiNotFoundResponse({ description: 'Meeting not found.' })
+  async triggerExtraction(
+    @Param('id') meetingId: string,
+    @CurrentUser() user: User,
+  ) {
+    return this.struggleSignals.triggerExtraction(user, meetingId);
+  }
+
   @Post('struggle-signals/:id/send')
   @Roles('TEACHER')
   @ApiOperation({
