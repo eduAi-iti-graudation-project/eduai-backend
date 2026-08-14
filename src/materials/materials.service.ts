@@ -122,7 +122,7 @@ export class MaterialsService {
     let detectedCount = 0;
     if (!linkedChapterId) {
       const detected = detectChapters(rawText);
-      if (detected.length >= 2) {
+      if (detected.length >= 1) {
         const current = await this.prisma.materialChapter.aggregate({
           where: { courseOfferingId },
           _max: { order: true },
@@ -211,28 +211,55 @@ export class MaterialsService {
   }
 
   findByOffering(courseOfferingId: string, organizationId: string) {
-    return this.prisma.material.findMany({
-      where: { courseOfferingId, offering: { organizationId } },
-      include: { _count: { select: { chunks: true } } },
-      orderBy: { createdAt: 'desc' },
-    });
+    return this.resolveOfferingIds(courseOfferingId, organizationId).then(
+      (ids) =>
+        this.prisma.material.findMany({
+          where: {
+            courseOfferingId: { in: ids },
+            offering: { organizationId },
+          },
+          include: { _count: { select: { chunks: true } } },
+          orderBy: { createdAt: 'desc' },
+        }),
+    );
   }
 
-  async findByOfferingGrouped(
-    courseOfferingId: string,
+  /**
+   * Resolves a course offering id OR a section id to the list of offering
+   * ids in scope. Students navigate by section; teachers by offering.
+   */
+  private async resolveOfferingIds(
+    courseOfferingIdOrSectionId: string,
     organizationId: string,
-  ) {
+  ): Promise<string[]> {
     const offering = await this.prisma.courseOffering.findFirst({
-      where: { id: courseOfferingId, organizationId },
+      where: { id: courseOfferingIdOrSectionId, organizationId },
       select: { id: true },
     });
-    if (!offering) {
+    if (offering) return [offering.id];
+
+    const section = await this.prisma.section.findFirst({
+      where: { id: courseOfferingIdOrSectionId, organizationId },
+      select: { offerings: { select: { id: true } } },
+    });
+    if (!section || section.offerings.length === 0) {
       throw new ApiError(
         ErrorCode.OFFERING_NOT_FOUND,
         HttpStatus.NOT_FOUND,
         'This class could not be found.',
       );
     }
+    return section.offerings.map((o) => o.id);
+  }
+
+  async findByOfferingGrouped(
+    courseOfferingId: string,
+    organizationId: string,
+  ) {
+    const offeringIds = await this.resolveOfferingIds(
+      courseOfferingId,
+      organizationId,
+    );
     const materialSelect = {
       id: true,
       title: true,
@@ -244,7 +271,7 @@ export class MaterialsService {
     } as const;
     const [chapters, unassigned] = await Promise.all([
       this.prisma.materialChapter.findMany({
-        where: { courseOfferingId },
+        where: { courseOfferingId: { in: offeringIds } },
         include: {
           materials: {
             select: materialSelect,
@@ -254,7 +281,7 @@ export class MaterialsService {
         orderBy: { order: 'asc' },
       }),
       this.prisma.material.findMany({
-        where: { courseOfferingId, chapterId: null },
+        where: { courseOfferingId: { in: offeringIds }, chapterId: null },
         select: materialSelect,
         orderBy: { createdAt: 'desc' },
       }),
@@ -460,6 +487,7 @@ export class MaterialsService {
     return material;
   }
 
+
   async searchChunks(
     courseOfferingId: string,
     query: string,
@@ -656,6 +684,38 @@ export class MaterialsService {
       throw new BadGatewayException('Failed to create download URL');
     }
     return { url: data.signedUrl };
+  }
+
+  async getMaterialDownload(id: string, user: User) {
+    const material = await this.findMaterialWithAccess(id, user);
+    const title = material.title || 'material';
+    const isPdf = material.fileUrl?.toLowerCase().endsWith('.pdf') ?? false;
+
+    if (material.fileUrl?.startsWith(`${this.bucket}/`)) {
+      const { data, error } = await this.supabase
+        .getStorageClient()
+        .storage.from(this.bucket)
+        .download(material.fileUrl);
+      if (error || !data) {
+        throw new BadGatewayException('Failed to download the material file');
+      }
+      return {
+        buffer: Buffer.from(await data.arrayBuffer()),
+        contentType: isPdf ? 'application/pdf' : 'application/octet-stream',
+        filename: `${title}.${isPdf ? 'pdf' : 'bin'}`,
+      };
+    }
+
+    const chunks = await this.prisma.materialChunk.findMany({
+      where: { materialId: material.id },
+      select: { content: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    return {
+      buffer: Buffer.from(chunks.map((c) => c.content).join('\n\n'), 'utf-8'),
+      contentType: 'text/plain; charset=utf-8',
+      filename: `${title}.txt`,
+    };
   }
 
   async delete(id: string, organizationId: string) {

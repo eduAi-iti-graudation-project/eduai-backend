@@ -23,7 +23,7 @@ export function detectChapters(rawText: string): DetectedChapter[] {
     if (TOC_LEADER_RE.test(line)) continue;
 
     const title = line
-      .replace(/[.:\-_=*#]{2,}$/, '')
+      .replace(/[.:\-_=*#–—]{1,}$/, '')
       .trim()
       .replace(/\s{2,}/g, ' ');
 
