@@ -9,6 +9,7 @@ import type {
   HomeworkHelpRequestDto,
   HomeworkHelpResponseDto,
   HomeworkHelpHistoryResponseDto,
+  HomeworkHelpEvent,
 } from './dto';
 
 @Injectable()
@@ -25,7 +26,16 @@ export class HomeworkHelperService {
   async help(
     studentId: string,
     dto: HomeworkHelpRequestDto,
+    onEvent?: (event: HomeworkHelpEvent) => void,
   ): Promise<HomeworkHelpResponseDto> {
+    if (!dto.courseOfferingId) {
+      throw new ApiError(
+        ErrorCode.BAD_REQUEST,
+        HttpStatus.BAD_REQUEST,
+        'A course offering must be selected before asking for help.',
+      );
+    }
+
     const activeAttempt = await this.prisma.quizAttempt.findFirst({
       where: { studentId, status: 'IN_PROGRESS' },
       select: { id: true },
@@ -43,10 +53,12 @@ export class HomeworkHelperService {
       studentId,
       question: dto.question,
       assignmentId: dto.assignmentId,
+      onStep: (step) => onEvent?.({ type: 'step', step }),
     });
 
     let threadId: string | undefined;
     if (result.action === 'REDIRECT_TEACHER') {
+      onEvent?.({ type: 'step', step: 'teacher' });
       threadId = await this.openTeacherThread(studentId, dto.courseOfferingId);
       await this.notifyTeacher(
         dto.courseOfferingId,
@@ -56,7 +68,7 @@ export class HomeworkHelperService {
       );
     }
 
-    return {
+    const response: HomeworkHelpResponseDto = {
       answer: result.answer,
       reply: threadId
         ? `${result.answer}\n\nI've opened a chat thread with your teacher — you can continue the conversation there.`
@@ -67,6 +79,9 @@ export class HomeworkHelperService {
       teacherNotified: result.action === 'REDIRECT_TEACHER',
       ...(threadId ? { threadId } : {}),
     };
+
+    onEvent?.({ type: 'done', data: response });
+    return response;
   }
 
   async getHistory(

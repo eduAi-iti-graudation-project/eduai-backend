@@ -28,6 +28,11 @@ export const HomeworkToolSchema = z.discriminatedUnion('action', [
     query: z.string(),
   }),
   z.object({
+    action: z.literal('search_web'),
+    query: z.string(),
+    maxResults: z.number().int().min(1).max(10).optional(),
+  }),
+  z.object({
     action: z.literal('respond_to_student'),
     answer: z.string(),
     responseAction: z.enum(['HINT', 'EXPLANATION', 'REDIRECT_TEACHER']),
@@ -54,6 +59,18 @@ export const HomeworkHelpFeedbackSchema = z.object({
 });
 
 export type HomeworkToolCall = z.infer<typeof HomeworkToolSchema>;
+
+export type HomeworkAgentStep =
+  | 'search_material'
+  | 'search_assignment'
+  | 'search_web'
+  | 'thinking'
+  | 'teacher';
+
+export type HomeworkHelpEvent =
+  | { type: 'step'; step: HomeworkAgentStep }
+  | { type: 'done'; data: HomeworkHelpResponseDto }
+  | { type: 'error'; message: string };
 
 export class HomeworkHelpRequestDto extends createZodDto(
   HomeworkHelpRequestSchema,
