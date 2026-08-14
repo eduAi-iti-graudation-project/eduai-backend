@@ -543,7 +543,7 @@ export class StruggleSignalsService {
     meetingId: string,
   ): Promise<Meeting> {
     const meeting = await this.prisma.meeting.findFirst({
-      where: { id: meetingId, organizationId: user.organizationId },
+      where: { id: meetingId, organizationId: user.organizationId ?? undefined },
       select: {
         id: true,
         type: true,
@@ -573,7 +573,10 @@ export class StruggleSignalsService {
     courseOfferingId: string;
   }> {
     const signal = await this.prisma.struggleSignal.findFirst({
-      where: { id: signalId, meeting: { organizationId: user.organizationId } },
+      where: {
+        id: signalId,
+        meeting: { organizationId: user.organizationId ?? undefined },
+      },
       include: {
         meeting: {
           select: {

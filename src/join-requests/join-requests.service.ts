@@ -1,4 +1,4 @@
-import { Injectable, HttpStatus } from '@nestjs/common';
+import { Injectable, HttpStatus, Logger } from '@nestjs/common';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { SupabaseService } from '../auth/supabase.service';
@@ -45,6 +45,8 @@ export interface RosterRowInput {
 
 @Injectable()
 export class JoinRequestsService {
+  private readonly logger = new Logger(JoinRequestsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly supabaseService: SupabaseService,
@@ -65,17 +67,29 @@ export class JoinRequestsService {
     return `${base}/verify?token=${encodeURIComponent(token)}`;
   }
 
-  /** The one-time reveal email for a provisioned login (real inbox only). */
+  /**
+   * Invite email for a provisioned login (delivered to the real inbox only).
+   * - mode 'set': account was provisioned without a password — the link opens
+   *   the "set your password" page where the user creates their own.
+   * - mode 'confirm': the user already chose their password at signup — the
+   *   link just reveals their school email.
+   */
   private async sendVerifyInvite(input: {
     to: string;
     name: string;
     token: string;
     relationship: string;
+    mode: 'set' | 'confirm';
   }) {
+    const isSet = input.mode === 'set';
     await this.mailer.send({
       to: input.to,
-      subject: 'Your EduAI login is ready — verify to unlock it',
-      html: `<p>Hi ${input.name},</p><p>Your school added you to their EduAI workspace as ${input.relationship}. To get your login details, open this link (valid for 72 hours):</p><p><a href="${this.verifyLink(input.token)}">Verify my email and get my login</a></p><p>If the link does not work, copy this into your browser:<br/>${this.verifyLink(input.token)}</p>`,
+      subject: isSet
+        ? 'Your EduAI account is ready — set your password'
+        : 'Your EduAI school email is ready — confirm it',
+      html: isSet
+        ? `<p>Hi ${input.name},</p><p>Your school added you to their EduAI workspace as ${input.relationship}. To finish setting up your account, open this link (valid for 72 hours) and choose a password:</p><p><a href="${this.verifyLink(input.token)}">Set my password</a></p><p>If the link does not work, copy this into your browser:<br/>${this.verifyLink(input.token)}</p>`
+        : `<p>Hi ${input.name},</p><p>Your school email is ready. Open this link (valid for 72 hours) to confirm it and see your login details:</p><p><a href="${this.verifyLink(input.token)}">Confirm my school email</a></p><p>If the link does not work, copy this into your browser:<br/>${this.verifyLink(input.token)}</p>`,
     });
   }
 
@@ -91,6 +105,74 @@ export class JoinRequestsService {
       );
     }
     return organization;
+  }
+
+  /**
+   * Admin reset path: issue a fresh verify token and email a set-password
+   * invite to the user's real inbox (guardian personal email, or the
+   * join-request email for students). No credential is generated or stored.
+   */
+  async sendSetPasswordInvite(
+    userId: string,
+    organizationId: string,
+  ): Promise<{ email: string }> {
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId, organizationId },
+    });
+    if (!user) {
+      throw new ApiError(
+        ErrorCode.STUDENT_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This student could not be found.',
+      );
+    }
+    if (!user.authId) {
+      throw new ApiError(
+        ErrorCode.AUTH_USER_NOT_FOUND,
+        HttpStatus.BAD_REQUEST,
+        'This student has no auth identity to reset.',
+      );
+    }
+
+    let inbox: string | null = null;
+    if (user.role === 'GUARDIAN') {
+      const guardianProfile = await this.prisma.guardianProfile.findFirst({
+        where: { guardianId: user.id },
+        select: { personalEmail: true },
+      });
+      inbox = guardianProfile?.personalEmail ?? null;
+    } else {
+      const requests = await this.prisma.joinRequest.findMany({
+        where: { userId: user.id },
+        select: { email: true, status: true },
+      });
+      const approved = requests.find((r) => r.status === 'APPROVED');
+      inbox = (approved ?? requests[0])?.email ?? null;
+    }
+    if (!inbox) {
+      throw new ApiError(
+        ErrorCode.AUTH_USER_NOT_FOUND,
+        HttpStatus.BAD_REQUEST,
+        'No deliverable inbox is on file for this account.',
+      );
+    }
+
+    const issued = this.issueVerifyToken();
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        verifyToken: issued.token,
+        verifyTokenExpiresAt: issued.expiresAt,
+      },
+    });
+    await this.sendVerifyInvite({
+      to: inbox,
+      name: user.name,
+      token: issued.token,
+      relationship: user.role === 'GUARDIAN' ? 'a parent' : 'a student',
+      mode: 'set',
+    });
+    return { email: user.email };
   }
 
   /** Public: resolve a school by its code for the self-registration screen. */
@@ -517,7 +599,6 @@ export class JoinRequestsService {
         name: input.name,
         role: 'GUARDIAN',
         organizationId: input.organizationId,
-        credentialEncrypted: encryptCredential(gPassword),
         verifyToken: issued.token,
         verifyTokenExpiresAt: issued.expiresAt,
       },
@@ -546,6 +627,7 @@ export class JoinRequestsService {
       name: input.name,
       token: issued.token,
       relationship: 'a parent',
+      mode: 'set',
     });
     return {
       id: guardian.id,
@@ -789,12 +871,27 @@ export class JoinRequestsService {
     let emailToUse = email;
     let authId = request.authId ?? null;
     let generatedPassword = false;
-    // School-provisioned rows store the generated password encrypted; the
-    // verify link then reveals it once. SELF rows own their credentials.
-    let credentialEncrypted: string | null = null;
+    // School-provisioned rows still generate a placeholder password for the
+    // auth account; the verify link then lets the user set their own. SELF
+    // rows own their credentials.
     let verifyToken: string | null = null;
     let verifyTokenExpiresAt: Date | null = null;
     const emailVerifiedAt: Date | null = null;
+
+    // Supabase auth accounts created during this approval that do not yet have
+    // a matching local user row. If provisioning fails part-way (DB down,
+    // guardian step, invite SMTP), these are rolled back so a retry doesn't
+    // trip on "already registered".
+    const pendingAuthCreations: string[] = [];
+    const rollbackPendingAuth = async (): Promise<void> => {
+      for (const id of pendingAuthCreations.splice(0)) {
+        await this.deleteAuthAccount(id);
+      }
+    };
+    const commitAuth = (id: string): void => {
+      const index = pendingAuthCreations.indexOf(id);
+      if (index >= 0) pendingAuthCreations.splice(index, 1);
+    };
 
     if (request.source === 'ROSTER') {
       if (input.existingEmails.has(email)) {
@@ -808,31 +905,43 @@ export class JoinRequestsService {
         throw new Error('Could not allocate a unique email address.');
       }
       emailToUse = schoolEmailCandidate(local, input.emailDomain);
-      const password = generatePassword(10);
-      const { data, error } = await this.supabaseService
-        .getClient()
-        .auth.admin.createUser({
-          email: emailToUse,
-          password,
-          email_confirm: true,
-        });
-      if (error || !data.user) {
-        throw new Error('Auth account creation failed — please try again.');
+      const schoolEmailTaken = await this.prisma.user.findFirst({
+        where: { email: emailToUse },
+        select: { id: true },
+      });
+      if (schoolEmailTaken) {
+        throw new Error(
+          `School account ${emailToUse} already exists in the directory.`,
+        );
       }
-      authId = data.user.id;
+      const password = generatePassword(10);
+      const account = await this.upsertAuthAccount({
+        email: emailToUse,
+        password,
+        name: request.name,
+      });
+      authId = account.id;
+      if (account.created) {
+        pendingAuthCreations.push(account.id);
+      }
       input.usedGmails.add(local);
-      credentialEncrypted = encryptCredential(password);
       const issued = this.issueVerifyToken();
       verifyToken = issued.token;
       verifyTokenExpiresAt = issued.expiresAt;
       // The CSV EMAIL is the real mailbox — the school identity is not a
       // deliverable address, so the invite (and only the invite) goes there.
-      await this.sendVerifyInvite({
-        to: email,
-        name: request.name,
-        token: issued.token,
-        relationship: 'a student',
-      });
+      try {
+        await this.sendVerifyInvite({
+          to: email,
+          name: request.name,
+          token: issued.token,
+          relationship: 'a student',
+          mode: 'set',
+        });
+      } catch (err) {
+        await rollbackPendingAuth();
+        throw err;
+      }
       generatedPassword = true;
     } else {
       // SELF — the student chose their password at signup; approval moves
@@ -865,10 +974,11 @@ export class JoinRequestsService {
           ...(chosen ? {} : { password }),
         });
       if (error) {
-        throw new Error('Auth account update failed — please try again.');
+        throw new Error(
+          `Auth account update failed for ${emailToUse}: ${error.message}`,
+        );
       }
       input.usedGmails.add(local);
-      credentialEncrypted = encryptCredential(password);
       const issued = this.issueVerifyToken();
       verifyToken = issued.token;
       verifyTokenExpiresAt = issued.expiresAt;
@@ -877,6 +987,7 @@ export class JoinRequestsService {
         name: request.name,
         token: issued.token,
         relationship: 'a student',
+        mode: chosen ? 'confirm' : 'set',
       });
     }
 
@@ -915,102 +1026,118 @@ export class JoinRequestsService {
         }
         const gEmail = schoolEmailCandidate(gLocal, input.emailDomain);
         const gPassword = generatePassword(10);
-        const { data: gData, error: gError } = await this.supabaseService
-          .getClient()
-          .auth.admin.createUser({
-            email: gEmail,
-            password: gPassword,
-            email_confirm: true,
-          });
-        if (gError || !gData.user) {
-          throw new Error(
-            'Guardian auth account creation failed — please try again.',
-          );
-        }
+        const gAccount = await this.upsertAuthAccount({
+          email: gEmail,
+          password: gPassword,
+          name: request.guardianName!,
+        });
         input.usedGmails.add(gLocal);
+        if (gAccount.created) {
+          pendingAuthCreations.push(gAccount.id);
+        }
         const gVerify = this.issueVerifyToken();
-        const gUser = await this.prisma.user.create({
-          data: {
-            authId: gData.user.id,
-            email: gEmail,
-            name: request.guardianName!,
-            role: 'GUARDIAN',
-            organizationId: input.organizationId,
-            credentialEncrypted: encryptCredential(gPassword),
-            verifyToken: gVerify.token,
-            verifyTokenExpiresAt: gVerify.expiresAt,
-          },
-        });
-        await this.prisma.guardianProfile.create({
-          data: {
-            guardianId: gUser.id,
-            personalEmail: personal,
-            ssnEncrypted: request.guardianSsnEncrypted,
-            ssnTail4: request.guardianSsnTail4,
-            phone: request.guardianPhone,
-            street: request.guardianStreet,
-            city: request.guardianCity,
-            nationality: request.guardianNationality,
-            dateOfBirth: request.guardianDateOfBirth,
-            profileComplete: Boolean(
-              request.guardianSsnEncrypted &&
-              request.guardianPhone &&
-              request.guardianNationality,
-            ),
-          },
-        });
+        let gUser: { id: string };
+        try {
+          gUser = await this.prisma.user.create({
+            data: {
+              authId: gAccount.id,
+              email: gEmail,
+              name: request.guardianName!,
+              role: 'GUARDIAN',
+              organizationId: input.organizationId,
+              verifyToken: gVerify.token,
+              verifyTokenExpiresAt: gVerify.expiresAt,
+            },
+          });
+          await this.prisma.guardianProfile.create({
+            data: {
+              guardianId: gUser.id,
+              personalEmail: personal,
+              ssnEncrypted: request.guardianSsnEncrypted,
+              ssnTail4: request.guardianSsnTail4,
+              phone: request.guardianPhone,
+              street: request.guardianStreet,
+              city: request.guardianCity,
+              nationality: request.guardianNationality,
+              dateOfBirth: request.guardianDateOfBirth,
+              profileComplete: Boolean(
+                request.guardianSsnEncrypted &&
+                request.guardianPhone &&
+                request.guardianNationality,
+              ),
+            },
+          });
+          // Guardian row committed — keep this auth account if later steps
+          // fail; only still-pending accounts are rolled back.
+          commitAuth(gAccount.id);
+        } catch (err) {
+          await rollbackPendingAuth();
+          throw err;
+        }
         guardianUserId = gUser.id;
         guardianLink = {
           email: gEmail,
           name: request.guardianName!,
           created: true,
         };
-        await this.sendVerifyInvite({
-          to: personal,
-          name: request.guardianName!,
-          token: gVerify.token,
-          relationship: 'a parent',
-        });
+        try {
+          await this.sendVerifyInvite({
+            to: personal,
+            name: request.guardianName!,
+            token: gVerify.token,
+            relationship: 'a parent',
+            mode: 'set',
+          });
+        } catch (err) {
+          await rollbackPendingAuth();
+          throw err;
+        }
       }
     }
 
     let provisionedUserId: string | null = null;
-    await this.prisma.$transaction(async (tx) => {
-      const user = await tx.user.create({
-        data: {
-          authId,
-          email: emailToUse,
-          name: request.name,
-          role: 'STUDENT',
-          organizationId: input.organizationId,
-          ...(request.gradeId ? { gradeId: request.gradeId } : {}),
-          ...(guardianUserId ? { guardianId: guardianUserId } : {}),
-          credentialEncrypted,
-          verifyToken,
-          verifyTokenExpiresAt,
-          emailVerifiedAt,
-        },
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        const user = await tx.user.create({
+          data: {
+            authId,
+            email: emailToUse,
+            name: request.name,
+            role: 'STUDENT',
+            organizationId: input.organizationId,
+            ...(request.gradeId ? { gradeId: request.gradeId } : {}),
+            ...(guardianUserId ? { guardianId: guardianUserId } : {}),
+            verifyToken,
+            verifyTokenExpiresAt,
+            emailVerifiedAt,
+          },
+        });
+        provisionedUserId = user.id;
+        if (request.gradeId) {
+          await this.enrollSync.syncStudentToGrade(
+            user.id,
+            input.organizationId,
+            request.gradeId,
+            request.sectionId ?? undefined,
+            tx,
+          );
+        }
+        await tx.joinRequest.update({
+          where: { id: request.id },
+          data: {
+            status: 'APPROVED',
+            decidedById: input.decidedBy,
+            decidedAt: new Date(),
+            userId: user.id,
+          },
+        });
       });
-      provisionedUserId = user.id;
-      if (request.gradeId) {
-        await this.enrollSync.syncStudentToGrade(
-          user.id,
-          input.organizationId,
-          request.gradeId,
-          request.sectionId ?? undefined,
-          tx,
-        );
-      }
-      await tx.joinRequest.update({
-        where: { id: request.id },
-        data: {
-          status: 'APPROVED',
-          decidedById: input.decidedBy,
-          decidedAt: new Date(),
-          userId: user.id,
-        },
-      });
-    });
+    } catch (err) {
+      await rollbackPendingAuth();
+      throw err;
+    }
+    // Student row committed — no pending auth accounts remain.
+    pendingAuthCreations.length = 0;
 
     // Always alert: the student is told the moment a guardian is missing, and
     // org admins get a work item so no guardian-less student goes unnoticed.
@@ -1045,6 +1172,77 @@ export class JoinRequestsService {
       generatedPassword,
       guardian: guardianLink,
     };
+  }
+
+  /**
+   * Idempotent Supabase provisioning. Tries to create the school auth account
+   * for `email`; if it already exists (left over from a previous partial run,
+   * or the user already has a school login), it is adopted and given a fresh
+   * password instead of erroring. Returns the auth user id plus whether this
+   * call created the account, so callers can roll it back on a later failure.
+   */
+  private async upsertAuthAccount(params: {
+    email: string;
+    password: string;
+    name: string;
+  }): Promise<{ id: string; created: boolean }> {
+    const { data, error } = await this.supabaseService
+      .getClient()
+      .auth.admin.createUser({
+        email: params.email,
+        password: params.password,
+        email_confirm: true,
+      });
+    if (!error && data.user) {
+      return { id: data.user.id, created: true };
+    }
+    const message = error?.message ?? '';
+    if (
+      error &&
+      /already registered|already exists|already been registered/i.test(message)
+    ) {
+      const existing = await this.supabaseService.findAuthUserByEmail(
+        params.email,
+      );
+      if (existing) {
+        const { error: updateError } = await this.supabaseService
+          .getClient()
+          .auth.admin.updateUserById(existing.id, {
+            password: params.password,
+            email_confirm: true,
+          });
+        if (updateError) {
+          throw new Error(
+            `Auth account update failed for ${params.email}: ${updateError.message}`,
+          );
+        }
+        return { id: existing.id, created: false };
+      }
+    }
+    throw new Error(
+      `Auth account creation failed for ${params.email}: ${message || 'unknown error'}`,
+    );
+  }
+
+  /**
+   * Deletes a Supabase auth account. Best-effort: used during rollback of a
+   * partially-provisioned approval, so failures are logged, not thrown.
+   */
+  private async deleteAuthAccount(authId: string): Promise<void> {
+    try {
+      const { error } = await this.supabaseService
+        .getClient()
+        .auth.admin.deleteUser(authId);
+      if (error) {
+        this.logger.warn(
+          `[join-requests] failed to roll back auth account ${authId}: ${error.message}`,
+        );
+      }
+    } catch (err) {
+      this.logger.warn(
+        `[join-requests] failed to roll back auth account ${authId}: ${(err as Error).message}`,
+      );
+    }
   }
 
   /**
@@ -1130,7 +1328,6 @@ export class JoinRequestsService {
         name: request.name,
         role: 'GUARDIAN',
         organizationId: input.organizationId,
-        credentialEncrypted: encryptCredential(password),
         verifyToken: issued.token,
         verifyTokenExpiresAt: issued.expiresAt,
       },
@@ -1153,6 +1350,7 @@ export class JoinRequestsService {
       name: request.name,
       token: issued.token,
       relationship: 'a parent',
+      mode: chosen ? 'confirm' : 'set',
     });
     await this.prisma.joinRequest.update({
       where: { id: request.id },

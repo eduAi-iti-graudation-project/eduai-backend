@@ -113,11 +113,22 @@ export class StudentsController {
     return this.studentsService.getClasses(id, organizationId, user);
   }
 
+  @Roles('STUDENT', 'GUARDIAN')
+  @Get(':id/courses')
+  @AllowGuardianless()
+  @ApiOperation({ summary: 'Get the courses (offerings) of a student' })
+  getCourses(
+    @Param('id') id: string,
+    @CurrentUser('organizationId') organizationId: string,
+    @CurrentUser() user: User,
+  ) {
+    return this.studentsService.getCourses(id, organizationId, user);
+  }
+
   @Roles('ADMIN')
   @Post(':id/credentials/reset')
   @ApiOperation({
-    summary:
-      'Regenerate a school-provisioned student login password (returned once)',
+    summary: 'Email a set-password invite to the student',
   })
   resetCredentials(
     @Param('id') id: string,

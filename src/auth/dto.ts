@@ -84,6 +84,7 @@ export const ChangePasswordSchema = z.object({
 
 export const VerifyEmailSchema = z.object({
   token: z.string().min(1),
+  password: z.string().min(8).optional(),
 });
 
 export const ResendCredentialsSchema = z.object({

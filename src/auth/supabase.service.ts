@@ -108,6 +108,33 @@ export class SupabaseService {
     );
   }
 
+  /**
+   * Finds an auth user by exact email. The typed `listUsers` wrapper has no
+   * email filter, so the GoTrue admin endpoint is called directly with a
+   * service key. Returns null when no account matches.
+   */
+  async findAuthUserByEmail(
+    email: string,
+  ): Promise<{ id: string; email: string } | null> {
+    const url = `${process.env.SUPABASE_URL}/auth/v1/admin/users?per_page=1&filter=${encodeURIComponent(email)}`;
+    const res = await fetch(url, {
+      headers: {
+        apikey: process.env.SUPABASE_SERVICE_KEY!,
+        Authorization: `Bearer ${process.env.SUPABASE_SERVICE_KEY!}`,
+      },
+    });
+    if (!res.ok) {
+      throw new Error(`Supabase user lookup failed: HTTP ${res.status}`);
+    }
+    const body = (await res.json()) as {
+      users?: Array<{ id: string; email: string | null }>;
+    };
+    const match = body.users?.find(
+      (u) => u.email?.toLowerCase() === email.toLowerCase(),
+    );
+    return match ? { id: match.id, email: match.email! } : null;
+  }
+
   async signInWithOAuth(
     provider: OAuthProvider,
     redirectTo: string,

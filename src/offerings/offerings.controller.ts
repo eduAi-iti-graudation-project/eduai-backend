@@ -51,7 +51,7 @@ export class OfferingsController {
         : user.role === 'ADMIN'
           ? teacherId
           : undefined;
-    return this.offeringsService.findAll(user.organizationId, {
+    return this.offeringsService.findAll(user.organizationId!, {
       teacherId: effectiveTeacherId,
       courseId,
     });

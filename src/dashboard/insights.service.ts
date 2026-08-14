@@ -87,7 +87,7 @@ export class InsightsService {
       case 'ADMIN': {
         const { sections, agentInsights } = await this.adminInsights(
           interval,
-          user.organizationId,
+          user.organizationId!,
         );
         return { interval, sections, agentInsights, unreadNotifications };
       }

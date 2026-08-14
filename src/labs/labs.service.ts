@@ -76,7 +76,10 @@ export class LabsService {
     dto: GenerateLabDto,
   ): Promise<GenerateLabResponseDto> {
     const offering = await this.prisma.courseOffering.findFirst({
-      where: { id: dto.courseOfferingId, organizationId: user.organizationId },
+      where: {
+        id: dto.courseOfferingId,
+        organizationId: user.organizationId ?? undefined,
+      },
     });
     if (!offering) {
       throw new ApiError(
@@ -109,7 +112,7 @@ export class LabsService {
 
     const lab = await this.prisma.lab.create({
       data: {
-        organizationId: user.organizationId,
+        organizationId: user.organizationId!,
         courseOfferingId: dto.courseOfferingId,
         createdBy: user.id,
         topic: dto.topic,
@@ -239,7 +242,7 @@ export class LabsService {
     if (user.role === 'STUDENT') {
       const labs = await this.prisma.lab.findMany({
         where: {
-          organizationId: user.organizationId,
+          organizationId: user.organizationId ?? undefined,
           status: 'PUBLISHED',
           ...(courseOfferingId ? { courseOfferingId } : {}),
           courseOffering: {
@@ -254,7 +257,7 @@ export class LabsService {
     }
     const labs = await this.prisma.lab.findMany({
       where: {
-        organizationId: user.organizationId,
+        organizationId: user.organizationId ?? undefined,
         createdBy: user.id,
         ...(courseOfferingId ? { courseOfferingId } : {}),
       },
@@ -269,7 +272,7 @@ export class LabsService {
    */
   async getForUser(user: User, labId: string): Promise<LabDto> {
     const lab = await this.prisma.lab.findFirst({
-      where: { id: labId, organizationId: user.organizationId },
+      where: { id: labId, organizationId: user.organizationId ?? undefined },
     });
     if (!lab) {
       throw new ApiError(
@@ -301,7 +304,7 @@ export class LabsService {
     const lab = await this.prisma.lab.findFirst({
       where: {
         id: labId,
-        organizationId: user.organizationId,
+        organizationId: user.organizationId ?? undefined,
         createdBy: user.id,
       },
     });

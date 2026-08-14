@@ -623,7 +623,9 @@ model User {
   role           UserRole
   gradeId        String?  @db.Uuid
   guardianId     String?  @db.Uuid
-  organizationId String   @db.Uuid
+  // Nullable: OAuth-created admins land org-less and onboard later
+  // (create or join a school) before entering the admin area.
+  organizationId String?  @db.Uuid
   gender         Gender?
   avatarUrl      String?
   // AES-256-GCM of the generated school credential (key CREDENTIALS_ENCRYPTION_KEY).
@@ -642,7 +644,7 @@ model User {
   updatedAt      DateTime @updatedAt
 
 grade                     GradeLevel?                @relation(fields: [gradeId], references: [id])
-  organization              Organization               @relation(fields: [organizationId], references: [id])
+  organization              Organization?               @relation(fields: [organizationId], references: [id])
   teacherProfile            TeacherProfile?            @relation("TeacherProfile")
   guardianProfile           GuardianProfile?           @relation("GuardianProfile")
   teacherOfferings          CourseOffering[]           @relation("CourseOfferingTeacher")

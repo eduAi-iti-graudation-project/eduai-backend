@@ -17,7 +17,7 @@ export class DashboardService {
       case 'GUARDIAN':
         return this.guardianDashboard(user.id);
       case 'ADMIN':
-        return this.adminDashboard(user.organizationId);
+        return this.adminDashboard(user.organizationId!);
     }
   }
 
