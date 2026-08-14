@@ -91,7 +91,7 @@ import { GradeConsoleModule } from './grade-console/grade-console.module';
     WebhooksModule,
     GroupsModule,
     OrganizationsModule,
-DocumentsModule,
+    DocumentsModule,
     TimetableModule,
     MeetingsModule,
     StruggleSignalsModule,

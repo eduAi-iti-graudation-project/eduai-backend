@@ -424,7 +424,7 @@ export class GuardianService {
       );
     }
     const organization = await this.prisma.organization.findUnique({
-      where: { id: guardian.organizationId },
+      where: { id: guardian.organizationId! },
       select: { joinCode: true },
     });
     const password = decryptCredential(guardian.credentialEncrypted);

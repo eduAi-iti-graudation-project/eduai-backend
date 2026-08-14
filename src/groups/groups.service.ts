@@ -126,7 +126,7 @@ export class GroupsService {
   async create(user: User, name: string) {
     return this.prisma.$transaction(async (tx) => {
       const organization = await tx.organization.findUnique({
-        where: { id: user.organizationId },
+        where: { id: user.organizationId! },
       });
       if (!organization) {
         throw new ApiError(

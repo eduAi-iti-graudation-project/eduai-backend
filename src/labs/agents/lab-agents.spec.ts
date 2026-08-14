@@ -45,16 +45,10 @@ describe('lab agents', () => {
     // The reviewer must also enforce contract compliance, not just security.
     expect(REVIEWER_SYSTEM_PROMPT).toContain('missing_objective_hook');
     expect(REVIEWER_SYSTEM_PROMPT).toContain('missing_render_target');
-    expect(REVIEWER_SYSTEM_PROMPT).toContain(
-      'reportLabObjectiveComplete()',
-    );
+    expect(REVIEWER_SYSTEM_PROMPT).toContain('reportLabObjectiveComplete()');
     expect(REVIEWER_SYSTEM_PROMPT).toMatch(/bare timer/i);
-    expect(REVIEWER_SYSTEM_PROMPT).toContain(
-      'approved MUST be false',
-    );
-    expect(REVIEWER_SYSTEM_PROMPT).toContain(
-      'document.getElementById(\'sim\')',
-    );
+    expect(REVIEWER_SYSTEM_PROMPT).toContain('approved MUST be false');
+    expect(REVIEWER_SYSTEM_PROMPT).toContain("document.getElementById('sim')");
   });
 
   it('generator output schema requires non-empty code', () => {

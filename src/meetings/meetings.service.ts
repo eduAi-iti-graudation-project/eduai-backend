@@ -56,7 +56,10 @@ export class MeetingsService {
 
     if (dto.type === 'CLASS') {
       const offering = await this.prisma.courseOffering.findFirst({
-        where: { id: dto.courseOfferingId, organizationId },
+        where: {
+          id: dto.courseOfferingId,
+          organizationId: organizationId ?? undefined,
+        },
       });
       if (!offering) {
         throw new NotFoundException(
@@ -87,7 +90,7 @@ export class MeetingsService {
     const roomName = `meeting-${randomUUID()}`;
     const meeting = await this.prisma.meeting.create({
       data: {
-        organizationId,
+        organizationId: organizationId!,
         title: dto.title,
         type: dto.type,
         courseOfferingId,
@@ -273,14 +276,14 @@ export class MeetingsService {
     // grace period is treated as ended.
     await this.prisma.meeting.updateMany({
       where: {
-        organizationId: user.organizationId,
+        organizationId: user.organizationId ?? undefined,
         status: 'LIVE',
         scheduledEnd: { lt: new Date(now.getTime() - 30 * 60 * 1000) },
       },
       data: { status: 'ENDED' },
     });
     const where: Prisma.MeetingWhereInput = {
-      organizationId: user.organizationId,
+      organizationId: user.organizationId ?? undefined,
       AND: [
         this.visibilityWhere(user),
         // Ongoing (overrunning) live meetings belong to the upcoming view.
@@ -657,7 +660,7 @@ export class MeetingsService {
     return this.prisma.meeting.findFirst({
       where: {
         id: meetingId,
-        organizationId: user.organizationId,
+        organizationId: user.organizationId ?? undefined,
         ...this.visibilityWhere(user),
       },
       include: meetingInclude,
