@@ -163,6 +163,7 @@ export const THEME_PRESETS: Record<string, Required<DeckTheme>> = {
       accent: '#10B981',
       text: '#1F2937',
     },
+    accent: '#10B981',
     motion: 'rise',
   },
   classic: {
@@ -174,6 +175,7 @@ export const THEME_PRESETS: Record<string, Required<DeckTheme>> = {
       accent: '#DC2626',
       text: '#1F2937',
     },
+    accent: '#DC2626',
     motion: 'fade',
   },
   dark: {
@@ -185,6 +187,7 @@ export const THEME_PRESETS: Record<string, Required<DeckTheme>> = {
       accent: '#6EE7B7',
       text: '#F1F5F9',
     },
+    accent: '#6EE7B7',
     motion: 'slide',
   },
   colorful: {
@@ -196,6 +199,7 @@ export const THEME_PRESETS: Record<string, Required<DeckTheme>> = {
       accent: '#F59E0B',
       text: '#1F2937',
     },
+    accent: '#F59E0B',
     motion: 'scale',
   },
   minimal: {
@@ -207,26 +211,31 @@ export const THEME_PRESETS: Record<string, Required<DeckTheme>> = {
       accent: '#6B7280',
       text: '#1F2937',
     },
+    accent: '#6B7280',
     motion: 'fade',
   },
 };
 
-export function resolveTheme(
-  theme: DeckTheme,
-): Required<DeckTheme> & { colors: Required<NonNullable<DeckTheme['colors']>> } {
+export function resolveTheme(theme: DeckTheme): Required<DeckTheme> & {
+  colors: Required<NonNullable<DeckTheme['colors']>>;
+} {
   if (theme.preset && THEME_PRESETS[theme.preset]) {
     const preset = THEME_PRESETS[theme.preset];
     return {
       ...preset,
       accent: theme.accent ?? preset.accent,
       colors: {
-        ...preset.colors,
-        ...(theme.colors ?? {}),
+        primary: theme.colors?.primary ?? preset.colors.primary!,
+        secondary: theme.colors?.secondary ?? preset.colors.secondary!,
+        accent: theme.accent ?? theme.colors?.accent ?? preset.colors.accent!,
+        text: theme.colors?.text ?? preset.colors.text!,
       },
     };
   }
 
-  const base: Required<DeckTheme> & { colors: Required<NonNullable<DeckTheme['colors']>> } = {
+  const base: Required<DeckTheme> & {
+    colors: Required<NonNullable<DeckTheme['colors']>>;
+  } = {
     preset: theme.preset ?? 'modern',
     background: theme.background,
     colors: {
@@ -235,6 +244,7 @@ export function resolveTheme(
       accent: theme.accent ?? theme.colors?.accent ?? '#10B981',
       text: theme.colors?.text ?? '#1F2937',
     },
+    accent: theme.accent ?? theme.colors?.accent ?? '#10B981',
     motion: theme.motion,
   };
 
@@ -311,6 +321,98 @@ export const SlideBlockSchema = z.union([
       .min(2)
       .max(3),
   }),
+  z
+    .object({
+      heading: z.union([
+        z.string().min(1).max(120),
+        z.object({ text: z.string().max(120), level: z.enum(['h1', 'h2', 'h3']).optional() }),
+      ]),
+    })
+    .transform((v) =>
+      typeof v.heading === 'string'
+        ? { type: 'heading' as const, text: v.heading }
+        : {
+            type: 'heading' as const,
+            text: v.heading.text,
+            level: (v.heading.level ?? 'h2') as 'h2' | 'h1' | 'h3',
+          },
+    ),
+  z
+    .object({
+      paragraph: z.string().min(1).max(400),
+    })
+    .transform((v) => ({ type: 'paragraph' as const, text: v.paragraph })),
+  z
+    .object({
+      list: z.object({
+        items: z.array(z.string().min(1).max(200)).min(1).max(8),
+        ordered: z.boolean().optional(),
+      }),
+    })
+    .transform((v) => ({
+      type: 'list' as const,
+      items: v.list.items,
+      ordered: v.list.ordered ?? false,
+    })),
+  z
+    .object({
+      quote: z.union([
+        z.string().min(1).max(400),
+        z.object({ text: z.string().max(400), attribution: z.string().max(80).optional() }),
+      ]),
+    })
+    .transform((v) =>
+      typeof v.quote === 'string'
+        ? { type: 'quote' as const, text: v.quote }
+        : { type: 'quote' as const, text: v.quote.text, attribution: v.quote.attribution },
+    ),
+  z
+    .object({
+      callout: z.union([
+        z.string().min(1).max(400),
+        z.object({
+          text: z.string().max(400),
+          tone: z.enum(['info', 'tip', 'warn']).optional(),
+        }),
+      ]),
+    })
+    .transform((v) =>
+      typeof v.callout === 'string'
+        ? { type: 'callout' as const, text: v.callout, tone: 'info' as const }
+        : {
+            type: 'callout' as const,
+            text: v.callout.text,
+            tone: (v.callout.tone ?? 'info') as 'info' | 'tip' | 'warn',
+          },
+    ),
+  z
+    .object({
+      code: z.string().min(1).max(2000),
+    })
+    .transform((v) => ({ type: 'code' as const, code: v.code })),
+  z
+    .object({
+      stat: z.object({
+        value: z.string().min(1).max(40),
+        label: z.string().min(1).max(120),
+      }),
+    })
+    .transform((v) => ({ type: 'stat' as const, value: v.stat.value, label: v.stat.label })),
+  z
+    .object({
+      columns: z.object({
+        cols: z
+          .array(
+            z.object({
+              heading: z.string().max(80).optional(),
+              items: z.array(z.string().min(1).max(200)).min(1).max(6),
+            }),
+          )
+          .min(2)
+          .max(3),
+      }),
+    })
+    .transform((v) => ({ type: 'columns' as const, cols: v.columns.cols })),
 ]);
 
 export type SlideBlock = z.infer<typeof SlideBlockSchema>;
@@ -354,6 +456,7 @@ const DeckSlideSchema = z
     eyebrow: z.string().max(80).optional(),
     title: z.string().max(120).optional(),
     blocks: z.array(SlideBlockSchema).max(8).optional(),
+    block: SlideBlockSchema.optional(),
     note: z.string().optional(),
     visual: SlideVisualSchema.optional(),
     bullets: z.array(z.string()).min(1).max(6).optional(),
@@ -365,22 +468,24 @@ const DeckSlideSchema = z
   .refine(
     (s) =>
       (s.blocks && s.blocks.length > 0) ||
+      !!s.block ||
       (s.bullets && s.bullets.length > 0) ||
       !!s.title,
     'A slide needs at least a title, blocks, or bullets',
   )
   .transform((s): DeckSlide => {
+    const singleBlock = s.block ? [s.block] : [];
     if (s.blocks && s.blocks.length > 0) {
       return {
         layout: normalizeLayout(s.layout),
         eyebrow: s.eyebrow,
         title: s.title,
-        blocks: s.blocks,
+        blocks: [...singleBlock, ...s.blocks],
         note: s.note,
         visual: s.visual,
       };
     }
-    const blocks: SlideBlock[] = [];
+    const blocks: SlideBlock[] = [...singleBlock];
     const code = s.code ?? s.code_snippet;
     if (code) blocks.push({ type: 'code', code });
     const bullets = s.bullets ?? [];
