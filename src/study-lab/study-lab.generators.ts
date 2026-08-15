@@ -50,17 +50,34 @@ export class StudyLabGenerators {
   ) {}
 
   async ground(courseOfferingId: string, topic: string, topK = 12) {
-    const chunks = await this.materialsService.searchChunks(
-      courseOfferingId,
-      topic,
-      topK,
-    );
+    let chunks: {
+      id: string;
+      content: string;
+      materialTitle: string;
+    }[] = [];
+    let embedFailed = false;
+
+    try {
+      chunks = await this.materialsService.searchChunks(
+        courseOfferingId,
+        topic,
+        topK,
+      );
+    } catch (err) {
+      embedFailed = true;
+      this.logger.warn(
+        `[study-lab] embedding/search failed for "${topic}" — falling back to ungrounded generation: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+
     const sources = [...new Set(chunks.map((c) => c.materialTitle))];
     let corpus = chunks
       .map((c, i) => `[chunk ${i + 1}] ${c.content}`)
       .join('\n\n');
 
-    if (chunks.length < 3) {
+    if (embedFailed || chunks.length < 3) {
       const materials =
         await this.materialsService.listMaterialTitles(courseOfferingId);
       if (materials.length > 0) {
