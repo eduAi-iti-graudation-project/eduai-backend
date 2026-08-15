@@ -27,11 +27,14 @@ import { renderSlideVisuals } from './visual-renderer';
 const execFileAsync = promisify(execFile);
 const DEFAULT_BUCKET = 'materials';
 const MAX_GENERATION_MS = 5 * 60 * 1000;
+const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
+const RATE_LIMIT_MAX = 10;
 
 @Injectable()
 export class StudyLabService implements OnModuleInit {
   private readonly logger = new Logger(StudyLabService.name);
   private readonly bucket: string;
+  private readonly rateLimitMap = new Map<string, { count: number; resetAt: number }>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -40,6 +43,23 @@ export class StudyLabService implements OnModuleInit {
     private readonly supabase: SupabaseService,
   ) {
     this.bucket = process.env.SUPABASE_STORAGE_BUCKET || DEFAULT_BUCKET;
+  }
+
+  private checkRateLimit(studentId: string): void {
+    const now = Date.now();
+    const record = this.rateLimitMap.get(studentId);
+    if (!record || record.resetAt < now) {
+      this.rateLimitMap.set(studentId, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+      return;
+    }
+    if (record.count >= RATE_LIMIT_MAX) {
+      throw new ApiError(
+        ErrorCode.RATE_LIMITED,
+        HttpStatus.TOO_MANY_REQUESTS,
+        `You have reached the maximum of ${RATE_LIMIT_MAX} generations per hour. Please try again later.`,
+      );
+    }
+    record.count++;
   }
 
   async onModuleInit(): Promise<void> {
@@ -66,6 +86,8 @@ export class StudyLabService implements OnModuleInit {
     studentId: string,
     dto: GenerateStudyDto,
   ): Promise<{ generationId: string; status: string }> {
+    this.checkRateLimit(studentId);
+
     const activeAttempt = await this.prisma.quizAttempt.findFirst({
       where: { studentId, status: 'IN_PROGRESS' },
       select: { id: true },
@@ -233,6 +255,7 @@ export class StudyLabService implements OnModuleInit {
           audioUrl: built.audioUrl ?? null,
           fileUrl: built.fileUrl ?? null,
           durationSeconds: built.durationSeconds ?? null,
+          completedAt: new Date(),
         },
       });
       this.logger.log(`[study-lab] generation ${generationId} completed`);
@@ -275,7 +298,7 @@ export class StudyLabService implements OnModuleInit {
           generation.topic,
           generation.preset ?? 'OVERVIEW',
         );
-        const audio = await this.buildPodcastAudio(generationId, script);
+        const audio = await this.buildPodcastAudio(generationId, generation.courseOfferingId, script);
         return {
           payload: { ...script, audioAvailable: audio?.url ? true : false },
           audioUrl: audio?.url,
@@ -366,6 +389,7 @@ export class StudyLabService implements OnModuleInit {
 
   private async buildPodcastAudio(
     generationId: string,
+    courseOfferingId: string,
     script: { segments: { speaker: 'HOST' | 'GUEST'; text: string }[] },
   ): Promise<{ url?: string; durationSeconds?: number }> {
     if (!this.gateway.audioEnabled) {
@@ -382,12 +406,34 @@ export class StudyLabService implements OnModuleInit {
     const dir = await mkdtemp(join(tmpdir(), 'study-lab-'));
     const segmentFiles: string[] = [];
     try {
-      for (let i = 0; i < script.segments.length; i++) {
-        const seg = script.segments[i];
-        const { buffer } = await this.gateway.synthesizeSpeech(
-          seg.text,
-          this.gateway.voicesFor(seg.speaker),
+      const CONCURRENCY = 3;
+      const results: { i: number; buffer: Buffer }[] = [];
+      for (let i = 0; i < script.segments.length; i += CONCURRENCY) {
+        const batch = script.segments.slice(i, i + CONCURRENCY);
+        const settled = await Promise.allSettled(
+          batch.map((seg, idx) =>
+            this.gateway
+              .synthesizeSpeech(seg.text, this.gateway.voicesFor(seg.speaker))
+              .then(({ buffer }) => ({ i: i + idx, buffer })),
+          ),
         );
+        for (const r of settled) {
+          if (r.status === 'fulfilled') {
+            results.push(r.value);
+          } else {
+            this.logger.warn(
+              `[study-lab] TTS segment failed: ${r.reason instanceof Error ? r.reason.message : String(r.reason)}`,
+            );
+          }
+        }
+      }
+
+      if (results.length === 0) {
+        throw new Error('All TTS segments failed');
+      }
+
+      results.sort((a, b) => a.i - b.i);
+      for (const { i, buffer } of results) {
         const file = join(dir, `seg-${String(i).padStart(3, '0')}.mp3`);
         await writeFile(file, buffer);
         segmentFiles.push(file);
@@ -416,7 +462,7 @@ export class StudyLabService implements OnModuleInit {
 
       const audio = await readFile(outFile);
       const duration = await this.probeDuration(outFile);
-      const objectPath = `${this.bucket}/study-lab/${generationId}.mp3`;
+      const objectPath = `${this.bucket}/${courseOfferingId}/study-lab/${generationId}.mp3`;
       const { error } = await this.supabase
         .getStorageClient()
         .storage.from(this.bucket)
@@ -652,7 +698,7 @@ export class StudyLabService implements OnModuleInit {
       error: g.error,
       recommendedForAnalysisId: g.recommendedForAnalysisId,
       createdAt: g.createdAt.toISOString(),
-      completedAt: null,
+      completedAt: g.completedAt?.toISOString() ?? null,
       payload: g.payload ?? null,
       audioUrl: g.audioUrl,
       fileUrl: g.fileUrl,

@@ -115,7 +115,30 @@ export type ConceptMapVisual = z.infer<typeof ConceptMapVisualSchema>;
 export type SlideVisual = z.infer<typeof SlideVisualSchema>;
 
 export const DeckThemeSchema = z.object({
+  preset: z
+    .enum(['modern', 'classic', 'dark', 'colorful', 'minimal'])
+    .optional(),
   background: z.enum(['light', 'dark', 'gradient']).default('light'),
+  colors: z
+    .object({
+      primary: z
+        .string()
+        .regex(/^#[0-9a-fA-F]{6}$/)
+        .optional(),
+      secondary: z
+        .string()
+        .regex(/^#[0-9a-fA-F]{6}$/)
+        .optional(),
+      accent: z
+        .string()
+        .regex(/^#[0-9a-fA-F]{6}$/)
+        .optional(),
+      text: z
+        .string()
+        .regex(/^#[0-9a-fA-F]{6}$/)
+        .optional(),
+    })
+    .optional(),
   accent: z
     .string()
     .regex(/^#[0-9a-fA-F]{6}$/)
@@ -129,6 +152,103 @@ export const DEFAULT_DECK_THEME: DeckTheme = {
   background: 'light',
   motion: 'rise',
 };
+
+export const THEME_PRESETS: Record<string, Required<DeckTheme>> = {
+  modern: {
+    preset: 'modern',
+    background: 'light',
+    colors: {
+      primary: '#2563EB',
+      secondary: '#7C3AED',
+      accent: '#10B981',
+      text: '#1F2937',
+    },
+    motion: 'rise',
+  },
+  classic: {
+    preset: 'classic',
+    background: 'light',
+    colors: {
+      primary: '#1F2937',
+      secondary: '#6B7280',
+      accent: '#DC2626',
+      text: '#1F2937',
+    },
+    motion: 'fade',
+  },
+  dark: {
+    preset: 'dark',
+    background: 'dark',
+    colors: {
+      primary: '#93C5FD',
+      secondary: '#A78BFA',
+      accent: '#6EE7B7',
+      text: '#F1F5F9',
+    },
+    motion: 'slide',
+  },
+  colorful: {
+    preset: 'colorful',
+    background: 'gradient',
+    colors: {
+      primary: '#EC4899',
+      secondary: '#8B5CF6',
+      accent: '#F59E0B',
+      text: '#1F2937',
+    },
+    motion: 'scale',
+  },
+  minimal: {
+    preset: 'minimal',
+    background: 'light',
+    colors: {
+      primary: '#374151',
+      secondary: '#9CA3AF',
+      accent: '#6B7280',
+      text: '#1F2937',
+    },
+    motion: 'fade',
+  },
+};
+
+export function resolveTheme(
+  theme: DeckTheme,
+): Required<DeckTheme> & { colors: Required<NonNullable<DeckTheme['colors']>> } {
+  if (theme.preset && THEME_PRESETS[theme.preset]) {
+    const preset = THEME_PRESETS[theme.preset];
+    return {
+      ...preset,
+      accent: theme.accent ?? preset.accent,
+      colors: {
+        ...preset.colors,
+        ...(theme.colors ?? {}),
+      },
+    };
+  }
+
+  const base: Required<DeckTheme> & { colors: Required<NonNullable<DeckTheme['colors']>> } = {
+    preset: theme.preset ?? 'modern',
+    background: theme.background,
+    colors: {
+      primary: theme.colors?.primary ?? '#2563EB',
+      secondary: theme.colors?.secondary ?? '#7C3AED',
+      accent: theme.accent ?? theme.colors?.accent ?? '#10B981',
+      text: theme.colors?.text ?? '#1F2937',
+    },
+    motion: theme.motion,
+  };
+
+  if (theme.background === 'dark') {
+    base.colors = {
+      primary: theme.colors?.primary ?? '#93C5FD',
+      secondary: theme.colors?.secondary ?? '#A78BFA',
+      accent: theme.accent ?? theme.colors?.accent ?? '#6EE7B7',
+      text: theme.colors?.text ?? '#F1F5F9',
+    };
+  }
+
+  return base;
+}
 
 const textish = (max: number) =>
   z

@@ -1,4 +1,5 @@
 import type { Deck, SlideBlock, SlideVisual, DeckTheme } from './schemas';
+import { resolveTheme, THEME_PRESETS } from './schemas';
 
 export type PptxRun = {
   text: string;
@@ -72,29 +73,29 @@ type Palette = {
 };
 
 function paletteFor(theme: DeckTheme): Palette {
-  const accent = theme.accent ? theme.accent.slice(1) : '10B981';
+  const resolved = resolveTheme(theme);
   const light: Palette = {
     background: 'FFFFFF',
     surface: 'F8FAFC',
-    text: '1F2937',
+    text: resolved.colors.text.replace('#', ''),
     muted: '6B7280',
-    primary: '2563EB',
-    accent,
+    primary: resolved.colors.primary.replace('#', ''),
+    accent: resolved.colors.accent.replace('#', ''),
     codeBg: '0F172A',
     codeFg: '34D399',
   };
   const dark: Palette = {
     background: '0F172A',
     surface: '1E293B',
-    text: 'F1F5F9',
+    text: resolved.colors.text.replace('#', ''),
     muted: '94A3B8',
-    primary: '93C5FD',
-    accent,
+    primary: resolved.colors.primary.replace('#', ''),
+    accent: resolved.colors.accent.replace('#', ''),
     codeBg: '1E293B',
     codeFg: '6EE7B7',
   };
-  if (theme.background === 'dark') return dark;
-  if (theme.background === 'gradient') {
+  if (resolved.background === 'dark') return dark;
+  if (resolved.background === 'gradient') {
     return { ...light, background: 'EEF2FF', surface: 'FFFFFF' };
   }
   return light;
