@@ -279,7 +279,9 @@ describe('StudyLabService', () => {
       mockSupabase.getStorageClient.mockReturnValue({
         storage: {
           from: jest.fn(() => ({
+            upload: jest.fn(),
             download: mockDownload,
+            remove: jest.fn(),
           })),
         },
       });
