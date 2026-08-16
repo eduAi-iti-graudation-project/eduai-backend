@@ -37,6 +37,7 @@ import { FeedbackWriterModule } from './feedback-writer/feedback-writer.module';
 import { HomeworkHelperModule } from './homework-helper/homework-helper.module';
 import { StudyLabModule } from './study-lab/study-lab.module';
 import { ChatModule } from './chat/chat.module';
+import { BroadcastsModule } from './broadcasts/broadcasts.module';
 import { BillingModule } from './billing/billing.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
 import { GroupsModule } from './groups/groups.module';
@@ -87,6 +88,7 @@ import { GradeConsoleModule } from './grade-console/grade-console.module';
     HomeworkHelperModule,
     StudyLabModule,
     ChatModule,
+    BroadcastsModule,
     BillingModule,
     WebhooksModule,
     GroupsModule,

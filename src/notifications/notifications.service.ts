@@ -87,6 +87,48 @@ export class NotificationsService {
     await this.notifyUser(offering.teacherId, type, title, body);
   }
 
+  async notifyMany(
+    userIds: string[],
+    type: string,
+    title: string,
+    body?: string,
+  ): Promise<number> {
+    const ids = [...new Set(userIds)].filter(Boolean);
+    if (ids.length === 0) return 0;
+
+    await this.prisma.notification.createMany({
+      data: ids.map((userId) => ({
+        userId,
+        type,
+        channel: 'EMAIL' as const,
+        title,
+        body,
+      })),
+    });
+
+    if (this.transporter) {
+      const users = await this.prisma.user.findMany({
+        where: { id: { in: ids } },
+        select: { email: true },
+      });
+      for (const user of users) {
+        if (!user.email) continue;
+        this.transporter
+          .sendMail({
+            from: process.env.SMTP_FROM || 'noreply@eduai.app',
+            to: user.email,
+            subject: title,
+            text: body ?? title,
+          })
+          .catch((err) =>
+            this.logger.error(`Failed to send email to ${user.email}`, err),
+          );
+      }
+    }
+
+    return ids.length;
+  }
+
   async findAll(userId?: string): Promise<unknown[]> {
     const where: Record<string, unknown> = {};
     if (userId) where.userId = userId;
