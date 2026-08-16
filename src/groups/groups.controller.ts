@@ -1,7 +1,7 @@
 import { Body, Controller, Get, Post } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { GroupsService } from './groups.service';
-import { CreateGroupDto } from './dto';
+import { CreateGroupDto, JoinGroupDto } from './dto';
 import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
 import type { User } from '@prisma/client';
@@ -35,5 +35,14 @@ export class GroupsController {
   })
   create(@CurrentUser() user: User, @Body() dto: CreateGroupDto) {
     return this.groupsService.create(user, dto.name);
+  }
+
+  @Post('join')
+  @Roles('ADMIN')
+  @ApiOperation({
+    summary: 'Join a school group by its join code',
+  })
+  join(@CurrentUser() user: User, @Body() dto: JoinGroupDto) {
+    return this.groupsService.join(user, dto.joinCode);
   }
 }

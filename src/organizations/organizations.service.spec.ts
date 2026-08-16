@@ -128,9 +128,45 @@ describe('OrganizationsService', () => {
         id: 'org-1',
         name: 'Demo School',
         joinCode: 'DEMO2026',
+        groupId: null,
+        groupName: null,
         subscriptionStatus: 'TRIALING',
         subscriptionTier: 'TRIAL',
         seatLimit: 50,
+        userCount: 7,
+      });
+    });
+
+    it('reflects the group subscription and unlimited seats when grouped', async () => {
+      mockPrisma.organization.findUnique.mockResolvedValue({
+        id: 'org-1',
+        name: 'Demo School',
+        joinCode: 'DEMO2026',
+        subscriptionStatus: 'TRIALING',
+        subscriptionTier: 'TRIAL',
+        seatLimit: 50,
+        groupId: 'group-1',
+        group: {
+          id: 'group-1',
+          name: 'Edu Chain',
+          subscriptionStatus: 'ACTIVE',
+          subscriptionTier: 'ENTERPRISE',
+          seatLimit: null,
+        },
+      });
+      mockPrisma.user.count.mockResolvedValue(7);
+
+      const result = await service.getOrganizationSummary('org-1');
+
+      expect(result).toEqual({
+        id: 'org-1',
+        name: 'Demo School',
+        joinCode: 'DEMO2026',
+        groupId: 'group-1',
+        groupName: 'Edu Chain',
+        subscriptionStatus: 'ACTIVE',
+        subscriptionTier: 'ENTERPRISE',
+        seatLimit: null,
         userCount: 7,
       });
     });

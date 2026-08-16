@@ -1,6 +1,8 @@
 import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
 
+export type { PlanId } from './plan-catalog';
+
 export const CheckoutSessionSchema = z.object({
   planId: z.enum(['basic', 'pro', 'enterprise']),
   successUrl: z.string().url(),
@@ -23,5 +25,3 @@ export const BillingPortalSchema = z.object({
 });
 
 export class CreateBillingPortalDto extends createZodDto(BillingPortalSchema) {}
-
-export type PlanId = z.infer<typeof CheckoutSessionSchema>['planId'];

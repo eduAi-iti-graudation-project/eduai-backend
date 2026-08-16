@@ -6,3 +6,9 @@ export const CreateGroupSchema = z.object({
 });
 
 export class CreateGroupDto extends createZodDto(CreateGroupSchema) {}
+
+export const JoinGroupSchema = z.object({
+  joinCode: z.string().trim().min(1).max(50),
+});
+
+export class JoinGroupDto extends createZodDto(JoinGroupSchema) {}

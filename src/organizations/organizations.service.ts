@@ -55,7 +55,20 @@ export class OrganizationsService {
 
   async getOrganizationSummary(organizationId: string) {
     const [organization, userCount] = await Promise.all([
-      this.prisma.organization.findUnique({ where: { id: organizationId } }),
+      this.prisma.organization.findUnique({
+        where: { id: organizationId },
+        include: {
+          group: {
+            select: {
+              id: true,
+              name: true,
+              subscriptionStatus: true,
+              subscriptionTier: true,
+              seatLimit: true,
+            },
+          },
+        },
+      }),
       this.prisma.user.count({
         where: { organizationId, role: { not: 'ADMIN' } },
       }),
@@ -68,13 +81,19 @@ export class OrganizationsService {
       );
     }
 
+    // WP5: a grouped school inherits its billing home from the SchoolGroup
+    // (Enterprise-only, unlimited seats).
+    const owner = organization.group ?? organization;
+
     return {
       id: organization.id,
       name: organization.name,
       joinCode: organization.joinCode,
-      subscriptionStatus: organization.subscriptionStatus,
-      subscriptionTier: organization.subscriptionTier,
-      seatLimit: organization.seatLimit,
+      groupId: organization.group?.id ?? null,
+      groupName: organization.group?.name ?? null,
+      subscriptionStatus: owner.subscriptionStatus,
+      subscriptionTier: owner.subscriptionTier,
+      seatLimit: organization.group ? null : organization.seatLimit,
       userCount,
     };
   }

@@ -8,12 +8,7 @@ import type { SubscriptionStatus, SubscriptionTier } from '@prisma/client';
 import { ApiError } from '../common/errors/api-error';
 import { ErrorCode } from '../common/errors/codes';
 import { ErrorHint } from '../common/errors/hints';
-
-const PLAN_LIMITS: Record<string, number> = {
-  basic: 30,
-  pro: 100,
-  enterprise: 500,
-};
+import { getPlan, planIdFromPrice } from '../billing/plan-catalog';
 
 @Injectable()
 export class WebhooksService {
@@ -82,17 +77,32 @@ export class WebhooksService {
     const session = event.data.object as Stripe.Checkout.Session;
     const organizationId = session.metadata?.organizationId;
     const planId = session.metadata?.planId;
-    if (!organizationId || !planId || !PLAN_LIMITS[planId]) {
+    const groupId = session.metadata?.groupId || null;
+    const plan = planId ? getPlan(planId) : undefined;
+    if (!organizationId || !plan) {
+      return { received: true, ignored: true };
+    }
+
+    // WP5 rule: groups are Enterprise-only. If a group ever completes a
+    // checkout for a lower plan, ignore it so the group can never be
+    // downgraded through Stripe.
+    if (groupId && plan.tier !== 'ENTERPRISE') {
       return { received: true, ignored: true };
     }
 
     const subscriptionId = this.subscriptionId(session.subscription);
-    await this.persistAndUpdate(event, organizationId, organizationId, {
-      subscriptionStatus: 'ACTIVE',
-      subscriptionTier: planId.toUpperCase() as SubscriptionTier,
-      seatLimit: PLAN_LIMITS[planId],
-      stripeSubscriptionId: subscriptionId ?? undefined,
-    });
+    await this.persistAndUpdate(
+      event,
+      organizationId,
+      groupId ?? organizationId,
+      {
+        subscriptionStatus: 'ACTIVE',
+        subscriptionTier: plan.tier,
+        // Groups are billed on Enterprise with unlimited seats.
+        seatLimit: groupId ? null : plan.seatLimit,
+        stripeSubscriptionId: subscriptionId ?? undefined,
+      },
+    );
     return { received: true };
   }
 
@@ -104,13 +114,21 @@ export class WebhooksService {
     const { organization, homeId } = found;
 
     const priceId = subscription.items?.data?.[0]?.price?.id;
-    const planId = priceId ? this.planFromPrice(priceId) : null;
-    if (!planId) return { received: true, ignored: true };
+    const plan = priceId ? planIdFromPrice(priceId) : null;
+    const planDef = plan ? getPlan(plan) : undefined;
+    if (!planDef) return { received: true, ignored: true };
+
+    // WP5 rule: groups are Enterprise-only. Never sync a non-Enterprise price
+    // onto a group (prevents downgrades applied directly in Stripe).
+    if (homeId !== organization.id && planDef.tier !== 'ENTERPRISE') {
+      return { received: true, ignored: true };
+    }
 
     await this.persistAndUpdate(event, organization.id, homeId, {
       subscriptionStatus: organization.subscriptionStatus,
-      subscriptionTier: planId.toUpperCase() as SubscriptionTier,
-      seatLimit: PLAN_LIMITS[planId],
+      subscriptionTier: planDef.tier,
+      // Groups are billed on Enterprise with unlimited seats.
+      seatLimit: homeId !== organization.id ? null : planDef.seatLimit,
       stripeSubscriptionId: subscription.id,
     });
     return { received: true };
@@ -213,15 +231,6 @@ export class WebhooksService {
     return typeof subscription === 'string' ? subscription : null;
   }
 
-  private planFromPrice(priceId: string): string | null {
-    const prices: Record<string, string> = {
-      [process.env.STRIPE_PRICE_BASIC ?? '']: 'basic',
-      [process.env.STRIPE_PRICE_PRO ?? '']: 'pro',
-      [process.env.STRIPE_PRICE_ENTERPRISE ?? '']: 'enterprise',
-    };
-    return prices[priceId] ?? null;
-  }
-
   private async findByCustomer(customer: string | null) {
     if (!customer) return Promise.resolve(null);
     // WP5: a SchoolGroup owns billing; resolve the group first, then fall
@@ -257,7 +266,7 @@ export class WebhooksService {
     data: {
       subscriptionStatus: SubscriptionStatus;
       subscriptionTier?: SubscriptionTier;
-      seatLimit?: number;
+      seatLimit?: number | null;
       stripeSubscriptionId?: string;
     },
   ) {

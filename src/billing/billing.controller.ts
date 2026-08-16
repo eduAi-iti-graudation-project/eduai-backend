@@ -1,4 +1,4 @@
-import { Body, Controller, Post } from '@nestjs/common';
+import { Body, Controller, Get, Post } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { BillingService } from './billing.service';
 import {
@@ -9,12 +9,27 @@ import {
 import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { SkipSubscriptionCheck } from '../auth/skip-subscription.decorator';
+import { Public } from '../auth/public.decorator';
 
 @ApiTags('billing')
 @SkipSubscriptionCheck()
 @Controller('billing')
 export class BillingController {
   constructor(private readonly billingService: BillingService) {}
+
+  @Public()
+  @Get('plans')
+  @ApiOperation({ summary: 'Public plan catalog (tiers, prices, features)' })
+  getPlans() {
+    return this.billingService.getPlans();
+  }
+
+  @Roles('ADMIN')
+  @Get('me')
+  @ApiOperation({ summary: "The organization's subscription status and plan" })
+  getBillingStatus(@CurrentUser('organizationId') organizationId: string) {
+    return this.billingService.getBillingStatus(organizationId);
+  }
 
   @Roles('ADMIN')
   @Post('checkout')
