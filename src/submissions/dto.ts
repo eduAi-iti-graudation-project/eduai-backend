@@ -30,6 +30,9 @@ const SubmissionSchema = z.object({
       id: z.string().uuid(),
       title: z.string(),
       description: z.string().nullable(),
+      dueDate: z.string(),
+      totalPoints: z.number(),
+      courseOfferingId: z.string().uuid(),
     })
     .optional(),
 });
