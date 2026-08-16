@@ -1,5 +1,5 @@
 import type { Deck, SlideBlock, SlideVisual, DeckTheme } from './schemas';
-import { resolveTheme, THEME_PRESETS } from './schemas';
+import { resolveTheme, DEFAULT_DECK_THEME, THEME_PRESETS } from './schemas';
 
 export type PptxRun = {
   text: string;
@@ -73,7 +73,7 @@ type Palette = {
 };
 
 function paletteFor(theme?: DeckTheme): Palette {
-  const resolved = resolveTheme(theme ?? {});
+  const resolved = resolveTheme(theme ?? DEFAULT_DECK_THEME);
   const light: Palette = {
     background: 'FFFFFF',
     surface: 'F8FAFC',
