@@ -540,26 +540,66 @@ export class StudyLabService implements OnModuleInit {
       },
       include: {
         offerings: {
-          include: {
-            course: true,
-            teacher: true,
-            _count: { select: { materials: true } },
-          },
+          include: { course: true },
         },
       },
     });
 
-    return {
-      offerings: sections.flatMap((s) =>
-        s.offerings.map((o) => ({
-          id: o.id,
+    // Each student is in exactly one section per grade, so one offering per
+    // course. Return one entry per course — the section is implied by the
+    // student's enrollment and never shown.
+    const seen = new Set<string>();
+    const entries: {
+      offeringId: string;
+      courseId: string;
+      courseName: string;
+      materialCount: number;
+    }[] = [];
+    const offeringIds: string[] = [];
+    for (const s of sections) {
+      for (const o of s.offerings) {
+        if (seen.has(o.courseId)) continue;
+        seen.add(o.courseId);
+        offeringIds.push(o.id);
+        entries.push({
+          offeringId: o.id,
+          courseId: o.courseId,
           courseName: o.course.name,
-          sectionName: s.name,
-          teacherName: o.teacher?.name ?? null,
-          materialCount: o._count.materials,
-        })),
-      ),
-    };
+          materialCount: 0,
+        });
+      }
+    }
+
+    if (offeringIds.length > 0) {
+      const visible = await this.prisma.material.findMany({
+        where: {
+          OR: [
+            { courseOfferingId: { in: offeringIds } },
+            {
+              scopes: { some: { courseOfferingId: { in: offeringIds } } },
+            },
+          ],
+        },
+        select: {
+          courseOfferingId: true,
+          scopes: { select: { courseOfferingId: true } },
+        },
+      });
+      const countById = new Map<string, number>();
+      for (const m of visible) {
+        const ids = m.courseOfferingId
+          ? [m.courseOfferingId, ...m.scopes.map((s) => s.courseOfferingId)]
+          : m.scopes.map((s) => s.courseOfferingId);
+        for (const id of new Set(ids)) {
+          countById.set(id, (countById.get(id) ?? 0) + 1);
+        }
+      }
+      for (const e of entries) {
+        e.materialCount = countById.get(e.offeringId) ?? 0;
+      }
+    }
+
+    return { offerings: entries };
   }
 
   async getHistory(studentId: string, courseOfferingId?: string) {

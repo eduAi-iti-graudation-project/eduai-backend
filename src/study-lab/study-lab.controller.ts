@@ -56,10 +56,10 @@ export class StudyLabController {
   })
   async offerings(@CurrentUser() user: User): Promise<{
     offerings: {
-      id: string;
+      offeringId: string;
+      courseId: string;
       courseName: string;
-      sectionName: string;
-      teacherName: string | null;
+      materialCount: number;
     }[];
   }> {
     return this.studyLabService.getStudentOfferings(user.id);
