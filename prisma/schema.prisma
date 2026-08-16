@@ -1081,6 +1081,7 @@ model StudyGeneration {
   kind                   String
   materialKind           String?
   preset                 String?
+  theme                  Json?
   topic                  String
   status                 String   @default("PROCESSING")
   stage                  String   @default("QUEUED")
