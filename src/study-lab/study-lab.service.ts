@@ -18,8 +18,8 @@ import { ApiError } from '../common/errors/api-error';
 import { ErrorCode } from '../common/errors/codes';
 import { StudyLabGenerators } from './study-lab.generators';
 import { StudyLabGatewayService } from './study-lab.gateway.service';
-import type { Prisma } from '@prisma/client';
-import type { GenerateStudyDto } from './dto';
+import { Prisma } from '@prisma/client';
+import type { GenerateStudyDto, GenerateStudyTheme } from './dto';
 import type { Deck } from './schemas';
 import { buildDeckModel } from './pptx-deck';
 import { renderSlideVisuals } from './visual-renderer';
@@ -127,6 +127,7 @@ export class StudyLabService implements OnModuleInit {
         kind: dto.kind,
         materialKind: dto.materialKind ?? null,
         preset: dto.preset ?? null,
+        theme: dto.theme,
         topic: dto.topic,
       },
     );
@@ -176,6 +177,7 @@ export class StudyLabService implements OnModuleInit {
       kind: string;
       materialKind: string | null;
       preset: string | null;
+      theme?: GenerateStudyTheme;
       topic: string;
       recommendedForAnalysisId?: string;
     },
@@ -187,6 +189,9 @@ export class StudyLabService implements OnModuleInit {
         kind: input.kind,
         materialKind: input.materialKind,
         preset: input.preset,
+        theme: input.theme
+          ? (input.theme as Prisma.InputJsonValue)
+          : Prisma.JsonNull,
         topic: input.topic,
         recommendedForAnalysisId: input.recommendedForAnalysisId ?? null,
         status: 'PROCESSING',
@@ -282,6 +287,7 @@ export class StudyLabService implements OnModuleInit {
       kind: string;
       materialKind: string | null;
       preset: string | null;
+      theme?: unknown;
       courseOfferingId: string;
       topic: string;
     },
@@ -309,6 +315,7 @@ export class StudyLabService implements OnModuleInit {
         const deck = await this.generators.deck(
           generation.courseOfferingId,
           generation.topic,
+          generation.theme as GenerateStudyTheme | undefined,
         );
         return { payload: deck };
       }
