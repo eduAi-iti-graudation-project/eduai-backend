@@ -8,15 +8,18 @@ import {
   PodcastScriptSchema,
   PracticeSetSchema,
   StudyGuideSchema,
+  resolveTheme,
 } from './schemas';
 import type {
   CheatSheet,
   Deck,
+  DeckTheme,
   Flashcards,
   PodcastScript,
   PracticeSet,
   StudyGuide,
 } from './schemas';
+import type { GenerateStudyTheme } from './dto';
 
 const GROUNDING_RULES = `
 Grounding rules (strict):
@@ -145,15 +148,46 @@ ${corpus}`;
     return script;
   }
 
-  async deck(courseOfferingId: string, topic: string): Promise<Deck> {
+  async deck(
+    courseOfferingId: string,
+    topic: string,
+    theme?: GenerateStudyTheme,
+  ): Promise<Deck> {
     const { corpus, sources } = await this.ground(courseOfferingId, topic);
+
+    // Build theme instructions for the LLM based on user selection
+    let themeInstructions = '';
+    if (theme) {
+      const resolved = resolveTheme({
+        preset: theme.preset,
+        background: theme.background ?? 'light',
+        accent: theme.accent,
+        motion: theme.motion ?? 'rise',
+      });
+      const presetLabel = theme.preset
+        ? `"${theme.preset}" preset`
+        : 'custom theme';
+      themeInstructions = `
+THEME INSTRUCTIONS (STRICT — the student chose a specific theme; you MUST honour it):
+- Use the ${presetLabel} for this deck's visual identity.
+- Set theme.background = "${resolved.background}".
+- Set theme.accent = "${resolved.colors.accent}" (this is the brand accent used throughout).
+- Set theme.motion = "${resolved.motion}".
+- Set theme.preset = "${resolved.preset ?? theme.preset ?? 'modern'}".
+- Keep these values consistent in EVERY slide — do not change the accent mid-deck.`;
+    } else {
+      themeInstructions = `
+THEME INSTRUCTIONS:
+- Choose a theme.background ("light" | "dark" | "gradient"), a single theme.accent (#RRGGBB) that fits the topic, and theme.motion ("fade" | "rise" | "slide" | "scale").
+- Keep these values consistent in EVERY slide.`;
+    }
 
     const systemPrompt = `
 You are a presentation designer for a premium AI study assistant. Design a polished, lecture-quality slide deck for the given topic.
 
 DECK RULES:
 - 3 to 14 slides.
-- Include a "theme" at the top level: { "background": "light" | "dark" | "gradient", "accent": "#RRGGBB" (a single brand accent color that fits the topic), "motion": "fade" | "rise" | "slide" | "scale" }.
+- Include a "theme" object at the top level with: background, accent, motion, and optionally preset.
 - Slide 1 uses layout "title" (title on an accent background; keep it short). End with layout "summary" (key takeaways as a list block).
 - Each slide: pick a "layout" ("title" | "bullets" | "split" | "statement" | "summary"), an optional short "eyebrow" kicker (e.g. "Section 2 · Forces"), a concise "title", and 1-6 "blocks". Slides may include a "visual" (diagram) and a one-line "note".
 - Use blocks, never free-form markdown:
@@ -171,6 +205,8 @@ DECK RULES:
   - "bullets": the default teaching slide.
 - DESIGN SYSTEM: one accent color per deck (consistent across slides), generous whitespace, no more than ~70 words per slide, one idea per block. Vary block types for visual rhythm — don't make every slide a plain bullet list.
 - Keep text plain — no markdown, no **, no *italics*, no bullets characters like "-" or "•" inside block text.
+
+${themeInstructions}
 
 VISUAL RULES (optional, high value):
 - Some slides may include a "visual" field rendered as a diagram. Only attach a visual when the curriculum genuinely supports it — never force one.
