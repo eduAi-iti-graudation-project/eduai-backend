@@ -1081,6 +1081,7 @@ model StudyGeneration {
   kind                   String
   materialKind           String?
   preset                 String?
+  theme                  Json?
   topic                  String
   status                 String   @default("PROCESSING")
   stage                  String   @default("QUEUED")
@@ -1093,6 +1094,7 @@ model StudyGeneration {
   recommendedForAnalysisId String? @db.Uuid
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
+  completedAt            DateTime?
 
   student  User            @relation(fields: [studentId], references: [id], onDelete: Cascade)
   offering CourseOffering  @relation(fields: [courseOfferingId], references: [id], onDelete: Cascade)

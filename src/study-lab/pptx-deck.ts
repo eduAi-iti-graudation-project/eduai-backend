@@ -1,4 +1,5 @@
 import type { Deck, SlideBlock, SlideVisual, DeckTheme } from './schemas';
+import { resolveTheme, DEFAULT_DECK_THEME, THEME_PRESETS } from './schemas';
 
 export type PptxRun = {
   text: string;
@@ -71,30 +72,30 @@ type Palette = {
   codeFg: string;
 };
 
-function paletteFor(theme: DeckTheme): Palette {
-  const accent = theme.accent ? theme.accent.slice(1) : '10B981';
+function paletteFor(theme?: DeckTheme): Palette {
+  const resolved = resolveTheme(theme ?? DEFAULT_DECK_THEME);
   const light: Palette = {
     background: 'FFFFFF',
     surface: 'F8FAFC',
-    text: '1F2937',
+    text: resolved.colors.text.replace('#', ''),
     muted: '6B7280',
-    primary: '2563EB',
-    accent,
+    primary: resolved.colors.primary.replace('#', ''),
+    accent: resolved.colors.accent.replace('#', ''),
     codeBg: '0F172A',
     codeFg: '34D399',
   };
   const dark: Palette = {
     background: '0F172A',
     surface: '1E293B',
-    text: 'F1F5F9',
+    text: resolved.colors.text.replace('#', ''),
     muted: '94A3B8',
-    primary: '93C5FD',
-    accent,
+    primary: resolved.colors.primary.replace('#', ''),
+    accent: resolved.colors.accent.replace('#', ''),
     codeBg: '1E293B',
     codeFg: '6EE7B7',
   };
-  if (theme.background === 'dark') return dark;
-  if (theme.background === 'gradient') {
+  if (resolved.background === 'dark') return dark;
+  if (resolved.background === 'gradient') {
     return { ...light, background: 'EEF2FF', surface: 'FFFFFF' };
   }
   return light;
@@ -445,6 +446,7 @@ function buildBodySlide(
   }
 
   return {
+    background: palette.background,
     shapes,
     textboxes,
     images,
@@ -460,13 +462,18 @@ export function buildDeckModel(
   const slides: PptxSlideModel[] = [];
 
   deck.slides.forEach((slide, i) => {
-    if (i === 0 && (slide.layout === 'title' || slide.blocks.length === 0)) {
-      const isDark = deck.theme.background === 'dark';
-      const titleBg = isDark ? palette.background : palette.primary;
-      const titleFg = isDark ? palette.text : 'FFFFFF';
-      const subtitleFg = isDark ? palette.muted : 'E5E7EB';
-      const barFill = isDark ? palette.accent : 'FFFFFF';
+    if (i === 0 && slide.layout === 'title') {
+      const isDark = deck.theme?.background === 'dark' || deck.theme?.preset === 'dark';
+      const isGradient = deck.theme?.background === 'gradient' || deck.theme?.preset === 'colorful';
+      
+      const titleBg = isDark ? palette.background : isGradient ? 'EEF2FF' : palette.background;
+      const titleFg = isDark ? 'F1F5F9' : palette.primary;
+      const subtitleFg = isDark ? '94A3B8' : palette.muted;
+      const barFill = palette.accent;
+
+      const slideTitle = slide.title ?? deck.title;
       const subtitle = slide.eyebrow ?? slide.note ?? '';
+
       slides.push({
         background: titleBg,
         shapes: [
@@ -484,13 +491,13 @@ export function buildDeckModel(
           {
             kind: 'textbox',
             x: 0.8,
-            y: 2.5,
+            y: 2.3,
             w: 11.7,
-            h: 1.1,
+            h: 1.2,
             runs: [
               {
-                text: deck.title,
-                options: { bold: true, color: titleFg, fontSize: 40 },
+                text: slideTitle,
+                options: { bold: true, color: titleFg, fontSize: 38 },
               },
             ],
             options: { align: 'center' as const },
