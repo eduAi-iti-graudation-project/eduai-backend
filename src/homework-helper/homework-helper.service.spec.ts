@@ -91,7 +91,7 @@ describe('HomeworkHelperService', () => {
         courseOfferingId: 'offering-1',
         studentId: 'student-1',
         question: 'I dont get question 3 on photosynthesis',
-        onStep: expect.any(Function),
+        onStep: expect.any(Function) as () => void,
       });
       expect(result).toEqual({
         answer: 'Try looking at the light-dependent reactions first.',
@@ -123,7 +123,7 @@ describe('HomeworkHelperService', () => {
         studentId: 'student-1',
         question: 'I dont get question 1 on the math assignment',
         assignmentId: 'assignment-1',
-        onStep: expect.any(Function),
+        onStep: expect.any(Function) as () => void,
       });
       expect(result.action).toBe('HINT');
     });

@@ -90,10 +90,13 @@ export class LlmService {
       ...redactedUser.replacements,
     ]);
 
-    const callLlm = async (): Promise<unknown> => {
+    const callLlm = async (feedback?: string): Promise<unknown> => {
+      const userPromptForCall = feedback
+        ? `${redactedUser.redacted}\n\nYour previous response was rejected because it could not be parsed as the required JSON. Fix it and return ONLY valid JSON matching the schema. Rejection reason: ${feedback}`
+        : redactedUser.redacted;
       const content = await this.providerService.chat(
         redactedSystem.redacted,
-        redactedUser.redacted,
+        userPromptForCall,
       );
       console.log('[LlmService] Raw response:', content);
 

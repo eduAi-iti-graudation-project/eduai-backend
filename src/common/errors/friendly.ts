@@ -120,6 +120,7 @@ export const CODE_FALLBACK_MESSAGES: Partial<Record<ErrorCode, string>> = {
 
   INSIGHTS_FORBIDDEN: 'You can only view your own insights.',
   INSIGHTS_STUDENT_NOT_FOUND: 'This student could not be found.',
+  INSIGHTS_SECTION_NOT_FOUND: 'This insight chart could not be found.',
 
   INTERACTION_NOT_FOUND: 'This interaction could not be found.',
   HOMEWORK_FORBIDDEN: 'You can only view your own homework help history.',

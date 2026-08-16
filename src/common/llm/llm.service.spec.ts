@@ -183,9 +183,7 @@ describe('LlmService', () => {
         .mockResolvedValueOnce('also not json')
         .mockResolvedValueOnce('still not json')
         .mockResolvedValueOnce('almost not json')
-        .mockResolvedValueOnce(
-          JSON.stringify({ name: 'retried', score: 90 }),
-        );
+        .mockResolvedValueOnce(JSON.stringify({ name: 'retried', score: 90 }));
 
       const result = await service.generateStructured({
         systemPrompt: 'Test',
