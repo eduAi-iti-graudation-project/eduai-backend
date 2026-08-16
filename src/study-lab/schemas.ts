@@ -222,22 +222,25 @@ export function resolveTheme(theme: DeckTheme): Required<DeckTheme> & {
   if (theme.preset && THEME_PRESETS[theme.preset]) {
     const preset = THEME_PRESETS[theme.preset];
     return {
-      ...preset,
-      accent: theme.accent ?? preset.accent,
+      preset: preset.preset,
+      background: theme.background ?? preset.background,
       colors: {
         primary: theme.colors?.primary ?? preset.colors.primary!,
         secondary: theme.colors?.secondary ?? preset.colors.secondary!,
         accent: theme.accent ?? theme.colors?.accent ?? preset.colors.accent!,
         text: theme.colors?.text ?? preset.colors.text!,
       },
+      accent: theme.accent ?? preset.accent,
+      motion: theme.motion ?? preset.motion,
     };
   }
 
+  const background = theme.background ?? 'light';
   const base: Required<DeckTheme> & {
     colors: Required<NonNullable<DeckTheme['colors']>>;
   } = {
     preset: theme.preset ?? 'modern',
-    background: theme.background,
+    background,
     colors: {
       primary: theme.colors?.primary ?? '#2563EB',
       secondary: theme.colors?.secondary ?? '#7C3AED',
@@ -245,10 +248,10 @@ export function resolveTheme(theme: DeckTheme): Required<DeckTheme> & {
       text: theme.colors?.text ?? '#1F2937',
     },
     accent: theme.accent ?? theme.colors?.accent ?? '#10B981',
-    motion: theme.motion,
+    motion: theme.motion ?? 'rise',
   };
 
-  if (theme.background === 'dark') {
+  if (background === 'dark') {
     base.colors = {
       primary: theme.colors?.primary ?? '#93C5FD',
       secondary: theme.colors?.secondary ?? '#A78BFA',
