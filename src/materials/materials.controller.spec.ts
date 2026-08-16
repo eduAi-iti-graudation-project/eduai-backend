@@ -3,11 +3,19 @@ import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { MulterModule } from '@nestjs/platform-express';
+import { ZodValidationPipe } from 'nestjs-zod';
 import { MaterialsController } from './materials.controller';
 import { MaterialsService } from './materials.service';
 
-const COURSE_OFFERING_ID = '00000000-0000-0000-0000-000000000001';
+const COURSE_OFFERING_ID = 'f393ec45-b984-43f9-a8bd-b9fe5d41b712';
+const COURSE_ID = '06704ba5-2172-4cf9-a4f5-31bf7ef2606f';
+const CHAPTER_ID = '11111111-2222-4333-8444-555555555555';
 const ORGANIZATION_ID = 'org-1';
+const TEACHER = {
+  id: 'teacher-1',
+  role: 'TEACHER',
+  organizationId: ORGANIZATION_ID,
+};
 
 describe('MaterialsController (upload)', () => {
   let app: INestApplication<App>;
@@ -15,7 +23,7 @@ describe('MaterialsController (upload)', () => {
   const mockMaterialsService = {
     upload: jest.fn<
       Promise<{ id: string; chunkCount: number }>,
-      [string, string, Buffer, string, string]
+      [string, Buffer, string, Record<string, unknown>, Record<string, unknown>]
     >(),
     findByClass: jest.fn(),
     findOne: jest.fn(),
@@ -33,13 +41,16 @@ describe('MaterialsController (upload)', () => {
     }).compile();
 
     app = moduleFixture.createNestApplication();
+    app.useGlobalPipes(new ZodValidationPipe());
     app.use(
       (
-        req: { user?: { organizationId: string } },
+        req: {
+          user?: { id: string; role: string; organizationId: string };
+        },
         _res: unknown,
         next: () => void,
       ) => {
-        req.user = { organizationId: ORGANIZATION_ID };
+        req.user = TEACHER;
         next();
       },
     );
@@ -70,14 +81,18 @@ describe('MaterialsController (upload)', () => {
 
     expect(mockMaterialsService.upload).toHaveBeenCalledWith(
       'Sample',
-      COURSE_OFFERING_ID,
       expect.any(Buffer),
       'sample.pdf',
-      ORGANIZATION_ID,
-      undefined,
-      undefined,
+      TEACHER,
+      {
+        courseOfferingId: COURSE_OFFERING_ID,
+        sectionId: undefined,
+        courseId: undefined,
+        assignmentId: undefined,
+        chapterId: undefined,
+      },
     );
-    const bufferArg = mockMaterialsService.upload.mock.calls[0][2];
+    const bufferArg = mockMaterialsService.upload.mock.calls[0][1];
     expect(Buffer.isBuffer(bufferArg)).toBe(true);
     expect(bufferArg.length).toBeGreaterThan(0);
   });
@@ -92,12 +107,16 @@ describe('MaterialsController (upload)', () => {
 
     expect(mockMaterialsService.upload).toHaveBeenCalledWith(
       'Notes',
-      COURSE_OFFERING_ID,
       expect.any(Buffer),
       'notes.txt',
-      ORGANIZATION_ID,
-      undefined,
-      undefined,
+      TEACHER,
+      {
+        courseOfferingId: COURSE_OFFERING_ID,
+        sectionId: undefined,
+        courseId: undefined,
+        assignmentId: undefined,
+        chapterId: undefined,
+      },
     );
   });
 
@@ -107,18 +126,100 @@ describe('MaterialsController (upload)', () => {
       .attach('file', Buffer.from('hello world'), 'notes.txt')
       .field('title', 'Notes')
       .field('courseOfferingId', COURSE_OFFERING_ID)
-      .field('chapterId', '00000000-0000-0000-0000-000000000099')
+      .field('chapterId', CHAPTER_ID)
       .expect(201);
 
     expect(mockMaterialsService.upload).toHaveBeenCalledWith(
       'Notes',
-      COURSE_OFFERING_ID,
       expect.any(Buffer),
       'notes.txt',
-      ORGANIZATION_ID,
-      undefined,
-      '00000000-0000-0000-0000-000000000099',
+      TEACHER,
+      {
+        courseOfferingId: COURSE_OFFERING_ID,
+        sectionId: undefined,
+        courseId: undefined,
+        assignmentId: undefined,
+        chapterId: CHAPTER_ID,
+      },
     );
+  });
+
+  it('should pass courseId to the service for a course upload', async () => {
+    await request(app.getHttpServer())
+      .post('/materials/upload')
+      .attach('file', Buffer.from('hello world'), 'notes.txt')
+      .field('title', 'Notes')
+      .field('courseId', COURSE_ID)
+      .expect(201);
+
+    expect(mockMaterialsService.upload).toHaveBeenCalledWith(
+      'Notes',
+      expect.any(Buffer),
+      'notes.txt',
+      TEACHER,
+      {
+        courseOfferingId: undefined,
+        sectionId: undefined,
+        courseId: COURSE_ID,
+        assignmentId: undefined,
+        chapterId: undefined,
+      },
+    );
+  });
+
+  it('should pass sectionId and courseId to the service for a section upload', async () => {
+    await request(app.getHttpServer())
+      .post('/materials/upload')
+      .attach('file', Buffer.from('hello world'), 'notes.txt')
+      .field('title', 'Notes')
+      .field('sectionId', COURSE_OFFERING_ID)
+      .field('courseId', COURSE_ID)
+      .expect(201);
+
+    expect(mockMaterialsService.upload).toHaveBeenCalledWith(
+      'Notes',
+      expect.any(Buffer),
+      'notes.txt',
+      TEACHER,
+      {
+        courseOfferingId: undefined,
+        sectionId: COURSE_OFFERING_ID,
+        courseId: COURSE_ID,
+        assignmentId: undefined,
+        chapterId: undefined,
+      },
+    );
+  });
+
+  it('should reject an upload that supplies both courseOfferingId and sectionId', async () => {
+    await request(app.getHttpServer())
+      .post('/materials/upload')
+      .attach('file', Buffer.from('hello world'), 'notes.txt')
+      .field('title', 'Notes')
+      .field('courseOfferingId', COURSE_OFFERING_ID)
+      .field('sectionId', COURSE_OFFERING_ID)
+      .expect(400);
+    expect(mockMaterialsService.upload).not.toHaveBeenCalled();
+  });
+
+  it('should reject an upload that supplies both courseOfferingId and courseId', async () => {
+    await request(app.getHttpServer())
+      .post('/materials/upload')
+      .attach('file', Buffer.from('hello world'), 'notes.txt')
+      .field('title', 'Notes')
+      .field('courseOfferingId', COURSE_OFFERING_ID)
+      .field('courseId', COURSE_ID)
+      .expect(400);
+    expect(mockMaterialsService.upload).not.toHaveBeenCalled();
+  });
+
+  it('should reject an upload that supplies no target', async () => {
+    await request(app.getHttpServer())
+      .post('/materials/upload')
+      .attach('file', Buffer.from('hello world'), 'notes.txt')
+      .field('title', 'Notes')
+      .expect(400);
+    expect(mockMaterialsService.upload).not.toHaveBeenCalled();
   });
 });
 
@@ -178,8 +279,21 @@ describe('MaterialsController (chapters)', () => {
       .expect(201);
 
     expect(mockMaterialsService.createChapter).toHaveBeenCalledWith(
-      COURSE_OFFERING_ID,
+      { courseOfferingId: COURSE_OFFERING_ID },
       'Chapter 1',
+      ORGANIZATION_ID,
+    );
+  });
+
+  it('POST /materials/chapters creates a section chapter with a course', async () => {
+    await request(app.getHttpServer())
+      .post('/materials/chapters')
+      .send({ sectionId: COURSE_OFFERING_ID, courseId: COURSE_ID, title: 'Ch' })
+      .expect(201);
+
+    expect(mockMaterialsService.createChapter).toHaveBeenCalledWith(
+      { sectionId: COURSE_OFFERING_ID, courseId: COURSE_ID },
+      'Ch',
       ORGANIZATION_ID,
     );
   });
@@ -254,9 +368,20 @@ describe('MaterialsController (chapters)', () => {
     }).compile();
     const searchApp = moduleFixture.createNestApplication() as unknown as {
       getHttpServer(): Parameters<typeof request>[0];
+      use(...args: unknown[]): unknown;
       init(): Promise<void>;
       close(): Promise<void>;
     };
+    searchApp.use(
+      (
+        req: { user?: { organizationId: string } },
+        _res: unknown,
+        next: () => void,
+      ) => {
+        req.user = { organizationId: ORGANIZATION_ID };
+        next();
+      },
+    );
     await searchApp.init();
     await request(searchApp.getHttpServer())
       .get(
@@ -268,6 +393,7 @@ describe('MaterialsController (chapters)', () => {
       'query',
       5,
       COURSE_OFFERING_ID,
+      ORGANIZATION_ID,
     );
     await searchApp.close();
   });

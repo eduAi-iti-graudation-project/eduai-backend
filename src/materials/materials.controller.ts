@@ -42,6 +42,7 @@ import { CurrentUser } from '../auth/current-user.decorator';
 export class MaterialsController {
   constructor(private readonly materialsService: MaterialsService) {}
 
+  @Roles('TEACHER', 'ADMIN')
   @Post('upload')
   @UseInterceptors(
     FileInterceptor('file', {
@@ -58,22 +59,28 @@ export class MaterialsController {
         file: { type: 'string', format: 'binary' },
         title: { type: 'string' },
         courseOfferingId: { type: 'string', format: 'uuid' },
+        sectionId: { type: 'string', format: 'uuid' },
+        courseId: { type: 'string', format: 'uuid' },
       },
     },
   })
   upload(
     @UploadedFile() file: Express.Multer.File,
     @Body() dto: UploadMaterialDto,
-    @CurrentUser('organizationId') organizationId: string,
+    @CurrentUser() user: User,
   ) {
     return this.materialsService.upload(
       dto.title,
-      dto.courseOfferingId,
       file.buffer,
       file.originalname,
-      organizationId,
-      dto.assignmentId,
-      dto.chapterId,
+      user,
+      {
+        courseOfferingId: dto.courseOfferingId,
+        sectionId: dto.sectionId,
+        courseId: dto.courseId,
+        assignmentId: dto.assignmentId,
+        chapterId: dto.chapterId,
+      },
     );
   }
 
@@ -85,7 +92,11 @@ export class MaterialsController {
     @CurrentUser('organizationId') organizationId: string,
   ) {
     return this.materialsService.createChapter(
-      dto.courseOfferingId,
+      {
+        courseOfferingId: dto.courseOfferingId,
+        sectionId: dto.sectionId,
+        courseId: dto.courseId,
+      },
       dto.title,
       organizationId,
     );
@@ -175,12 +186,14 @@ export class MaterialsController {
     @Query('q') query: string,
     @Query('topK') topK?: string,
     @Query('chapterId') chapterId?: string,
+    @CurrentUser('organizationId') organizationId?: string,
   ) {
     return this.materialsService.searchChunks(
       courseOfferingId,
       query,
       topK ? parseInt(topK, 10) : 5,
       chapterId,
+      organizationId,
     );
   }
 
@@ -226,20 +239,25 @@ export class MaterialsController {
   @ApiOkResponse({ type: MaterialGroupedDto })
   findByCourseGrouped(
     @Param('courseId') courseId: string,
-    @CurrentUser('organizationId') organizationId: string,
+    @CurrentUser() user: User,
   ) {
-    return this.materialsService.findByCourseGrouped(courseId, organizationId);
+    return this.materialsService.findByCourseGrouped(
+      courseId,
+      user.organizationId!,
+      user,
+    );
   }
 
   @Roles('TEACHER', 'STUDENT', 'GUARDIAN', 'ADMIN')
   @Get('course/:courseId')
   @ApiOperation({ summary: 'List materials for a course' })
   @ApiOkResponse({ type: MaterialDto, isArray: true })
-  findByCourse(
-    @Param('courseId') courseId: string,
-    @CurrentUser('organizationId') organizationId: string,
-  ) {
-    return this.materialsService.findByCourse(courseId, organizationId);
+  findByCourse(@Param('courseId') courseId: string, @CurrentUser() user: User) {
+    return this.materialsService.findByCourse(
+      courseId,
+      user.organizationId!,
+      user,
+    );
   }
 
   @Get('offering/:courseOfferingId')

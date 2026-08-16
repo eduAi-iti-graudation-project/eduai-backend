@@ -37,42 +37,153 @@ export class MaterialsService {
 
   async upload(
     title: string,
-    courseOfferingId: string,
     buffer: Buffer,
     filename: string,
-    organizationId: string,
-    assignmentId?: string,
-    chapterId?: string,
+    user: User,
+    opts: {
+      courseOfferingId?: string;
+      sectionId?: string;
+      courseId?: string;
+      assignmentId?: string;
+      chapterId?: string;
+    } = {},
   ) {
-    const offering = await this.prisma.courseOffering.findFirst({
-      where: { id: courseOfferingId, organizationId },
-    });
-    if (!offering) {
-      throw new ApiError(
-        ErrorCode.OFFERING_NOT_FOUND,
-        HttpStatus.NOT_FOUND,
-        'This class could not be found.',
-      );
+    const { courseOfferingId, sectionId, courseId, assignmentId, chapterId } =
+      opts;
+    const organizationId = user.organizationId;
+    if (!organizationId) {
+      throw new ForbiddenException('You are not part of an organization.');
     }
-    const courseId = offering.courseId;
-    if (assignmentId) {
-      const assignment = await this.prisma.assignment.findFirst({
-        where: { id: assignmentId, courseOfferingId },
+
+    // Resolve the target scope. A material's visibility is the set of
+    // sections (offerings) it was scoped to.
+    let scopeOfferingIds: string[] = [];
+    let linkedOfferingId: string | null = null;
+    let linkedCourseId: string | null = null;
+
+    if (courseOfferingId) {
+      if (assignmentId) {
+        const assignment = await this.prisma.assignment.findFirst({
+          where: { id: assignmentId, courseOfferingId },
+        });
+        if (!assignment) {
+          throw new ApiError(
+            ErrorCode.ASSIGNMENT_NOT_FOUND,
+            HttpStatus.NOT_FOUND,
+            'This assignment could not be found in the selected class.',
+          );
+        }
+      }
+      const offering = await this.prisma.courseOffering.findFirst({
+        where: { id: courseOfferingId, organizationId },
+        select: { id: true, teacherId: true, courseId: true },
       });
-      if (!assignment) {
+      if (!offering) {
         throw new ApiError(
-          ErrorCode.ASSIGNMENT_NOT_FOUND,
+          ErrorCode.OFFERING_NOT_FOUND,
           HttpStatus.NOT_FOUND,
-          'This assignment could not be found in the selected class.',
+          'This class could not be found.',
         );
       }
+      if (user.role !== 'ADMIN' && offering.teacherId !== user.id) {
+        throw new ForbiddenException(
+          'You can only upload materials to sections you teach.',
+        );
+      }
+      linkedOfferingId = offering.id;
+      linkedCourseId = offering.courseId;
+      scopeOfferingIds = [offering.id];
+    } else if (sectionId) {
+      if (assignmentId) {
+        throw new ApiError(
+          ErrorCode.ASSIGNMENT_NOT_FOUND,
+          HttpStatus.BAD_REQUEST,
+          'Assignments are per-section; section uploads cannot attach to an assignment.',
+        );
+      }
+      const section = await this.prisma.section.findFirst({
+        where: { id: sectionId, organizationId },
+        select: { id: true },
+      });
+      if (!section) {
+        throw new ApiError(
+          ErrorCode.SECTION_NOT_FOUND,
+          HttpStatus.NOT_FOUND,
+          'This section could not be found.',
+        );
+      }
+      const offerings = await this.prisma.courseOffering.findMany({
+        where: {
+          sectionId,
+          organizationId,
+          ...(courseId ? { courseId } : {}),
+          ...(user.role === 'ADMIN' ? {} : { teacherId: user.id }),
+        },
+        select: { id: true, courseId: true },
+      });
+      if (offerings.length === 0) {
+        throw new ForbiddenException(
+          courseId
+            ? 'You can only upload materials for courses you teach in this section.'
+            : 'You can only upload materials to sections you teach.',
+        );
+      }
+      linkedOfferingId = offerings[0].id;
+      linkedCourseId = courseId ?? offerings[0].courseId;
+      scopeOfferingIds = offerings.map((o) => o.id);
+    } else if (courseId) {
+      if (assignmentId) {
+        throw new ApiError(
+          ErrorCode.ASSIGNMENT_NOT_FOUND,
+          HttpStatus.BAD_REQUEST,
+          'Assignments are per-section; course-level uploads cannot attach to an assignment.',
+        );
+      }
+      const course = await this.prisma.course.findFirst({
+        where: { id: courseId, organizationId },
+        select: { id: true },
+      });
+      if (!course) {
+        throw new ApiError(
+          ErrorCode.COURSE_NOT_FOUND,
+          HttpStatus.NOT_FOUND,
+          'This course could not be found.',
+        );
+      }
+      const offerings = await this.prisma.courseOffering.findMany({
+        where:
+          user.role === 'ADMIN'
+            ? { courseId, organizationId }
+            : { courseId, organizationId, teacherId: user.id },
+        select: { id: true },
+      });
+      if (offerings.length === 0) {
+        throw new ForbiddenException(
+          'You can only upload course materials for sections you teach.',
+        );
+      }
+      linkedCourseId = courseId;
+      scopeOfferingIds = offerings.map((o) => o.id);
+    } else {
+      throw new ApiError(
+        ErrorCode.INVALID_UPLOAD_TARGET,
+        HttpStatus.BAD_REQUEST,
+        'One of courseOfferingId, sectionId or courseId is required.',
+      );
     }
+
     let linkedChapterId: string | null = null;
     if (chapterId) {
+      const chapterScope = linkedOfferingId
+        ? [{ courseOfferingId: linkedOfferingId }]
+        : [];
       const chapter = await this.prisma.materialChapter.findFirst({
         where: {
           id: chapterId,
-          OR: [{ courseOfferingId }, { courseId }],
+          OR: [
+            ...chapterScope,
+            ...(linkedCourseId ? [{ courseId: linkedCourseId }] : []),
+          ],
         },
       });
       if (!chapter) {
@@ -123,8 +234,11 @@ export class MaterialsService {
     if (!linkedChapterId) {
       const detected = detectChapters(rawText);
       if (detected.length >= 1) {
+        const chapterScope = linkedOfferingId
+          ? { courseOfferingId: linkedOfferingId }
+          : { courseId: linkedCourseId, courseOfferingId: null };
         const current = await this.prisma.materialChapter.aggregate({
-          where: { courseOfferingId },
+          where: chapterScope,
           _max: { order: true },
         });
         const base = (current._max.order ?? -1) + 1;
@@ -132,8 +246,10 @@ export class MaterialsService {
           detected.map((d, i) =>
             this.prisma.materialChapter.create({
               data: {
-                courseOfferingId,
-                courseId,
+                ...(linkedOfferingId
+                  ? { courseOfferingId: linkedOfferingId }
+                  : {}),
+                ...(linkedCourseId ? { courseId: linkedCourseId } : {}),
                 title: d.title,
                 order: base + i,
               },
@@ -148,11 +264,15 @@ export class MaterialsService {
     const material = await this.prisma.material.create({
       data: {
         title,
-        courseOfferingId,
-        courseId,
+        courseOfferingId: linkedOfferingId,
+        courseId: linkedCourseId,
         assignmentId: assignmentId ?? null,
         chapterId: linkedChapterId,
+        createdById: user.id,
         fileUrl: filename,
+        scopes: {
+          create: scopeOfferingIds.map((id) => ({ courseOfferingId: id })),
+        },
         chunks: {
           create: chunks.map((content) => ({ content })),
         },
@@ -161,7 +281,9 @@ export class MaterialsService {
     });
 
     if (isPdf) {
-      const objectPath = `${this.bucket}/${courseOfferingId}/${material.id}.pdf`;
+      const objectPath = linkedOfferingId
+        ? `${this.bucket}/${linkedOfferingId}/${material.id}.pdf`
+        : `${this.bucket}/${linkedCourseId}/${material.id}.pdf`;
       let uploadFailed: string | null = null;
       try {
         const { error } = await this.supabase
@@ -202,7 +324,7 @@ export class MaterialsService {
       id: material.id,
       title: material.title,
       courseOfferingId: material.courseOfferingId,
-      courseId,
+      courseId: linkedCourseId,
       chunkCount: material.chunks.length,
       chapterId: material.chapterId,
       detectedChapterCount: detectedCount,
@@ -210,18 +332,35 @@ export class MaterialsService {
     };
   }
 
-  findByOffering(courseOfferingId: string, organizationId: string) {
-    return this.resolveOfferingIds(courseOfferingId, organizationId).then(
-      (ids) =>
-        this.prisma.material.findMany({
-          where: {
-            courseOfferingId: { in: ids },
+  async findByOffering(courseOfferingId: string, organizationId: string) {
+    const offeringIds = await this.resolveOfferingIds(
+      courseOfferingId,
+      organizationId,
+    );
+    return this.prisma.material.findMany({
+      where: {
+        OR: [
+          {
+            courseOfferingId: { in: offeringIds },
             offering: { organizationId },
           },
-          include: { _count: { select: { chunks: true } } },
-          orderBy: { createdAt: 'desc' },
-        }),
-    );
+          {
+            scopes: {
+              some: {
+                courseOfferingId: { in: offeringIds },
+                offering: { organizationId },
+              },
+            },
+          },
+        ],
+      },
+      include: {
+        _count: { select: { chunks: true } },
+        course: { select: { name: true } },
+        offering: { select: { course: { select: { name: true } } } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
   }
 
   /**
@@ -260,20 +399,57 @@ export class MaterialsService {
       courseOfferingId,
       organizationId,
     );
+    const courseIds = (
+      await this.prisma.courseOffering.findMany({
+        where: { id: { in: offeringIds } },
+        select: { courseId: true },
+      })
+    ).map((o) => o.courseId);
     const materialSelect = {
       id: true,
       title: true,
       fileUrl: true,
       assignmentId: true,
       chapterId: true,
+      courseId: true,
       createdAt: true,
       _count: { select: { chunks: true } },
+      course: { select: { name: true } },
+      offering: { select: { course: { select: { name: true } } } },
     } as const;
-    const [chapters, unassigned] = await Promise.all([
+    // A material is visible in this view when it is legacy-scoped to one of
+    // the resolved offerings OR covered by a section scope for one of them.
+    const visibleMaterial = {
+      OR: [
+        { courseOfferingId: { in: offeringIds } },
+        { scopes: { some: { courseOfferingId: { in: offeringIds } } } },
+      ],
+    };
+    const chapterInclude = {
+      course: { select: { name: true } },
+      offering: { select: { course: { select: { name: true } } } },
+    } as const;
+    const [offeringChapters, courseChapters, unassigned] = await Promise.all([
       this.prisma.materialChapter.findMany({
         where: { courseOfferingId: { in: offeringIds } },
         include: {
+          ...chapterInclude,
           materials: {
+            where: visibleMaterial,
+            select: materialSelect,
+            orderBy: { createdAt: 'asc' },
+          },
+        },
+        orderBy: { order: 'asc' },
+      }),
+      // Course-level chapters (courseOfferingId null) group course-scoped
+      // materials; only sections in scope see them.
+      this.prisma.materialChapter.findMany({
+        where: { courseId: { in: courseIds }, courseOfferingId: null },
+        include: {
+          ...chapterInclude,
+          materials: {
+            where: visibleMaterial,
             select: materialSelect,
             orderBy: { createdAt: 'asc' },
           },
@@ -281,37 +457,111 @@ export class MaterialsService {
         orderBy: { order: 'asc' },
       }),
       this.prisma.material.findMany({
-        where: { courseOfferingId: { in: offeringIds }, chapterId: null },
+        where: { chapterId: null, ...visibleMaterial },
         select: materialSelect,
         orderBy: { createdAt: 'desc' },
       }),
     ]);
+    const chapters = [...offeringChapters, ...courseChapters].sort(
+      (a, b) => a.order - b.order,
+    );
     return { chapters, unassigned };
   }
 
   async createChapter(
-    courseOfferingId: string,
+    opts: { courseOfferingId?: string; sectionId?: string; courseId?: string },
     title: string,
     organizationId: string,
   ) {
-    const offering = await this.prisma.courseOffering.findFirst({
-      where: { id: courseOfferingId, organizationId },
-      select: { id: true, courseId: true },
-    });
-    if (!offering) {
+    let offering: { id: string; courseId: string } | null = null;
+    if (opts.courseOfferingId) {
+      offering = await this.prisma.courseOffering.findFirst({
+        where: { id: opts.courseOfferingId, organizationId },
+        select: { id: true, courseId: true },
+      });
+      if (!offering) {
+        throw new ApiError(
+          ErrorCode.OFFERING_NOT_FOUND,
+          HttpStatus.NOT_FOUND,
+          'This class could not be found.',
+        );
+      }
+    } else if (opts.sectionId) {
+      const section = await this.prisma.section.findFirst({
+        where: { id: opts.sectionId, organizationId },
+        select: { id: true },
+      });
+      if (!section) {
+        throw new ApiError(
+          ErrorCode.SECTION_NOT_FOUND,
+          HttpStatus.NOT_FOUND,
+          'This section could not be found.',
+        );
+      }
+      if (!opts.courseId) {
+        const sectionOfferings = await this.prisma.courseOffering.findMany({
+          where: { sectionId: opts.sectionId, organizationId },
+          select: { id: true, courseId: true },
+        });
+        if (sectionOfferings.length === 0) {
+          throw new ApiError(
+            ErrorCode.OFFERING_NOT_FOUND,
+            HttpStatus.NOT_FOUND,
+            'This class could not be found.',
+          );
+        }
+        if (sectionOfferings.length > 1) {
+          throw new ApiError(
+            ErrorCode.INVALID_UPLOAD_TARGET,
+            HttpStatus.BAD_REQUEST,
+            'This section has multiple courses; provide a courseId for the chapter.',
+          );
+        }
+        offering = sectionOfferings[0];
+      } else {
+        offering = await this.prisma.courseOffering.findFirst({
+          where: {
+            sectionId: opts.sectionId,
+            courseId: opts.courseId,
+            organizationId,
+          },
+          select: { id: true, courseId: true },
+        });
+        if (!offering) {
+          throw new ApiError(
+            ErrorCode.OFFERING_NOT_FOUND,
+            HttpStatus.NOT_FOUND,
+            'This class could not be found.',
+          );
+        }
+      }
+    } else if (opts.courseId) {
+      await this.assertCourseInOrganization(opts.courseId, organizationId);
+      const current = await this.prisma.materialChapter.aggregate({
+        where: { courseId: opts.courseId },
+        _max: { order: true },
+      });
+      return this.prisma.materialChapter.create({
+        data: {
+          courseId: opts.courseId,
+          title,
+          order: (current._max.order ?? -1) + 1,
+        },
+      });
+    } else {
       throw new ApiError(
-        ErrorCode.OFFERING_NOT_FOUND,
-        HttpStatus.NOT_FOUND,
-        'This class could not be found.',
+        ErrorCode.INVALID_UPLOAD_TARGET,
+        HttpStatus.BAD_REQUEST,
+        'One of courseOfferingId, sectionId or courseId is required.',
       );
     }
     const current = await this.prisma.materialChapter.aggregate({
-      where: { courseOfferingId },
+      where: { courseOfferingId: offering.id },
       _max: { order: true },
     });
     return this.prisma.materialChapter.create({
       data: {
-        courseOfferingId,
+        courseOfferingId: offering.id,
         courseId: offering.courseId,
         title,
         order: (current._max.order ?? -1) + 1,
@@ -334,32 +584,105 @@ export class MaterialsService {
     return course;
   }
 
-  async findByCourse(courseId: string, organizationId: string) {
+  async findByCourse(courseId: string, organizationId: string, user?: User) {
     await this.assertCourseInOrganization(courseId, organizationId);
+    const scopedWhere = await this.buildCourseScopeWhere(
+      courseId,
+      organizationId,
+      user,
+    );
     return this.prisma.material.findMany({
-      where: { courseId },
-      include: { _count: { select: { chunks: true } } },
+      where: { courseId, ...scopedWhere },
+      include: {
+        _count: { select: { chunks: true } },
+        course: { select: { name: true } },
+        offering: { select: { course: { select: { name: true } } } },
+      },
       orderBy: { createdAt: 'desc' },
     });
   }
 
-  async findByCourseGrouped(courseId: string, organizationId: string) {
+  /**
+   * Course-level read scope: teachers only ever see materials scoped to the
+   * sections they teach; students/guardians only see sections they are
+   * enrolled in. Admins (and anonymous org lookups) see everything in the org.
+   */
+  private async buildCourseScopeWhere(
+    courseId: string,
+    organizationId: string,
+    user?: User,
+  ): Promise<Prisma.MaterialWhereInput> {
+    if (!user || user.role === 'ADMIN') return {};
+    let offeringIds: string[];
+    if (user.role === 'TEACHER') {
+      offeringIds = (
+        await this.prisma.courseOffering.findMany({
+          where: { courseId, organizationId, teacherId: user.id },
+          select: { id: true },
+        })
+      ).map((o) => o.id);
+    } else {
+      offeringIds = (
+        await this.prisma.courseOffering.findMany({
+          where: {
+            courseId,
+            organizationId,
+            section: {
+              enrollments: {
+                some:
+                  user.role === 'GUARDIAN'
+                    ? { student: { guardianId: user.id }, status: 'APPROVED' }
+                    : { studentId: user.id, status: 'APPROVED' },
+              },
+            },
+          },
+          select: { id: true },
+        })
+      ).map((o) => o.id);
+    }
+    if (offeringIds.length === 0) {
+      // No offerings in scope — match nothing.
+      return { id: '00000000-0000-0000-0000-000000000000' };
+    }
+    return {
+      OR: [
+        { courseOfferingId: { in: offeringIds } },
+        { scopes: { some: { courseOfferingId: { in: offeringIds } } } },
+      ],
+    };
+  }
+
+  async findByCourseGrouped(
+    courseId: string,
+    organizationId: string,
+    user?: User,
+  ) {
     await this.assertCourseInOrganization(courseId, organizationId);
+    const scopedWhere = await this.buildCourseScopeWhere(
+      courseId,
+      organizationId,
+      user,
+    );
     const materialSelect = {
       id: true,
       title: true,
       fileUrl: true,
       assignmentId: true,
       chapterId: true,
+      courseId: true,
       createdAt: true,
       _count: { select: { chunks: true } },
+      course: { select: { name: true } },
+      offering: { select: { course: { select: { name: true } } } },
     } as const;
     const [chapters, unassigned] = await Promise.all([
       this.prisma.materialChapter.findMany({
         where: { courseId },
         include: {
+          course: { select: { name: true } },
+          offering: { select: { course: { select: { name: true } } } },
           materials: {
-            where: { courseId },
+            where: { courseId, ...scopedWhere },
             select: materialSelect,
             orderBy: { createdAt: 'asc' },
           },
@@ -367,7 +690,7 @@ export class MaterialsService {
         orderBy: { order: 'asc' },
       }),
       this.prisma.material.findMany({
-        where: { courseId, chapterId: null },
+        where: { courseId, chapterId: null, ...scopedWhere },
         select: materialSelect,
         orderBy: { createdAt: 'desc' },
       }),
@@ -418,7 +741,10 @@ export class MaterialsService {
     organizationId: string,
   ) {
     const material = await this.prisma.material.findFirst({
-      where: { id: materialId, offering: { organizationId } },
+      where: {
+        id: materialId,
+        OR: [{ offering: { organizationId } }, { course: { organizationId } }],
+      },
       select: { id: true, courseOfferingId: true, courseId: true },
     });
     if (!material) {
@@ -474,7 +800,10 @@ export class MaterialsService {
 
   async findOne(id: string, organizationId: string) {
     const material = await this.prisma.material.findFirst({
-      where: { id, offering: { organizationId } },
+      where: {
+        id,
+        OR: [{ offering: { organizationId } }, { course: { organizationId } }],
+      },
       include: { chunks: true },
     });
     if (!material) {
@@ -500,9 +829,14 @@ export class MaterialsService {
     query: string,
     topK = 5,
     chapterId?: string,
+    organizationId?: string,
   ) {
     const embedding = await this.llm.embed(query);
     const vectorStr = `[${embedding.join(',')}]`;
+    const ids = organizationId
+      ? await this.resolveOfferingIds(courseOfferingId, organizationId)
+      : [courseOfferingId];
+    const idList = Prisma.join(ids);
     const chapterFilter = chapterId
       ? Prisma.sql`AND m."chapterId" = ${chapterId}::uuid`
       : Prisma.empty;
@@ -523,7 +857,14 @@ export class MaterialsService {
       FROM material_chunks mc
       JOIN materials m ON m.id = mc."materialId"
       LEFT JOIN material_chapters ch ON ch.id = m."chapterId"
-      WHERE m."courseOfferingId" = ${courseOfferingId}::uuid
+      WHERE (
+        m."courseOfferingId" IN (${idList})
+        OR EXISTS (
+          SELECT 1 FROM material_section_scopes mss
+          WHERE mss."materialId" = m.id
+            AND mss."courseOfferingId" IN (${idList})
+        )
+      )
         ${chapterFilter}
         AND mc.embedding IS NOT NULL
         AND mc.embedding <=> ${vectorStr}::vector < ${this.maxSearchDistance}
@@ -560,9 +901,8 @@ export class MaterialsService {
              m."chapterId", ch.title AS "chapterTitle"
       FROM material_chunks mc
       JOIN materials m ON m.id = mc."materialId"
-      JOIN course_offerings co ON co.id = m."courseOfferingId"
       LEFT JOIN material_chapters ch ON ch.id = m."chapterId"
-      WHERE co."courseId" = ${courseId}::uuid
+      WHERE m."courseId" = ${courseId}::uuid
         ${chapterFilter}
         AND mc.embedding IS NOT NULL
         AND mc.embedding <=> ${vectorStr}::vector < ${this.maxSearchDistance}
@@ -570,6 +910,123 @@ export class MaterialsService {
       LIMIT ${topK}
     `;
     return chunks;
+  }
+
+  /**
+   * Returns an offering's material chunks directly, without any embedding
+   * similarity threshold. Used as a fallback when a semantic search comes back
+   * empty (e.g. the search query didn't embed close to the content) so the
+   * class's actual uploaded text is still available for generation.
+   * Applies the same visibility filter as `searchChunks` (direct offering link
+   * OR section scopes).
+   */
+  async getChunksByOffering(courseOfferingId: string, limit = 50) {
+    const idList = Prisma.join([courseOfferingId]);
+    return this.prisma.$queryRaw<
+      {
+        id: string;
+        content: string;
+        distance: number;
+        materialId: string;
+        materialTitle: string;
+        chapterId: string | null;
+        chapterTitle: string | null;
+      }[]
+    >`
+      SELECT mc.id, mc.content, 0::float8 AS distance,
+             m.id AS "materialId", m.title AS "materialTitle",
+             m."chapterId", ch.title AS "chapterTitle"
+      FROM material_chunks mc
+      JOIN materials m ON m.id = mc."materialId"
+      LEFT JOIN material_chapters ch ON ch.id = m."chapterId"
+      WHERE (
+        m."courseOfferingId" IN (${idList})
+        OR EXISTS (
+          SELECT 1 FROM material_section_scopes mss
+          WHERE mss."materialId" = m.id
+            AND mss."courseOfferingId" IN (${idList})
+        )
+      )
+        AND mc.embedding IS NOT NULL
+      ORDER BY m."createdAt" ASC, mc."createdAt" ASC
+      LIMIT ${limit}
+    `;
+  }
+
+  /**
+   * Returns a unit's material chunks directly, without any embedding similarity
+   * threshold. Used as a fallback when a semantic search within a unit comes
+   * back empty (e.g. the search query didn't embed close to the content) so the
+   * unit's actual text is still available for generation.
+   */
+  async getChunksByChapter(courseId: string, chapterId: string, limit = 50) {
+    return this.prisma.$queryRaw<
+      {
+        id: string;
+        content: string;
+        distance: number;
+        materialId: string;
+        materialTitle: string;
+        chapterId: string | null;
+        chapterTitle: string | null;
+      }[]
+    >`
+      SELECT mc.id, mc.content, 0::float8 AS distance,
+             m.id AS "materialId", m.title AS "materialTitle",
+             m."chapterId", ch.title AS "chapterTitle"
+      FROM material_chunks mc
+      JOIN materials m ON m.id = mc."materialId"
+      LEFT JOIN material_chapters ch ON ch.id = m."chapterId"
+      WHERE m."courseId" = ${courseId}::uuid
+        AND m."chapterId" = ${chapterId}::uuid
+      ORDER BY m."createdAt" ASC, mc."createdAt" ASC
+      LIMIT ${limit}
+    `;
+  }
+
+  /**
+   * Returns a course's material chunks directly, without any embedding
+   * similarity threshold or unit filter. Used as a fallback when generating
+   * from the entire course (no unit selected) and a semantic search comes back
+   * empty, so the course's actual uploaded text is still available.
+   */
+  async getChunksByCourse(courseId: string, limit = 50) {
+    return this.prisma.$queryRaw<
+      {
+        id: string;
+        content: string;
+        distance: number;
+        materialId: string;
+        materialTitle: string;
+        chapterId: string | null;
+        chapterTitle: string | null;
+      }[]
+    >`
+      SELECT mc.id, mc.content, 0::float8 AS distance,
+             m.id AS "materialId", m.title AS "materialTitle",
+             m."chapterId", ch.title AS "chapterTitle"
+      FROM material_chunks mc
+      JOIN materials m ON m.id = mc."materialId"
+      LEFT JOIN material_chapters ch ON ch.id = m."chapterId"
+      WHERE m."courseId" = ${courseId}::uuid
+      ORDER BY m."createdAt" ASC, mc."createdAt" ASC
+      LIMIT ${limit}
+    `;
+  }
+
+  /**
+   * Lists a course's units (chapters) that actually have material with chunks.
+   * Used to resolve a unit by title when a semantic match comes up empty.
+   */
+  async listChaptersWithMaterial(courseId: string) {
+    return this.prisma.materialChapter.findMany({
+      where: {
+        courseId,
+        materials: { some: { chunks: { some: {} } } },
+      },
+      select: { id: true, title: true },
+      orderBy: { order: 'asc' },
+    });
   }
 
   private async findMaterialWithAccess(id: string, user: User) {
@@ -591,42 +1048,72 @@ export class MaterialsService {
             },
           },
         },
+        scopes: {
+          select: {
+            offering: {
+              select: {
+                teacherId: true,
+                section: {
+                  select: {
+                    enrollments: {
+                      where: { status: 'APPROVED' },
+                      select: {
+                        student: { select: { id: true, guardianId: true } },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
       },
     });
     if (!material) throw new NotFoundException('Material not found');
-    this.assertCanAccess(
-      user,
-      material.offering.teacherId,
-      material.offering.section.enrollments,
-    );
+
+    // Build the material's scope offerings: legacy single-section rows plus
+    // any section scopes the course-level upload was granted.
+    const scopedOfferings = material.scopes?.map((s) => s.offering) ?? [];
+    const scopeOfferings = material.offering
+      ? [material.offering, ...scopedOfferings]
+      : scopedOfferings;
+
+    this.assertCanAccess(user, scopeOfferings);
     return material;
   }
 
   private assertCanAccess(
     user: User,
-    teacherId: string,
-    enrollments: { student: { id: string; guardianId: string | null } }[],
+    offerings: {
+      teacherId: string;
+      section: {
+        enrollments: { student: { id: string; guardianId: string | null } }[];
+      };
+    }[],
   ) {
     if (user.role === 'ADMIN') {
       // admins bypass the offering-scope check
       return;
     }
     if (user.role === 'TEACHER') {
-      if (teacherId !== user.id) {
+      const teaches = offerings.some((o) => o.teacherId === user.id);
+      if (!teaches) {
         throw new ForbiddenException('Not your class');
       }
       return;
     }
     if (user.role === 'STUDENT') {
-      const enrolled = enrollments.some((e) => e.student.id === user.id);
+      const enrolled = offerings.some((o) =>
+        o.section.enrollments.some((e) => e.student.id === user.id),
+      );
       if (!enrolled) {
         throw new ForbiddenException('Not enrolled in this class');
       }
       return;
     }
     if (user.role === 'GUARDIAN') {
-      const wardEnrolled = enrollments.some(
-        (e) => e.student.guardianId === user.id,
+      const wardEnrolled = offerings.some((o) =>
+        o.section.enrollments.some((e) => e.student.guardianId === user.id),
       );
       if (!wardEnrolled) {
         throw new ForbiddenException('No enrolled ward in this class');
@@ -664,11 +1151,7 @@ export class MaterialsService {
         'This assignment could not be found.',
       );
     }
-    this.assertCanAccess(
-      user,
-      assignment.offering.teacherId,
-      assignment.offering.section.enrollments,
-    );
+    this.assertCanAccess(user, [assignment.offering]);
     return this.prisma.material.findMany({
       where: { assignmentId },
       select: { id: true, title: true, fileUrl: true, createdAt: true },
@@ -727,7 +1210,10 @@ export class MaterialsService {
 
   async delete(id: string, organizationId: string) {
     const material = await this.prisma.material.findFirst({
-      where: { id, offering: { organizationId } },
+      where: {
+        id,
+        OR: [{ offering: { organizationId } }, { course: { organizationId } }],
+      },
     });
     if (!material) {
       throw new ApiError(
