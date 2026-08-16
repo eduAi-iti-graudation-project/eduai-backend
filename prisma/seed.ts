@@ -533,15 +533,17 @@ async function main() {
     where: { id: '00000000-0000-0000-0000-00000000b001' },
     update: {
       name: 'EduAI Demo Group',
+      joinCode: 'DEMOGROUP',
       subscriptionTier: 'ENTERPRISE',
       subscriptionStatus: 'TRIALING',
     },
     create: {
       id: '00000000-0000-0000-0000-00000000b001',
       name: 'EduAI Demo Group',
+      joinCode: 'DEMOGROUP',
       subscriptionTier: 'ENTERPRISE',
       subscriptionStatus: 'TRIALING',
-      seatLimit: 50,
+      seatLimit: null,
     },
   });
   await prisma.organization.update({

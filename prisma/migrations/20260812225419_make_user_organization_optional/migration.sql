@@ -2,9 +2,6 @@
 ALTER TABLE "users" DROP CONSTRAINT "users_organizationId_fkey";
 
 -- AlterTable
-ALTER TABLE "student_documents" ALTER COLUMN "category" SET DEFAULT 'OTHER';
-
--- AlterTable
 ALTER TABLE "users" ALTER COLUMN "organizationId" DROP NOT NULL;
 
 -- AddForeignKey

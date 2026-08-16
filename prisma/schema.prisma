@@ -111,6 +111,17 @@ enum QuizStatus {
   CLOSED
 }
 
+enum QuizDifficulty {
+  EASY
+  MEDIUM
+  HARD
+}
+
+enum QuizSource {
+  MANUAL
+  AI
+}
+
 enum LabStatus {
   GENERATING
   AI_REVIEW_FAILED
@@ -173,6 +184,7 @@ model Organization {
   membershipRequests MembershipRequest[]
   studentDocuments   StudentDocument[]
   joinRequests       JoinRequest[]
+  broadcasts         Broadcast[]
 
   @@index([groupId])
   @@map("organizations")
@@ -181,6 +193,7 @@ model Organization {
 model SchoolGroup {
   id                   String             @id @default(uuid()) @db.Uuid
   name                 String
+  joinCode             String             @unique
   stripeCustomerId     String?            @unique
   stripeSubscriptionId String?            @unique
   subscriptionTier     SubscriptionTier   @default(TRIAL)
@@ -194,28 +207,28 @@ model SchoolGroup {
 }
 
 model MembershipRequest {
-  id             String           @id @default(uuid()) @db.Uuid
-  organizationId String           @db.Uuid
-  email          String
-  name           String
-  role           UserRole
-  status         EnrollmentStatus @default(PENDING)
-  gradeLevel     Int?
-  authId         String?
-  photoUrl       String?
-  ssnEncrypted   String?
-  ssnTail4       String?
-  phone          String?
-  street         String?
-  city           String?
-  nationality    String?
-  personalEmail  String?
-  dateOfBirth    DateTime?
+  id                           String           @id @default(uuid()) @db.Uuid
+  organizationId               String           @db.Uuid
+  email                        String
+  name                         String
+  role                         UserRole
+  status                       EnrollmentStatus @default(PENDING)
+  gradeLevel                   Int?
+  authId                       String?
+  photoUrl                     String?
+  ssnEncrypted                 String?
+  ssnTail4                     String?
+  phone                        String?
+  street                       String?
+  city                         String?
+  nationality                  String?
+  personalEmail                String?
+  dateOfBirth                  DateTime?
   emergencyContactName         String?
   emergencyContactPhone        String?
-  emergencyContactRelationship  String?
-  createdAt      DateTime         @default(now())
-  resolvedAt     DateTime?
+  emergencyContactRelationship String?
+  createdAt                    DateTime         @default(now())
+  resolvedAt                   DateTime?
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
@@ -223,21 +236,21 @@ model MembershipRequest {
 }
 
 model TeacherProfile {
-  id                          String    @id @default(uuid()) @db.Uuid
-  teacherId                   String    @unique @db.Uuid
-  ssnEncrypted                String?
-  ssnTail4                    String?
-  phone                       String?
-  street                      String?
-  city                        String?
-  nationality                 String?
-  personalEmail               String?
-  dateOfBirth                 DateTime?
-  emergencyContactName        String?
-  emergencyContactPhone       String?
+  id                           String    @id @default(uuid()) @db.Uuid
+  teacherId                    String    @unique @db.Uuid
+  ssnEncrypted                 String?
+  ssnTail4                     String?
+  phone                        String?
+  street                       String?
+  city                         String?
+  nationality                  String?
+  personalEmail                String?
+  dateOfBirth                  DateTime?
+  emergencyContactName         String?
+  emergencyContactPhone        String?
   emergencyContactRelationship String?
-  createdAt                   DateTime  @default(now())
-  updatedAt                   DateTime  @updatedAt
+  createdAt                    DateTime  @default(now())
+  updatedAt                    DateTime  @updatedAt
 
   teacher User @relation("TeacherProfile", fields: [teacherId], references: [id], onDelete: Cascade)
 
@@ -245,22 +258,22 @@ model TeacherProfile {
 }
 
 model GuardianProfile {
-  id                          String    @id @default(uuid()) @db.Uuid
-  guardianId                  String    @unique @db.Uuid
-  ssnEncrypted                String?
-  ssnTail4                    String?
-  phone                       String?
-  street                      String?
-  city                        String?
-  nationality                 String?
-  personalEmail               String?
-  dateOfBirth                 DateTime?
-  emergencyContactName        String?
-  emergencyContactPhone       String?
+  id                           String    @id @default(uuid()) @db.Uuid
+  guardianId                   String    @unique @db.Uuid
+  ssnEncrypted                 String?
+  ssnTail4                     String?
+  phone                        String?
+  street                       String?
+  city                         String?
+  nationality                  String?
+  personalEmail                String?
+  dateOfBirth                  DateTime?
+  emergencyContactName         String?
+  emergencyContactPhone        String?
   emergencyContactRelationship String?
-  profileComplete             Boolean   @default(false)
-  createdAt                   DateTime  @default(now())
-  updatedAt                   DateTime  @updatedAt
+  profileComplete              Boolean   @default(false)
+  createdAt                    DateTime  @default(now())
+  updatedAt                    DateTime  @updatedAt
 
   guardian User @relation("GuardianProfile", fields: [guardianId], references: [id], onDelete: Cascade)
 
@@ -268,47 +281,47 @@ model GuardianProfile {
 }
 
 model JoinRequest {
-  id             String            @id @default(uuid()) @db.Uuid
-  organizationId String            @db.Uuid
-  source         JoinRequestSource
-  kind           JoinRequestKind   @default(STUDENT)
-  status         JoinRequestStatus @default(PENDING)
-  email          String
-  name           String
-  authId         String?           @unique
-  gradeId        String?           @db.Uuid
-  gradeLevelName String?
-  sectionId      String?           @db.Uuid
-  sectionName    String?
-  decidedById    String?           @db.Uuid
-  decidedAt      DateTime?
-  note           String?
-  appliedAt      DateTime          @default(now())
-  updatedAt      DateTime          @updatedAt
+  id                      String            @id @default(uuid()) @db.Uuid
+  organizationId          String            @db.Uuid
+  source                  JoinRequestSource
+  kind                    JoinRequestKind   @default(STUDENT)
+  status                  JoinRequestStatus @default(PENDING)
+  email                   String
+  name                    String
+  authId                  String?           @unique
+  gradeId                 String?           @db.Uuid
+  gradeLevelName          String?
+  sectionId               String?           @db.Uuid
+  sectionName             String?
+  decidedById             String?           @db.Uuid
+  decidedAt               DateTime?
+  note                    String?
+  appliedAt               DateTime          @default(now())
+  updatedAt               DateTime          @updatedAt
   // The applicant's chosen password, encrypted — kept as the school login
   // password when the account is provisioned with a school email on approval.
   chosenPasswordEncrypted String?
   // GUARDIAN-kind requests: the child's school email to link on approval.
-  targetStudentEmail       String?
+  targetStudentEmail      String?
 
-  guardianName                String?
-  guardianEmail               String?
-  guardianSsnEncrypted        String?
-  guardianSsnTail4            String?
-  guardianPhone               String?
-  guardianNationality         String?
-  guardianStreet              String?
-  guardianCity                String?
-  guardianDateOfBirth         DateTime?
+  guardianName         String?
+  guardianEmail        String?
+  guardianSsnEncrypted String?
+  guardianSsnTail4     String?
+  guardianPhone        String?
+  guardianNationality  String?
+  guardianStreet       String?
+  guardianCity         String?
+  guardianDateOfBirth  DateTime?
 
-  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  grade        GradeLevel?   @relation(fields: [gradeId], references: [id])
-  section      Section?      @relation(fields: [sectionId], references: [id])
-  decidedBy    User?         @relation("JoinRequestDecidedBy", fields: [decidedById], references: [id])
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  grade        GradeLevel?  @relation(fields: [gradeId], references: [id])
+  section      Section?     @relation(fields: [sectionId], references: [id])
+  decidedBy    User?        @relation("JoinRequestDecidedBy", fields: [decidedById], references: [id])
   // Set on approval: links the row to the provisioned user, so credential
   // recovery ("resend") can resolve the real inbox back to the account.
-  user         User?         @relation("JoinRequestUser", fields: [userId], references: [id], onDelete: SetNull)
-  userId       String?       @db.Uuid
+  user         User?        @relation("JoinRequestUser", fields: [userId], references: [id], onDelete: SetNull)
+  userId       String?      @db.Uuid
 
   @@index([organizationId, status])
   @@index([organizationId, email])
@@ -337,11 +350,12 @@ model GradeLevel {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  organization Organization @relation(fields: [organizationId], references: [id])
+  organization Organization  @relation(fields: [organizationId], references: [id])
   students     User[]
   sections     Section[]
   courses      Course[]
   joinRequests JoinRequest[]
+  broadcasts   Broadcast[]
 
   @@unique([organizationId, level])
   @@index([organizationId])
@@ -379,8 +393,8 @@ model Course {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  organization Organization     @relation(fields: [organizationId], references: [id])
-  gradeLevel   GradeLevel       @relation(fields: [gradeLevelId], references: [id], onDelete: Cascade)
+  organization Organization      @relation(fields: [organizationId], references: [id])
+  gradeLevel   GradeLevel        @relation(fields: [gradeLevelId], references: [id], onDelete: Cascade)
   offerings    CourseOffering[]
   materials    Material[]
   chapters     MaterialChapter[]
@@ -406,7 +420,7 @@ model CourseOffering {
   assignments      Assignment[]
   materials        Material[]
   chapters         MaterialChapter[]
-  quizzes          Quiz[]
+  quizAssignments  QuizAssignment[]
   alerts           Alert[]
   chatThreads      ChatThread[]
   teacherLogs      ClassTeacherLog[]
@@ -416,6 +430,8 @@ model CourseOffering {
   studyGenerations StudyGeneration[]
   meetings         Meeting[]
   labs             Lab[]
+  labOfferings     LabOffering[]
+  materialScopes   MaterialSectionScope[]
 
   @@unique([courseId, sectionId])
   @@index([organizationId])
@@ -616,21 +632,21 @@ enum TranscriptStatus {
 }
 
 model User {
-  id             String   @id @default(uuid()) @db.Uuid
-  authId         String?  @unique
-  email          String   @unique
-  name           String
-  role           UserRole
-  gradeId        String?  @db.Uuid
-  guardianId     String?  @db.Uuid
+  id                   String    @id @default(uuid()) @db.Uuid
+  authId               String?   @unique
+  email                String    @unique
+  name                 String
+  role                 UserRole
+  gradeId              String?   @db.Uuid
+  guardianId           String?   @db.Uuid
   // Nullable: OAuth-created admins land org-less and onboard later
   // (create or join a school) before entering the admin area.
-  organizationId String?  @db.Uuid
-  gender         Gender?
-  avatarUrl      String?
+  organizationId       String?   @db.Uuid
+  gender               Gender?
+  avatarUrl            String?
   // AES-256-GCM of the generated school credential (key CREDENTIALS_ENCRYPTION_KEY).
   // School mailboxes are not real, so this is the recovery path for "resend".
-  credentialEncrypted String?
+  credentialEncrypted  String?
   // One-time reveal flow: verify-by-token then reveal credentials once.
   verifyToken          String?   @unique
   verifyTokenExpiresAt DateTime?
@@ -638,18 +654,17 @@ model User {
   // Self-service password reset for school accounts: a self-issued token
   // delivered to the verified real inbox (school mailboxes don't exist, so
   // Supabase reset links can never arrive).
-  resetToken          String?   @unique
-  resetTokenExpiresAt DateTime?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  resetToken           String?   @unique
+  resetTokenExpiresAt  DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
-grade                     GradeLevel?                @relation(fields: [gradeId], references: [id])
-  organization              Organization?               @relation(fields: [organizationId], references: [id])
+  grade                     GradeLevel?                @relation(fields: [gradeId], references: [id])
+  organization              Organization?              @relation(fields: [organizationId], references: [id])
   teacherProfile            TeacherProfile?            @relation("TeacherProfile")
   guardianProfile           GuardianProfile?           @relation("GuardianProfile")
   teacherOfferings          CourseOffering[]           @relation("CourseOfferingTeacher")
   teacherQuizzes            Quiz[]                     @relation("TeacherQuizzes")
-  assignedQuizzes           Quiz[]                     @relation("StudentAssignedQuizzes")
   enrollments               Enrollment[]
   submissions               Submission[]
   quizAttempts              QuizAttempt[]
@@ -666,6 +681,10 @@ grade                     GradeLevel?                @relation(fields: [gradeId]
   threadsAsTeacher          ChatThread[]               @relation("ThreadTeacher")
   threadsAsStudent          ChatThread[]               @relation("ThreadStudent")
   chatMessages              ChatMessage[]
+  adminChatThreadsAsAdmin   AdminChatThread[]          @relation("AdminChatAdmin")
+  adminChatThreadsAsPeer    AdminChatThread[]          @relation("AdminChatPeer")
+  adminChatMessages         AdminChatMessage[]
+  broadcastsCreated         Broadcast[]                @relation("BroadcastsCreated")
   documents                 StudentDocument[]          @relation("StudentDocuments")
   uploadedDocuments         StudentDocument[]          @relation("DocumentsUploadedBy")
   aiSuggestedDocuments      StudentDocument[]          @relation("DocumentsAiSuggestedStudent")
@@ -682,6 +701,7 @@ grade                     GradeLevel?                @relation(fields: [gradeId]
   struggleSignals           StruggleSignal[]
   joinRequestsDecided       JoinRequest[]              @relation("JoinRequestDecidedBy")
   joinRequestsCreated       JoinRequest[]              @relation("JoinRequestUser")
+  createdMaterials          Material[]                 @relation("MaterialsCreatedBy")
 
   @@index([organizationId])
   @@map("users")
@@ -723,24 +743,42 @@ model Material {
   id               String   @id @default(uuid()) @db.Uuid
   title            String
   fileUrl          String?
-  courseOfferingId String   @db.Uuid
+  // Legacy single-section materials. Null when the material is course-scoped
+  // and covers multiple sections via MaterialSectionScope.
+  courseOfferingId String?  @db.Uuid
   courseId         String?  @db.Uuid
   assignmentId     String?  @db.Uuid
   chapterId        String?  @db.Uuid
+  // The uploader — used for teacher-scoped reads of course-level materials.
+  createdById      String?  @db.Uuid
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
   // Relations
-  offering   CourseOffering      @relation(fields: [courseOfferingId], references: [id], onDelete: Cascade)
-  course     Course?             @relation(fields: [courseId], references: [id], onDelete: SetNull)
-  assignment Assignment?         @relation(fields: [assignmentId], references: [id], onDelete: SetNull)
-  chapter    MaterialChapter?    @relation(fields: [chapterId], references: [id], onDelete: SetNull)
+  offering   CourseOffering?        @relation(fields: [courseOfferingId], references: [id], onDelete: Cascade)
+  course     Course?                @relation(fields: [courseId], references: [id], onDelete: SetNull)
+  assignment Assignment?            @relation(fields: [assignmentId], references: [id], onDelete: SetNull)
+  chapter    MaterialChapter?       @relation(fields: [chapterId], references: [id], onDelete: SetNull)
+  createdBy  User?                  @relation("MaterialsCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   chunks     MaterialChunk[]
+  scopes     MaterialSectionScope[]
 
   @@index([assignmentId])
   @@index([chapterId])
   @@index([courseId])
+  @@index([createdById])
   @@map("materials")
+}
+
+model MaterialSectionScope {
+  materialId       String         @db.Uuid
+  courseOfferingId String         @db.Uuid
+  material         Material       @relation(fields: [materialId], references: [id], onDelete: Cascade)
+  offering         CourseOffering @relation(fields: [courseOfferingId], references: [id], onDelete: Cascade)
+
+  @@id([materialId, courseOfferingId])
+  @@index([courseOfferingId])
+  @@map("material_section_scopes")
 }
 
 model MaterialChunk {
@@ -907,9 +945,9 @@ model StudentAnalysis {
   managementSummary Json?
   createdAt         DateTime @default(now())
 
-  student  User              @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  alert    Alert?            @relation(fields: [alertId], references: [id])
-  offering CourseOffering?   @relation(fields: [courseOfferingId], references: [id])
+  student                 User              @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  alert                   Alert?            @relation(fields: [alertId], references: [id])
+  offering                CourseOffering?   @relation(fields: [courseOfferingId], references: [id])
   practiceRecommendations StudyGeneration[]
 
   @@map("student_analyses")
@@ -947,28 +985,46 @@ model StudentReport {
 }
 
 model Quiz {
-  id               String     @id @default(uuid()) @db.Uuid
-  title            String
-  description      String?
-  courseOfferingId String     @db.Uuid
-  teacherId        String     @db.Uuid
-  // When set, this quiz was generated for one specific student (e.g. a
-  // post-meeting follow-up), and is only visible to that student.
-  studentId        String?    @db.Uuid
-  timeLimit        Int?
-  passingScore     Int?
-  status           QuizStatus @default(DRAFT)
-  createdAt        DateTime   @default(now())
-  updatedAt        DateTime   @updatedAt
+  id           String     @id @default(uuid()) @db.Uuid
+  title        String
+  description  String?
+  teacherId    String     @db.Uuid
+  timeLimit    Int?
+  passingScore Int?
+  status       QuizStatus @default(DRAFT)
+  difficulty   QuizDifficulty @default(MEDIUM)
+  // MANUAL = created by hand in the editor; AI = produced by the generation
+  // agent (assignments are fixed at generation time and locked in the editor).
+  source       QuizSource @default(MANUAL)
+  // When set, the quiz stops being visible to students at this time (frontend
+  // already surfaces "Closes at"; the backend now enforces it too).
+  endsAt       DateTime?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
 
-  offering  CourseOffering @relation(fields: [courseOfferingId], references: [id], onDelete: Cascade)
-  teacher   User           @relation("TeacherQuizzes", fields: [teacherId], references: [id], onDelete: Cascade)
-  student   User?          @relation("StudentAssignedQuizzes", fields: [studentId], references: [id], onDelete: Cascade)
-  questions QuizQuestion[]
-  attempts  QuizAttempt[]
+  teacher     User             @relation("TeacherQuizzes", fields: [teacherId], references: [id], onDelete: Cascade)
+  assignments QuizAssignment[]
+  questions   QuizQuestion[]
+  attempts    QuizAttempt[]
 
-  @@index([studentId])
   @@map("quizzes")
+}
+
+model QuizAssignment {
+  id               String   @id @default(uuid()) @db.Uuid
+  quizId           String   @db.Uuid
+  courseOfferingId String   @db.Uuid
+  // Empty = every APPROVED-enrolled student in the offering's section;
+  // non-empty = only the listed students (e.g. a struggle-signal follow-up).
+  targetStudentIds String[] @default([])
+  createdAt        DateTime @default(now())
+
+  quiz     Quiz           @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  offering CourseOffering @relation(fields: [courseOfferingId], references: [id], onDelete: Cascade)
+
+  @@unique([quizId, courseOfferingId])
+  @@index([courseOfferingId])
+  @@map("quiz_assignments")
 }
 
 model Lab {
@@ -977,7 +1033,12 @@ model Lab {
   courseOfferingId String    @db.Uuid
   createdBy        String    @db.Uuid
   topic            String
+  chapterId        String?   @db.Uuid
   status           LabStatus @default(GENERATING)
+  /// The game template used to render this lab. Null for legacy Matter.js labs.
+  template         String?
+  /// The architect's game spec (content + template config). Null for legacy labs.
+  gameSpec         Json?
   generatedCode    String?   @db.Text
   reviewApproved   Boolean?
   reviewFlags      Json?
@@ -985,11 +1046,29 @@ model Lab {
   publishedAt      DateTime?
   createdAt        DateTime  @default(now())
 
+  // The offering whose curriculum the topic was grounded in. The lab is
+  // simultaneously available to every offering in `offerings` (all of which
+  // must share the same course) once published.
   courseOffering CourseOffering @relation(fields: [courseOfferingId], references: [id], onDelete: Cascade)
+  offerings      LabOffering[]
 
   @@index([organizationId])
   @@index([courseOfferingId])
   @@map("labs")
+}
+
+/// Join table: one generated lab can be published to many sections (course
+/// offerings) of the same course at once.
+model LabOffering {
+  labId            String @db.Uuid
+  courseOfferingId String @db.Uuid
+
+  lab            Lab            @relation(fields: [labId], references: [id], onDelete: Cascade)
+  courseOffering CourseOffering @relation(fields: [courseOfferingId], references: [id], onDelete: Cascade)
+
+  @@id([labId, courseOfferingId])
+  @@index([courseOfferingId])
+  @@map("lab_offerings")
 }
 
 model QuizQuestion {
@@ -1075,27 +1154,27 @@ model HomeworkHelpInteraction {
 }
 
 model StudyGeneration {
-  id                     String   @id @default(uuid()) @db.Uuid
-  studentId              String   @db.Uuid
-  courseOfferingId       String   @db.Uuid
-  kind                   String
-  materialKind           String?
-  preset                 String?
-  topic                  String
-  status                 String   @default("PROCESSING")
-  stage                  String   @default("QUEUED")
-  error                  String?
-  sources                Json     @default("[]")
-  payload                Json?
-  audioUrl               String?
-  fileUrl                String?
-  durationSeconds        Int?
-  recommendedForAnalysisId String? @db.Uuid
-  createdAt              DateTime @default(now())
-  updatedAt              DateTime @updatedAt
+  id                       String   @id @default(uuid()) @db.Uuid
+  studentId                String   @db.Uuid
+  courseOfferingId         String   @db.Uuid
+  kind                     String
+  materialKind             String?
+  preset                   String?
+  topic                    String
+  status                   String   @default("PROCESSING")
+  stage                    String   @default("QUEUED")
+  error                    String?
+  sources                  Json     @default("[]")
+  payload                  Json?
+  audioUrl                 String?
+  fileUrl                  String?
+  durationSeconds          Int?
+  recommendedForAnalysisId String?  @db.Uuid
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
 
-  student  User            @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  offering CourseOffering  @relation(fields: [courseOfferingId], references: [id], onDelete: Cascade)
+  student        User             @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  offering       CourseOffering   @relation(fields: [courseOfferingId], references: [id], onDelete: Cascade)
   recommendedFor StudentAnalysis? @relation(fields: [recommendedForAnalysisId], references: [id], onDelete: SetNull)
 
   @@index([studentId, createdAt(sort: Desc)])
@@ -1134,27 +1213,82 @@ model ChatMessage {
   @@map("chat_messages")
 }
 
-model StudentDocument {
-  id                    String                    @id @default(uuid()) @db.Uuid
-  studentId             String?                   @db.Uuid
-  organizationId        String                    @db.Uuid
-  category              StudentDocumentCategory   @default(OTHER)
-  title                 String
-  academicYear          String?
-  fileName              String
-  fileUrl               String
-  mimeType              String?
-  sizeBytes             Int?
-  aiSuggestedCategory   String?
-  aiSuggestedStudentId  String?                   @db.Uuid
-  aiMatchConfidence     Float?
-  uploadedById          String?                   @db.Uuid
-  createdAt             DateTime                  @default(now())
+enum AdminChatPeerRole {
+  TEACHER
+  GUARDIAN
+}
 
-  student             User?        @relation("StudentDocuments", fields: [studentId], references: [id], onDelete: Cascade)
-  aiSuggestedStudent  User?        @relation("DocumentsAiSuggestedStudent", fields: [aiSuggestedStudentId], references: [id], onDelete: SetNull)
-  organization        Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  uploadedBy          User?        @relation("DocumentsUploadedBy", fields: [uploadedById], references: [id])
+model AdminChatThread {
+  id        String             @id @default(uuid()) @db.Uuid
+  adminId   String             @db.Uuid
+  peerId    String             @db.Uuid
+  peerRole  AdminChatPeerRole
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+
+  admin    User               @relation("AdminChatAdmin", fields: [adminId], references: [id], onDelete: Cascade)
+  peer     User               @relation("AdminChatPeer", fields: [peerId], references: [id], onDelete: Cascade)
+  messages AdminChatMessage[]
+
+  @@unique([adminId, peerId, peerRole])
+  @@map("admin_chat_threads")
+}
+
+model AdminChatMessage {
+  id        String   @id @default(uuid()) @db.Uuid
+  threadId  String   @db.Uuid
+  authorId  String   @db.Uuid
+  text      String
+  readAt    DateTime?
+  createdAt DateTime @default(now())
+
+  thread AdminChatThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  author User            @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([threadId, createdAt])
+  @@map("admin_chat_messages")
+}
+
+model Broadcast {
+  id             String    @id @default(uuid()) @db.Uuid
+  title          String
+  body           String?
+  targetRoles    UserRole[]
+  targetGradeId  String?   @db.Uuid
+  createdById    String    @db.Uuid
+  organizationId String    @db.Uuid
+  deliveredCount Int       @default(0)
+  createdAt      DateTime  @default(now())
+
+  createdBy    User          @relation("BroadcastsCreated", fields: [createdById], references: [id], onDelete: Cascade)
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  grade        GradeLevel?   @relation(fields: [targetGradeId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@map("broadcasts")
+}
+
+model StudentDocument {
+  id                   String                  @id @default(uuid()) @db.Uuid
+  studentId            String?                 @db.Uuid
+  organizationId       String                  @db.Uuid
+  category             StudentDocumentCategory
+  title                String
+  academicYear         String?
+  fileName             String
+  fileUrl              String
+  mimeType             String?
+  sizeBytes            Int?
+  aiSuggestedCategory  String?
+  aiSuggestedStudentId String?                 @db.Uuid
+  aiMatchConfidence    Float?
+  uploadedById         String?                 @db.Uuid
+  createdAt            DateTime                @default(now())
+
+  student            User?        @relation("StudentDocuments", fields: [studentId], references: [id], onDelete: Cascade)
+  aiSuggestedStudent User?        @relation("DocumentsAiSuggestedStudent", fields: [aiSuggestedStudentId], references: [id], onDelete: SetNull)
+  organization       Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  uploadedBy         User?        @relation("DocumentsUploadedBy", fields: [uploadedById], references: [id])
 
   @@index([studentId])
   @@index([organizationId])
