@@ -86,11 +86,10 @@ export class StudyLabGenerators {
       if (materials.length > 0) {
         const titles = materials.map((m) => `- ${m.title}`).join('\n');
         corpus += `
-No semantically relevant chunks were found in this course for the requested topic${
-          chunks.length > 0 ? ' (only partial matches above)' : ''
-        }. The course contains these materials:
+Note on curriculum materials:
+The course contains these materials uploaded by the instructor:
 ${titles}
-If the requested topic does not match any of these materials, say so honestly to the user and point them to the closest material instead of inventing content.`;
+Use the curriculum chunks above as primary reference. If the requested topic is broad or directly relates to the course subject matter, synthesize a complete, highly educational slide deck covering the topic in detail while aligning closely with the course context. Avoid rejecting the request or returning an empty/stub deck.`;
       }
     }
 
@@ -183,17 +182,17 @@ THEME INSTRUCTIONS:
     }
 
     const systemPrompt = `
-You are a presentation designer for a premium AI study assistant. Design a polished, lecture-quality slide deck for the given topic.
+You are a presentation designer for a premium AI study assistant. Design a polished, comprehensive, lecture-quality slide deck for the given topic.
 
-DECK RULES:
-- 3 to 14 slides.
+DECK RULES (STRICT):
+- Generate between 8 and 14 slides (aim for 10-12 slides). DO NOT generate a short 3-5 slide deck.
 - Include a "theme" object at the top level with: background, accent, motion, and optionally preset.
 - Slide 1 uses layout "title" (title on an accent background; keep it short). End with layout "summary" (key takeaways as a list block).
-- Each slide: pick a "layout" ("title" | "bullets" | "split" | "statement" | "summary"), an optional short "eyebrow" kicker (e.g. "Section 2 · Forces"), a concise "title", and 1-6 "blocks". Slides may include a "visual" (diagram) and a one-line "note".
+- Every slide must feel rich and informative: include an "eyebrow" kicker, a clear "title", and 3-6 content blocks (paragraphs, detailed lists, stat callouts, quotes, key columns).
 - Use blocks, never free-form markdown:
   - heading: an intra-slide section heading (level h1-h3).
   - paragraph: one concise sentence or two of explanation.
-  - list: 2-6 tight bullets (one idea each, exam-ready phrasing). Ordered lists only for numbered sequences.
+  - list: 3-6 tight bullets (one idea each, detailed exam-ready phrasing).
   - quote: a definition or key statement worth calling out (attribution optional).
   - callout: an exam-critical idea, with tone "info" | "tip" | "warn".
   - code: a short snippet (language optional).
@@ -202,9 +201,9 @@ DECK RULES:
 - Layout guidance:
   - "statement": one bold idea, centered, minimal blocks — use for a memorable takeaway or definition.
   - "split": text blocks on the left, a visual on the right (add the "visual" field).
-  - "bullets": the default teaching slide.
-- DESIGN SYSTEM: one accent color per deck (consistent across slides), generous whitespace, no more than ~70 words per slide, one idea per block. Vary block types for visual rhythm — don't make every slide a plain bullet list.
-- Keep text plain — no markdown, no **, no *italics*, no bullets characters like "-" or "•" inside block text.
+  - "bullets": the default teaching slide with comprehensive explanations.
+- DESIGN SYSTEM: one accent color per deck (consistent across slides), generous whitespace, rich educational value per slide. Vary block types for visual rhythm.
+- Keep text plain — no markdown, no **, no *italics*, no bullet characters like "-" or "•" inside block text.
 
 ${themeInstructions}
 
