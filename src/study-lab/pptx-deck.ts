@@ -72,8 +72,8 @@ type Palette = {
   codeFg: string;
 };
 
-function paletteFor(theme: DeckTheme): Palette {
-  const resolved = resolveTheme(theme);
+function paletteFor(theme?: DeckTheme): Palette {
+  const resolved = resolveTheme(theme ?? {});
   const light: Palette = {
     background: 'FFFFFF',
     surface: 'F8FAFC',
@@ -446,6 +446,7 @@ function buildBodySlide(
   }
 
   return {
+    background: palette.background,
     shapes,
     textboxes,
     images,
