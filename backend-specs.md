@@ -69,6 +69,45 @@ No Prisma calls inside a controller, ever.
 `CUSTOM_PROVIDER_BASE_URL`, `HF_TOKEN`. Real values live only in deployed
 environments — never committed, never hardcoded, never logged.
 
+## WP5 — School Groups & billing (non-negotiable rules)
+
+A "school group" (`SchoolGroup`) lets multiple schools share one billing
+owner. The rules below are enforced in code and mirrored by webhooks; a
+violation is a bug.
+
+- **Groups are Enterprise-only.** Any billing write — checkout
+  (`BillingService.createCheckoutSession`), plan change
+  (`changePlan`), or a Stripe webhook — for a grouped school
+  (`Organization.groupId` set) must target the `enterprise` plan, or it is
+  rejected/ignored. Enforced via `assertGroupAllowsPlan` (throws 403
+  `GROUP_REQUIRES_ENTERPRISE`) and in `WebhooksService` (non-Enterprise
+  checkout/subscription events for a group return `ignored: true`).
+- **Groups have unlimited seats.** When the billing home is a `SchoolGroup`,
+  `seatLimit` is written/read as `null`. Seat *usage* is still counted across
+  every school in the group (`countGroupSeats`).
+- **Billing home is the group, not the school.** When grouped, Stripe
+  customer/subscription live on the `SchoolGroup` row; the school's own
+  `stripeCustomerId`/`stripeSubscriptionId` are nulled. Checkout sessions
+  carry `groupId` in metadata so webhooks write to the group without a
+  customer lookup. `GET /billing/me` and `GET /organizations/me` reflect the
+  group's subscription and expose `seatLimit: null` and an Enterprise-only
+  `availablePlans` catalog.
+- **Create group → forced Enterprise.** `POST /groups` moves the school's
+  Stripe customer/subscription onto the new group, sets tier `ENTERPRISE`
+  + `seatLimit null`, and either upgrades the existing subscription to the
+  Enterprise price in Stripe (`action: "UPGRADED"`) or, if the school had no
+  subscription, returns `requiresCheckout: true` for the frontend to run an
+  Enterprise checkout.
+- **Join by code.** `POST /groups/join` (`{ joinCode }`, unique, generated as
+  8 chars from `ABCDEFGHJKLMNPQRSTUVWXYZ23456789`) attaches the school to the
+  group, cancels the school's own Stripe subscription at period end
+  (`cancel_at_period_end: true`), nulls its Stripe/billing fields, and resets
+  it to `TRIALING`/`TRIAL`. Joining/creating when already grouped throws
+  `GROUP_ALREADY_MEMBER` (409); unknown codes throw `GROUP_NOT_FOUND` (404).
+- **Guard integration.** `SubscriptionGuard` reads `organization.group ??
+  organization`, so a grouped school is already subject to the group's
+  subscription status/trial window.
+
 ## API contract — how the frontend knows what exists
 
 The backend is the single source of truth for the API shape, generated
