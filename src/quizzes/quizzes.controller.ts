@@ -7,20 +7,25 @@ import {
   Param,
   Body,
   Query,
+  Res,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
+import type { Response } from 'express';
 import { QuizzesService } from './quizzes.service';
 import { Roles } from '../auth/roles.decorator';
 import { AllowGuardianless } from '../auth/allow-guardianless.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { RequiresTier } from '../auth/requires-tier.decorator';
+import { ApiError } from '../common/errors/api-error';
 import {
   CreateQuizDto,
   UpdateQuizDto,
   GenerateQuizDto,
+  AssignQuizDto,
   SubmitAttemptDto,
   UpdateAnswerDto,
   ReportViolationDto,
+  type QuizGenerationEvent,
 } from './dto';
 
 @ApiTags('quizzes')
@@ -32,9 +37,40 @@ export class QuizzesController {
   @Roles('TEACHER')
   @RequiresTier('PRO', 'ENTERPRISE')
   @Post('generate')
-  @ApiOperation({ summary: 'AI-generate a quiz from class materials' })
-  generate(@Body() dto: GenerateQuizDto, @CurrentUser('id') teacherId: string) {
-    return this.quizzesService.generate({ ...dto, teacherId });
+  @ApiOperation({
+    summary:
+      'AI-generate a quiz from class materials (SSE: step events then a done event)',
+  })
+  async generate(
+    @Body() dto: GenerateQuizDto,
+    @CurrentUser('id') teacherId: string,
+    @Res() res: Response,
+  ): Promise<void> {
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders?.();
+
+    const send = (event: QuizGenerationEvent) => {
+      res.write(`data: ${JSON.stringify(event)}\n\n`);
+    };
+
+    try {
+      const result = await this.quizzesService.generate(
+        { ...dto, teacherId },
+        (step) => send({ type: 'step', step }),
+      );
+      send({ type: 'done', data: result });
+      res.end();
+    } catch (error) {
+      const message =
+        error instanceof ApiError
+          ? error.message
+          : 'Something went wrong. Please try again.';
+      send({ type: 'error', message });
+      res.end();
+    }
   }
 
   // ─── CRUD ─────────────────────────────────────────────
@@ -55,8 +91,9 @@ export class QuizzesController {
     @CurrentUser('id') userId: string,
   ) {
     return this.quizzesService.findAll(
-      courseOfferingId,
-      role === 'STUDENT' ? userId : undefined,
+      role === 'STUDENT'
+        ? { studentId: userId }
+        : { teacherId: userId, courseOfferingId },
     );
   }
 
@@ -95,6 +132,23 @@ export class QuizzesController {
   @ApiOperation({ summary: 'Publish a draft quiz' })
   publish(@Param('id') id: string) {
     return this.quizzesService.publish(id);
+  }
+
+  // ─── Assignment management (multi-section reuse) ─────
+  @Roles('TEACHER')
+  @Post(':id/assignments')
+  @ApiOperation({
+    summary: 'Assign an existing quiz to more grade/section/course combos',
+  })
+  addAssignments(@Param('id') id: string, @Body() dto: AssignQuizDto) {
+    return this.quizzesService.addAssignments(id, dto.assignments);
+  }
+
+  @Roles('TEACHER')
+  @Delete('assignments/:assignmentId')
+  @ApiOperation({ summary: 'Remove a quiz assignment (unassign from a class)' })
+  removeAssignment(@Param('assignmentId') assignmentId: string) {
+    return this.quizzesService.removeAssignment(assignmentId);
   }
 
   // ─── Attempts ─────────────────────────────────────────

@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { LlmService } from '../../common/llm/llm.service';
 import { MaterialsService } from '../../materials/materials.service';
 import { PrismaService } from '../../prisma/prisma.service';
-import { QuizGenerationToolSchema } from '../dto';
+import { QuizGenerationToolSchema, type QuizAgentStep } from '../dto';
 import { createSearchCurriculumTool } from './tools/search-curriculum.tool';
 import { createGenerateQuestionsTool } from './tools/generate-questions.tool';
 import { createReviewQuestionsTool } from './tools/review-questions.tool';
@@ -16,7 +16,7 @@ CRITICAL: You MUST always respond with ONLY valid JSON. No markdown, no code fen
 
 Available actions and their exact JSON format:
 
-1. search_curriculum — Search the class curriculum materials for context on a topic.
+1. search_curriculum — Search the course curriculum materials for context on a topic.
    Always call this first.
    {"action": "search_curriculum", "query": "search term", "topK": 5}
 
@@ -27,7 +27,7 @@ Available actions and their exact JSON format:
    {"action": "review_questions", "questions": [...], "context": "..."}
 
 4. save_quiz — Save the final quiz to the database.
-   {"action": "save_quiz", "title": "...", "description": "...", "courseOfferingId": "...", "teacherId": "...", "questions": [...]}
+   {"action": "save_quiz", "title": "...", "description": "...", "questions": [...]}
 
 5. respond — Reply to the teacher with the result.
    {"action": "respond", "reply": "..."}
@@ -39,7 +39,8 @@ Rules:
 4. If gaps exist, call generate_questions again with avoidTopics to fill gaps.
 5. When satisfied, call save_quiz then respond with the result.
 6. Generate questions ONLY from the search results. Never use your own knowledge or information outside the results.
-7. If the search returned no material, do NOT generate questions — respond with a message explaining no curriculum material covers this topic.`;
+7. The curriculum search is already scoped to the selected unit (or the entire course when no unit is selected). Cover the ENTIRE scope — search for different parts of it as needed rather than one narrow aspect.
+8. If the search returned no material, do NOT generate questions — respond with a message explaining the selected scope has no curriculum material.`;
 
 @Injectable()
 export class QuizGenerationAgent {
@@ -51,15 +52,44 @@ export class QuizGenerationAgent {
     private readonly prisma: PrismaService,
   ) {}
 
-  async generate(params: {
-    courseOfferingId: string;
-    teacherId: string;
-    topic?: string;
-    questionCount?: number;
-    types?: ('MCQ' | 'TRUE_FALSE' | 'SHORT_ANSWER' | 'ESSAY')[];
-    difficulty?: 'EASY' | 'MEDIUM' | 'HARD';
-  }): Promise<{ quizId: string; title: string; message: string }> {
-    const searchCurriculum = createSearchCurriculumTool(this.materialsService);
+  async generate(
+    params: {
+      courseId: string;
+      assignments: {
+        courseOfferingId: string;
+        targetStudentIds?: string[];
+      }[];
+      teacherId: string;
+      chapterId?: string | null;
+      questionCount?: number;
+      types?: ('MCQ' | 'TRUE_FALSE' | 'SHORT_ANSWER' | 'ESSAY')[];
+      difficulty?: 'EASY' | 'MEDIUM' | 'HARD';
+      timeLimit: number;
+      endsAt: string;
+    },
+    onStep?: (step: QuizAgentStep) => void,
+  ): Promise<{ quizId: string; title: string; message: string }> {
+    onStep?.('thinking');
+    const chapter = params.chapterId
+      ? await this.prisma.materialChapter.findUnique({
+          where: { id: params.chapterId },
+          select: { title: true },
+        })
+      : null;
+    const unitTitle = chapter?.title ?? 'the entire course';
+    if (params.chapterId && !chapter) {
+      return {
+        quizId: '',
+        title: '',
+        message:
+          'The selected unit no longer exists. Pick another unit and try again.',
+      };
+    }
+
+    const searchCurriculum = createSearchCurriculumTool(
+      this.materialsService,
+      params.chapterId ?? null,
+    );
     const generateQuestions = createGenerateQuestionsTool(this.llmService);
     const reviewQuestions = createReviewQuestionsTool(this.llmService);
     const saveQuiz = createSaveQuizTool(this.prisma);
@@ -68,11 +98,14 @@ export class QuizGenerationAgent {
     let saved = false;
 
     const initialPrompt = [
-      `Generate quiz for class ${params.courseOfferingId}`,
-      params.topic ? `Topic: ${params.topic}` : null,
+      `Generate quiz for course ${params.courseId}`,
+      `Unit: ${unitTitle}`,
+      `Generate questions covering the ENTIRE "${unitTitle}".`,
       `Target question count: ${params.questionCount ?? 5}`,
       params.types ? `Question types: ${params.types.join(', ')}` : null,
       `Difficulty: ${params.difficulty ?? 'MEDIUM'}`,
+      `Time limit: ${params.timeLimit} minutes`,
+      `Closes at: ${params.endsAt}`,
     ]
       .filter(Boolean)
       .join('\n');
@@ -108,8 +141,9 @@ export class QuizGenerationAgent {
         }
 
         case 'search_curriculum': {
+          onStep?.('search_curriculum');
           const toolResult = await searchCurriculum.execute({
-            courseOfferingId: params.courseOfferingId,
+            courseId: params.courseId,
             query: result.query,
             topK: result.topK ?? 5,
           });
@@ -117,7 +151,7 @@ export class QuizGenerationAgent {
             return {
               quizId: '',
               title: '',
-              message: `No curriculum material was found for "${result.query}" in this class, so a quiz can't be generated on this topic. Upload material covering it first, then try again.`,
+              message: `No curriculum material was found in the unit "${unitTitle}" for this course, so a quiz can't be generated. Upload material to this unit first, then try again.`,
             };
           }
           history.push(
@@ -134,6 +168,7 @@ export class QuizGenerationAgent {
         }
 
         case 'generate_questions': {
+          onStep?.('generate_questions');
           const toolResult = await generateQuestions.execute({
             context: result.context,
             types: result.types,
@@ -156,6 +191,7 @@ export class QuizGenerationAgent {
         }
 
         case 'review_questions': {
+          onStep?.('review_questions');
           const toolResult = await reviewQuestions.execute({
             questions: result.questions,
             context: result.context,
@@ -181,11 +217,15 @@ export class QuizGenerationAgent {
         }
 
         case 'save_quiz': {
+          onStep?.('save_quiz');
           const toolResult = await saveQuiz.execute({
             title: result.title,
             description: result.description ?? undefined,
-            courseOfferingId: params.courseOfferingId,
+            assignments: params.assignments,
             teacherId: params.teacherId,
+            difficulty: params.difficulty ?? 'MEDIUM',
+            timeLimit: params.timeLimit,
+            endsAt: params.endsAt,
             questions: result.questions.map((q, idx) => ({
               ...q,
               points: q.points ?? 1,

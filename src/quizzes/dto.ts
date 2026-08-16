@@ -14,6 +14,8 @@ export const QuizStatusEnum = z.enum(['DRAFT', 'PUBLISHED', 'CLOSED']);
 
 export const QuizDifficultyEnum = z.enum(['EASY', 'MEDIUM', 'HARD']);
 
+export const QuizSourceEnum = z.enum(['MANUAL', 'AI']);
+
 export const AttemptStatusEnum = z.enum(['IN_PROGRESS', 'COMPLETED']);
 
 export const ViolationTypeEnum = z.enum(['TAB_SWITCH', 'FULLSCREEN_EXIT']);
@@ -34,13 +36,24 @@ const QuizQuestionInputSchema = z.object({
   order: z.number().int().min(0),
 });
 
+const QuizAssignmentInputSchema = z.object({
+  courseOfferingId: z.string().uuid(),
+  targetStudentIds: z.array(z.string().uuid()).optional(),
+});
+
 export const CreateQuizSchema = z.object({
   title: z.string().min(1),
   description: z.string().optional(),
-  courseOfferingId: z.string().uuid(),
-  timeLimit: z.number().int().min(1).optional(),
+  assignments: z.array(QuizAssignmentInputSchema).min(1),
+  timeLimit: z.number().int().min(1),
   passingScore: z.number().int().min(0).optional(),
+  difficulty: QuizDifficultyEnum.default('MEDIUM'),
+  endsAt: z.string().datetime(),
   questions: z.array(QuizQuestionInputSchema).min(1),
+});
+
+export const AssignQuizSchema = z.object({
+  assignments: z.array(QuizAssignmentInputSchema).min(1),
 });
 
 export const UpdateQuizSchema = z.object({
@@ -48,18 +61,47 @@ export const UpdateQuizSchema = z.object({
   description: z.string().optional(),
   timeLimit: z.number().int().min(1).nullable().optional(),
   passingScore: z.number().int().min(0).nullable().optional(),
+  difficulty: QuizDifficultyEnum.optional(),
+  endsAt: z.string().datetime().nullable().optional(),
   status: QuizStatusEnum.optional(),
   questions: z.array(QuizQuestionInputSchema).optional(),
 });
 
 // ─── Quiz Generation Agent ──────────────────────────────
 export const GenerateQuizSchema = z.object({
-  courseOfferingId: z.string().uuid(),
-  topic: z.string().optional(),
+  courseId: z.string().uuid(),
+  assignments: z.array(QuizAssignmentInputSchema).min(1),
+  // The unit (material chapter) the quiz is generated from. Generation is
+  // scoped to this unit's material. When omitted/null the quiz is generated
+  // from the ENTIRE course.
+  chapterId: z.string().uuid().nullish(),
   questionCount: z.number().int().min(1).max(30).default(5),
   types: z.array(QuestionTypeEnum).optional(),
   difficulty: QuizDifficultyEnum.default('MEDIUM'),
+  // Quizzes must have a time limit and a close date+time.
+  timeLimit: z.number().int().min(1),
+  endsAt: z.string().datetime(),
 });
+
+// Steps the generation agent reports while it works, streamed to the teacher
+// via SSE so the frontend can highlight the active node.
+export type QuizAgentStep =
+  | 'thinking'
+  | 'search_curriculum'
+  | 'generate_questions'
+  | 'review_questions'
+  | 'save_quiz';
+
+export type QuizGenerationResult = {
+  quizId: string;
+  title: string;
+  message: string;
+};
+
+export type QuizGenerationEvent =
+  | { type: 'step'; step: QuizAgentStep }
+  | { type: 'done'; data: QuizGenerationResult }
+  | { type: 'error'; message: string };
 
 export const QuizGenerationToolSchema = z.discriminatedUnion('action', [
   z.object({
@@ -153,14 +195,30 @@ const QuizQuestionResponseSchema = z.object({
   order: z.number(),
 });
 
+const QuizAssignmentResponseSchema = z.object({
+  id: z.string(),
+  courseOfferingId: z.string(),
+  sectionId: z.string(),
+  sectionName: z.string(),
+  courseId: z.string(),
+  courseName: z.string(),
+  gradeLevelId: z.string(),
+  gradeLevelName: z.string().nullable(),
+  teacherId: z.string().nullable(),
+  targetStudentIds: z.array(z.string()),
+});
+
 export const QuizResponseSchema = z.object({
   id: z.string(),
   title: z.string(),
   description: z.string().nullable(),
-  courseOfferingId: z.string(),
+  assignments: z.array(QuizAssignmentResponseSchema),
   teacherId: z.string(),
   timeLimit: z.number().nullable(),
   passingScore: z.number().nullable(),
+  difficulty: QuizDifficultyEnum,
+  source: QuizSourceEnum,
+  endsAt: z.string().nullable(),
   status: QuizStatusEnum,
   questions: z.array(QuizQuestionResponseSchema),
   createdAt: z.string(),
@@ -200,6 +258,7 @@ export const AttemptResponseSchema = z.object({
 export class CreateQuizDto extends createZodDto(CreateQuizSchema) {}
 export class UpdateQuizDto extends createZodDto(UpdateQuizSchema) {}
 export class GenerateQuizDto extends createZodDto(GenerateQuizSchema) {}
+export class AssignQuizDto extends createZodDto(AssignQuizSchema) {}
 export class SubmitAttemptDto extends createZodDto(SubmitAttemptSchema) {}
 export class UpdateAnswerDto extends createZodDto(UpdateAnswerSchema) {}
 export class ReportViolationDto extends createZodDto(ReportViolationSchema) {}

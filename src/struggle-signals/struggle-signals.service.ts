@@ -458,23 +458,35 @@ export class StruggleSignalsService {
     },
     teacherId: string,
   ): Promise<{ id: string; status: 'SENT'; quizId: string }> {
-    // Reuse the EXISTING Quiz Engine pipeline — seeded with the concept
-    // instead of a teacher-chosen topic.
+    // Reuse the EXISTING Quiz Engine pipeline — seeded with the concept only
+    // to RESOLVE the best-matching unit. The quiz is generated from that unit's
+    // material (never from the concept text), assigned to THIS student only,
+    // and published so only they can see it.
     let quizGeneration: { quizId: string; title: string; message: string };
     try {
-      quizGeneration = await this.quizzesService.generate({
+      const offering = await this.prisma.courseOffering.findUnique({
+        where: { id: signal.courseOfferingId },
+        select: { courseId: true },
+      });
+      if (!offering) {
+        throw new ApiError(
+          ErrorCode.STRUGGLE_GENERATION_FAILED,
+          HttpStatus.UNPROCESSABLE_ENTITY,
+          'The class for this signal no longer exists.',
+        );
+      }
+      quizGeneration = await this.quizzesService.generateForConcept({
+        courseId: offering.courseId,
         courseOfferingId: signal.courseOfferingId,
+        studentId: signal.studentId,
+        concept: signal.concept,
         teacherId,
-        topic: signal.concept,
-        questionCount: 5,
-        types: ['MCQ', 'TRUE_FALSE'],
-        difficulty: 'MEDIUM',
       });
     } catch (error) {
       throw new ApiError(
         ErrorCode.STRUGGLE_GENERATION_FAILED,
         HttpStatus.UNPROCESSABLE_ENTITY,
-        'The follow-up quiz could not be generated for this concept. Make sure the class has curriculum material covering it.',
+        'The follow-up quiz could not be generated for this concept. Make sure the class has curriculum material covering it organized into units.',
         { cause: error },
       );
     }
@@ -505,11 +517,11 @@ export class StruggleSignalsService {
       );
     }
 
-    // Scope the generated quiz to THIS student and publish it so it shows
-    // up in their normal quiz surface — only that one student can see it.
+    // Publish the quiz — the assignment already scopes it to this student,
+    // so no studentId is written on the quiz itself.
     await this.prisma.quiz.update({
       where: { id: quizGeneration.quizId },
-      data: { studentId: signal.studentId, status: 'PUBLISHED' },
+      data: { status: 'PUBLISHED' },
     });
 
     const updated = await this.prisma.struggleSignal.updateMany({
@@ -559,7 +571,10 @@ export class StruggleSignalsService {
     meetingId: string,
   ): Promise<Meeting> {
     const meeting = await this.prisma.meeting.findFirst({
-      where: { id: meetingId, organizationId: user.organizationId ?? undefined },
+      where: {
+        id: meetingId,
+        organizationId: user.organizationId ?? undefined,
+      },
       select: {
         id: true,
         type: true,

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { MaterialsService } from '../../../materials/materials.service';
 
 export const SearchCurriculumInputSchema = z.object({
-  courseOfferingId: z.string().uuid(),
+  courseId: z.string().uuid(),
   query: z.string(),
   topK: z.number().int().min(1).max(20).default(5),
 });
@@ -14,22 +14,39 @@ export const SearchCurriculumOutputSchema = z.object({
 
 export type SearchCurriculumInput = z.infer<typeof SearchCurriculumInputSchema>;
 
-export function createSearchCurriculumTool(materialsService: MaterialsService) {
+export function createSearchCurriculumTool(
+  materialsService: MaterialsService,
+  chapterId?: string | null,
+) {
   return {
     inputSchema: SearchCurriculumInputSchema,
     outputSchema: SearchCurriculumOutputSchema,
     execute: async (
       input: SearchCurriculumInput,
     ): Promise<z.infer<typeof SearchCurriculumOutputSchema>> => {
-      const chunks = await materialsService.searchChunks(
-        input.courseOfferingId,
+      let chunks = await materialsService.searchChunksByCourse(
+        input.courseId,
         input.query,
         input.topK,
+        chapterId ?? undefined,
       );
+
+      // The scope is already chosen — a weak semantic query (e.g. just the
+      // unit title) must not cause a false "no material". Fall back to the
+      // scope's material directly when the search comes back empty.
+      if (chunks.length === 0) {
+        chunks = chapterId
+          ? await materialsService.getChunksByChapter(
+              input.courseId,
+              chapterId,
+              50,
+            )
+          : await materialsService.getChunksByCourse(input.courseId, 50);
+      }
 
       if (chunks.length === 0) {
         return {
-          results: 'No relevant curriculum material found.',
+          results: 'No curriculum material found in this unit.',
           count: 0,
         };
       }

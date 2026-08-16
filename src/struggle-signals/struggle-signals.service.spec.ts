@@ -58,11 +58,12 @@ const mockPrisma = {
     findFirst: jest.fn(),
     updateMany: jest.fn(),
   },
+  courseOffering: { findUnique: jest.fn() },
   quiz: { update: jest.fn() },
 };
 
 const mockProvider = { chat: jest.fn() };
-const mockQuizzes = { generate: jest.fn() };
+const mockQuizzes = { generate: jest.fn(), generateForConcept: jest.fn() };
 const mockHomework = { help: jest.fn() };
 
 /** The fake gateway must answer with the JSON payload the extraction agent
@@ -423,7 +424,7 @@ describe('StruggleSignalsService', () => {
         courseOffering: { teacherId: teacher.id },
       },
     });
-    mockQuizzes.generate.mockResolvedValue({
+    mockQuizzes.generateForConcept.mockResolvedValue({
       quizId: 'quiz-1',
       title: 'States of matter',
       message: 'done',
@@ -433,28 +434,35 @@ describe('StruggleSignalsService', () => {
       interactionId: 'int-1',
       text: 'Here you go…',
     });
+    mockPrisma.courseOffering.findUnique.mockResolvedValue({
+      id: OFFERING_A,
+      courseId: 'course-1',
+    });
     mockPrisma.quiz.update.mockResolvedValue({});
     mockPrisma.struggleSignal.updateMany.mockResolvedValue({ count: 1 });
 
     const result = await service.sendSignal(teacher, 'sig-1');
 
-    // Both EXISTING pipelines were used, seeded with the concept.
-    expect(mockQuizzes.generate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        topic: 'states of matter',
-        teacherId: teacher.id,
-      }),
-    );
+    // Both EXISTING pipelines were used: the quiz engine resolves a unit from
+    // the concept (never generates from the concept text), and the homework
+    // helper re-explains the concept.
+    expect(mockQuizzes.generateForConcept).toHaveBeenCalledWith({
+      courseId: 'course-1',
+      courseOfferingId: OFFERING_A,
+      studentId: studentA.id,
+      concept: 'states of matter',
+      teacherId: teacher.id,
+    });
     expect(mockHomework.help).toHaveBeenCalledWith({
       courseOfferingId: OFFERING_A,
       studentId: studentA.id,
       question:
         'Please re-explain this concept that came up in our class: states of matter.',
     });
-    // The generated quiz is scoped to the ONE student + published.
+    // The generated quiz is already scoped via its assignment; just publish.
     expect(mockPrisma.quiz.update).toHaveBeenCalledWith({
       where: { id: 'quiz-1' },
-      data: { studentId: studentA.id, status: 'PUBLISHED' },
+      data: { status: 'PUBLISHED' },
     });
     expect(mockPrisma.struggleSignal.updateMany).toHaveBeenCalledWith({
       where: { id: 'sig-1', status: { in: ['PENDING', 'FAILED'] } },

@@ -95,7 +95,7 @@ export class OfferingsService {
         section: { include: { gradeLevel: true } },
         teacher: true,
         _count: {
-          select: { assignments: true, quizzes: true, materials: true },
+          select: { assignments: true, quizAssignments: true, materials: true },
         },
       },
       orderBy: { createdAt: 'desc' },

@@ -212,7 +212,9 @@ export class StudentsService {
             course: true,
             teacher: true,
             materials: { select: { id: true, title: true } },
-            quizzes: { select: { id: true } },
+            quizAssignments: {
+              select: { id: true, targetStudentIds: true },
+            },
             assignments: {
               include: {
                 rubrics: true,
@@ -223,6 +225,15 @@ export class StudentsService {
         },
       },
     });
+
+    const quizCountFor = (o: {
+      quizAssignments: { id: string; targetStudentIds: string[] }[];
+    }) =>
+      o.quizAssignments.filter(
+        (qa) =>
+          qa.targetStudentIds.length === 0 ||
+          qa.targetStudentIds.includes(studentId),
+      ).length;
 
     return sections.map((s) => {
       const teacherNames = [
@@ -243,7 +254,7 @@ export class StudentsService {
             s.offerings.flatMap((o) => o.materials.map((m) => m.title)),
           ),
         ],
-        quizCount: s.offerings.reduce((n, o) => n + o.quizzes.length, 0),
+        quizCount: s.offerings.reduce((n, o) => n + quizCountFor(o), 0),
         assignments: s.offerings.flatMap((o) =>
           o.assignments.map((a) => ({
             id: a.id,
@@ -282,7 +293,9 @@ export class StudentsService {
             course: true,
             teacher: true,
             materials: { select: { id: true, title: true } },
-            quizzes: { select: { id: true } },
+            quizAssignments: {
+              select: { id: true, targetStudentIds: true },
+            },
             assignments: {
               include: {
                 rubrics: true,
@@ -294,6 +307,15 @@ export class StudentsService {
       },
     });
 
+    const quizCountFor = (o: {
+      quizAssignments: { id: string; targetStudentIds: string[] }[];
+    }) =>
+      o.quizAssignments.filter(
+        (qa) =>
+          qa.targetStudentIds.length === 0 ||
+          qa.targetStudentIds.includes(studentId),
+      ).length;
+
     return sections.flatMap((s) =>
       s.offerings.map((o) => ({
         id: o.id,
@@ -303,7 +325,7 @@ export class StudentsService {
         teacherName: o.teacher?.name ?? null,
         materialCount: o.materials.length,
         materialTitles: o.materials.map((m) => m.title),
-        quizCount: o.quizzes.length,
+        quizCount: quizCountFor(o),
         assignments: o.assignments.map((a) => ({
           id: a.id,
           title: a.title,
@@ -522,16 +544,22 @@ export class StudentsService {
         studentId,
         status: 'COMPLETED',
         submittedAt: { not: null },
-        quiz: { offering: { organizationId } },
+        quiz: {
+          assignments: { some: { offering: { organizationId } } },
+        },
       },
       include: {
         quiz: {
           include: {
-            offering: {
-              include: {
-                course: { select: { id: true, name: true } },
-                section: { select: { id: true, name: true } },
-                teacher: { select: { id: true, name: true } },
+            assignments: {
+              select: {
+                offering: {
+                  select: {
+                    course: { select: { id: true, name: true } },
+                    section: { select: { id: true, name: true } },
+                    teacher: { select: { id: true, name: true } },
+                  },
+                },
               },
             },
             questions: { select: { points: true } },
@@ -544,12 +572,13 @@ export class StudentsService {
     return attempts.map((a) => {
       const maxPoints = a.quiz.questions.reduce((sum, q) => sum + q.points, 0);
       const totalScore = a.totalScore ?? 0;
+      const offering = a.quiz.assignments[0]?.offering;
       return {
         id: a.id,
         quizId: a.quizId,
         quizTitle: a.quiz.title,
-        className: a.quiz.offering.section.name,
-        teacherName: a.quiz.offering.teacher?.name ?? null,
+        className: offering?.section.name ?? null,
+        teacherName: offering?.teacher?.name ?? null,
         totalScore,
         maxPoints,
         percent: maxPoints ? Math.round((totalScore / maxPoints) * 100) : 0,
@@ -566,7 +595,9 @@ export class StudentsService {
           studentId,
           status: 'COMPLETED',
           submittedAt: { not: null },
-          quiz: { offering: { organizationId } },
+          quiz: {
+            assignments: { some: { offering: { organizationId } } },
+          },
         },
         include: {
           quiz: {
