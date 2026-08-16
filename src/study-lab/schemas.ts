@@ -277,63 +277,138 @@ const textish = (max: number) =>
       path: ['text'],
     });
 
+const textContent = (max: number) =>
+  z.union([
+    z.string().min(1).max(max),
+    z.array(z.string()).transform((arr) => arr.join(' ')),
+    z.object({ text: z.string().optional(), content: z.string().optional() }).transform((v) => v.text ?? v.content ?? ''),
+  ]);
+
 export const SlideBlockSchema = z.union([
+  // 1. type: "heading"
   z
     .object({
       type: z.literal('heading'),
-      level: z.enum(['h1', 'h2', 'h3']).default('h2'),
+      text: textContent(300).optional(),
+      content: textContent(300).optional(),
+      level: z.enum(['h1', 'h2', 'h3']).optional().default('h2'),
     })
-    .and(textish(120)),
-  z.object({ type: z.literal('paragraph') }).and(textish(400)),
-  z.object({
-    type: z.literal('list'),
-    items: z.array(z.string().min(1).max(200)).min(1).max(8),
-    ordered: z.boolean().default(false),
-  }),
+    .transform((v) => ({
+      type: 'heading' as const,
+      text: (v.text || v.content || 'Heading').trim(),
+      level: v.level ?? 'h2',
+    })),
+  // 2. type: "paragraph"
+  z
+    .object({
+      type: z.literal('paragraph'),
+      text: textContent(1000).optional(),
+      content: textContent(1000).optional(),
+    })
+    .transform((v) => ({
+      type: 'paragraph' as const,
+      text: (v.text || v.content || '').trim(),
+    })),
+  // 3. type: "list"
+  z
+    .object({
+      type: z.literal('list'),
+      items: z.array(z.string().min(1).max(400)).min(1).max(12).optional(),
+      bullets: z.array(z.string().min(1).max(400)).optional(),
+      ordered: z.boolean().optional().default(false),
+    })
+    .transform((v) => ({
+      type: 'list' as const,
+      items: v.items ?? v.bullets ?? [],
+      ordered: v.ordered ?? false,
+    })),
+  // 4. type: "quote"
   z
     .object({
       type: z.literal('quote'),
-      attribution: z.string().max(80).optional(),
+      text: textContent(1000).optional(),
+      content: textContent(1000).optional(),
+      attribution: z.string().max(120).optional(),
     })
-    .and(textish(400)),
+    .transform((v) => ({
+      type: 'quote' as const,
+      text: (v.text || v.content || '').trim(),
+      attribution: v.attribution,
+    })),
+  // 5. type: "callout"
   z
     .object({
       type: z.literal('callout'),
-      tone: z.enum(['info', 'tip', 'warn']).default('info'),
+      text: textContent(1000).optional(),
+      content: textContent(1000).optional(),
+      tone: z.enum(['info', 'tip', 'warn']).optional().default('info'),
     })
-    .and(textish(400)),
-  z.object({
-    type: z.literal('code'),
-    code: z.string().min(1).max(2000),
-    language: z.string().max(20).optional(),
-  }),
-  z.object({
-    type: z.literal('stat'),
-    value: z.string().min(1).max(40),
-    label: z.string().min(1).max(120),
-  }),
-  z.object({
-    type: z.literal('columns'),
-    cols: z
-      .array(
-        z.object({
-          heading: z.string().max(80).optional(),
-          items: z.array(z.string().min(1).max(200)).min(1).max(6),
-        }),
-      )
-      .min(2)
-      .max(3),
-  }),
+    .transform((v) => ({
+      type: 'callout' as const,
+      text: (v.text || v.content || '').trim(),
+      tone: v.tone ?? 'info',
+    })),
+  // 6. type: "code"
+  z
+    .object({
+      type: z.literal('code'),
+      code: z.string().min(1).max(4000).optional(),
+      snippet: z.string().optional(),
+      language: z.string().max(30).optional(),
+    })
+    .transform((v) => ({
+      type: 'code' as const,
+      code: v.code ?? v.snippet ?? '',
+      language: v.language,
+    })),
+  // 7. type: "stat"
+  z
+    .object({
+      type: z.literal('stat'),
+      value: z.string().min(1).max(80).optional(),
+      number: z.string().optional(),
+      label: z.string().min(1).max(200).optional(),
+      title: z.string().optional(),
+    })
+    .transform((v) => ({
+      type: 'stat' as const,
+      value: v.value ?? v.number ?? '100%',
+      label: v.label ?? v.title ?? 'Statistic',
+    })),
+  // 8. type: "columns"
+  z
+    .object({
+      type: z.literal('columns'),
+      cols: z
+        .array(
+          z.object({
+            heading: z.string().max(120).optional(),
+            title: z.string().optional(),
+            items: z.array(z.string().min(1).max(400)).optional().default([]),
+          }),
+        )
+        .optional()
+        .default([]),
+    })
+    .transform((v) => ({
+      type: 'columns' as const,
+      cols: v.cols.map((c) => ({
+        heading: c.heading ?? c.title,
+        items: c.items,
+      })),
+    })),
+  // Alternative key shorthand formats from LLM (e.g. { heading: "..." }, { paragraph: "..." }, { list: [...] })
   z
     .object({
       heading: z.union([
-        z.string().min(1).max(120),
-        z.object({ text: z.string().max(120), level: z.enum(['h1', 'h2', 'h3']).optional() }),
+        z.string().min(1).max(200),
+        z.array(z.string()).transform((a) => a.join(' ')),
+        z.object({ text: z.string(), level: z.enum(['h1', 'h2', 'h3']).optional() }),
       ]),
     })
     .transform((v) =>
       typeof v.heading === 'string'
-        ? { type: 'heading' as const, text: v.heading }
+        ? { type: 'heading' as const, text: v.heading, level: 'h2' as const }
         : {
             type: 'heading' as const,
             text: v.heading.text,
@@ -342,26 +417,29 @@ export const SlideBlockSchema = z.union([
     ),
   z
     .object({
-      paragraph: z.string().min(1).max(400),
+      paragraph: z.union([z.string().min(1).max(1000), z.array(z.string()).transform((a) => a.join(' '))]),
     })
     .transform((v) => ({ type: 'paragraph' as const, text: v.paragraph })),
   z
     .object({
-      list: z.object({
-        items: z.array(z.string().min(1).max(200)).min(1).max(8),
-        ordered: z.boolean().optional(),
-      }),
+      list: z.union([
+        z.array(z.string().min(1).max(400)),
+        z.object({
+          items: z.array(z.string().min(1).max(400)),
+          ordered: z.boolean().optional(),
+        }),
+      ]),
     })
     .transform((v) => ({
       type: 'list' as const,
-      items: v.list.items,
-      ordered: v.list.ordered ?? false,
+      items: Array.isArray(v.list) ? v.list : v.list.items,
+      ordered: Array.isArray(v.list) ? false : (v.list.ordered ?? false),
     })),
   z
     .object({
       quote: z.union([
-        z.string().min(1).max(400),
-        z.object({ text: z.string().max(400), attribution: z.string().max(80).optional() }),
+        z.string().min(1).max(1000),
+        z.object({ text: z.string(), attribution: z.string().optional() }),
       ]),
     })
     .transform((v) =>
@@ -372,9 +450,9 @@ export const SlideBlockSchema = z.union([
   z
     .object({
       callout: z.union([
-        z.string().min(1).max(400),
+        z.string().min(1).max(1000),
         z.object({
-          text: z.string().max(400),
+          text: z.string(),
           tone: z.enum(['info', 'tip', 'warn']).optional(),
         }),
       ]),
@@ -390,29 +468,33 @@ export const SlideBlockSchema = z.union([
     ),
   z
     .object({
-      code: z.string().min(1).max(2000),
+      code: z.string().min(1).max(4000),
     })
     .transform((v) => ({ type: 'code' as const, code: v.code })),
   z
     .object({
       stat: z.object({
-        value: z.string().min(1).max(40),
-        label: z.string().min(1).max(120),
+        value: z.string().optional(),
+        label: z.string().optional(),
       }),
     })
-    .transform((v) => ({ type: 'stat' as const, value: v.stat.value, label: v.stat.label })),
+    .transform((v) => ({
+      type: 'stat' as const,
+      value: v.stat.value ?? '100%',
+      label: v.stat.label ?? 'Statistic',
+    })),
   z
     .object({
       columns: z.object({
         cols: z
           .array(
             z.object({
-              heading: z.string().max(80).optional(),
-              items: z.array(z.string().min(1).max(200)).min(1).max(6),
+              heading: z.string().optional(),
+              items: z.array(z.string()).optional().default([]),
             }),
           )
-          .min(2)
-          .max(3),
+          .optional()
+          .default([]),
       }),
     })
     .transform((v) => ({ type: 'columns' as const, cols: v.columns.cols })),
@@ -550,15 +632,33 @@ export const StudyGuideSchema = z
     })),
   }));
 
-export const FlashcardSchema = z.object({
-  front: z.string().min(5).max(200),
-  back: z.string().min(5).max(300),
-});
+export const FlashcardSchema = z
+  .object({
+    front: z.string().optional(),
+    question: z.string().optional(),
+    back: z.string().optional(),
+    answer: z.string().optional(),
+  })
+  .transform((c) => ({
+    front: (c.front ?? c.question ?? 'Question').trim(),
+    back: (c.back ?? c.answer ?? 'Answer').trim(),
+  }));
 
-export const FlashcardsSchema = z.object({
-  title: z.string().optional().default('Flashcards'),
-  cards: z.array(FlashcardSchema).min(5).max(30),
-});
+export const FlashcardsSchema = z
+  .union([
+    z.object({
+      title: z.string().optional().default('Flashcards'),
+      cards: z.array(FlashcardSchema).min(3).max(50),
+    }),
+    z.array(FlashcardSchema).min(3).max(50).transform((cards) => ({
+      title: 'Flashcards',
+      cards,
+    })),
+  ])
+  .transform((f) => ({
+    title: 'title' in f && f.title ? f.title : 'Flashcards',
+    cards: f.cards,
+  }));
 
 const PracticeQuestionSchema = z
   .object({
