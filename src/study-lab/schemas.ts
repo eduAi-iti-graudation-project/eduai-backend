@@ -674,45 +674,90 @@ export const FlashcardsSchema = z
 
 const PracticeQuestionSchema = z
   .object({
-    question: z.string(),
-    options: z.array(z.string()).length(4),
-    answerIndex: z.number().int().min(0).max(3).optional(),
-    answer_index: z.number().int().min(0).max(3).optional(),
-    explanation: z.string(),
+    question: z.string().optional(),
+    title: z.string().optional(),
+    prompt: z.string().optional(),
+    options: z.union([
+      z.array(z.string()).min(2).max(6),
+      z.array(z.object({ text: z.string() })).transform((arr) => arr.map((o) => o.text)),
+    ]),
+    answerIndex: z.number().int().optional(),
+    answer_index: z.number().int().optional(),
+    correctIndex: z.number().int().optional(),
+    correct_index: z.number().int().optional(),
+    explanation: z.string().optional(),
   })
-  .transform((q) => ({
-    question: q.question,
-    options: q.options,
-    answerIndex: q.answerIndex ?? q.answer_index ?? 0,
-    explanation: q.explanation,
-  }));
+  .transform((q) => {
+    const rawOptions = q.options.map((o) => o.trim());
+    // Normalize to 4 options if fewer or more provided
+    while (rawOptions.length < 4) {
+      rawOptions.push(`Option ${String.fromCharCode(65 + rawOptions.length)}`);
+    }
+    const finalOptions = rawOptions.slice(0, 4);
 
-export const PracticeSetSchema = z.object({
-  title: z.string().optional().default('Practice Questions'),
-  questions: z.array(PracticeQuestionSchema).min(4).max(10),
-});
+    const idx =
+      q.answerIndex ??
+      q.answer_index ??
+      q.correctIndex ??
+      q.correct_index ??
+      0;
+    const safeAnswerIndex = idx >= 0 && idx < 4 ? idx : 0;
+
+    return {
+      question: (q.question ?? q.title ?? q.prompt ?? 'Question').trim(),
+      options: finalOptions,
+      answerIndex: safeAnswerIndex,
+      explanation: (q.explanation ?? 'Review course materials for more details.').trim(),
+    };
+  });
+
+export const PracticeSetSchema = z
+  .union([
+    z.object({
+      title: z.string().optional().default('Practice Questions'),
+      questions: z.array(PracticeQuestionSchema).min(1).max(20),
+    }),
+    z.array(PracticeQuestionSchema).min(1).max(20).transform((questions) => ({
+      title: 'Practice Questions',
+      questions,
+    })),
+  ])
+  .transform((p) => ({
+    title: 'title' in p && p.title ? p.title : 'Practice Questions',
+    questions: p.questions,
+  }));
 
 const CheatSectionSchema = z
   .object({
     heading: z.string().optional(),
     title: z.string().optional(),
-    bullets: z.array(z.string()).min(2).max(8),
+    bullets: z.union([
+      z.array(z.string()),
+      z.string().transform((str) => str.split('\n').map((line) => line.replace(/^[-•*]\s*/, '').trim()).filter(Boolean)),
+    ]).optional().default([]),
+    items: z.array(z.string()).optional(),
   })
   .transform((s) => ({
-    heading: s.heading ?? s.title ?? '',
-    bullets: s.bullets,
+    heading: (s.heading ?? s.title ?? 'Key Notes').trim(),
+    bullets: (s.bullets.length > 0 ? s.bullets : (s.items ?? ['Review key material'])).map((b) => b.trim()),
   }));
 
 export const CheatSheetSchema = z
-  .object({
-    title: z.string().optional().default('Cheat Sheet'),
-    sections: z.array(CheatSectionSchema).min(3).max(12),
-  })
+  .union([
+    z.object({
+      title: z.string().optional().default('Cheat Sheet'),
+      sections: z.array(CheatSectionSchema).min(1).max(20),
+    }),
+    z.array(CheatSectionSchema).min(1).max(20).transform((sections) => ({
+      title: 'Cheat Sheet',
+      sections,
+    })),
+  ])
   .transform((c) => ({
-    title: c.title,
+    title: 'title' in c && c.title ? c.title : 'Cheat Sheet',
     sections: c.sections.map((s) => ({
-      heading: s.heading,
-      bullets: s.bullets,
+      heading: s.heading || 'Section',
+      bullets: s.bullets.length > 0 ? s.bullets : ['Review key material'],
     })),
   }));
 
