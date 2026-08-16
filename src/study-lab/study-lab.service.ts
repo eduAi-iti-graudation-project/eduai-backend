@@ -135,6 +135,46 @@ export class StudyLabService implements OnModuleInit {
     return { generationId: generation.id, status: 'PROCESSING' };
   }
 
+  async retry(
+    studentId: string,
+    generationId: string,
+  ): Promise<{ generationId: string; status: string }> {
+    const existing = await this.prisma.studyGeneration.findUnique({
+      where: { id: generationId },
+    });
+
+    if (!existing || existing.studentId !== studentId) {
+      throw new ApiError(
+        ErrorCode.NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'Study generation not found.',
+      );
+    }
+
+    if (existing.status === 'PROCESSING') {
+      return { generationId: existing.id, status: 'PROCESSING' };
+    }
+
+    this.checkRateLimit(studentId);
+
+    const updated = await this.prisma.studyGeneration.update({
+      where: { id: generationId },
+      data: {
+        status: 'PROCESSING',
+        stage: 'QUEUED',
+        error: null,
+      },
+    });
+
+    void this.processGeneration(updated.id).catch((err: unknown) => {
+      this.logger.error(
+        `[study-lab] background retry pipeline crashed for ${updated.id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
+
+    return { generationId: updated.id, status: 'PROCESSING' };
+  }
+
   async recommend(
     studentId: string,
     courseOfferingId: string,
