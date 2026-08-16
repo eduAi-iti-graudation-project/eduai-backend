@@ -25,6 +25,11 @@ import {
   GenerateAssignmentDto,
   GenerateGroundedResultDto,
   GenerateNotGroundedResultDto,
+  GenerateCourseAssignmentDto,
+  GenerateCourseGroundedResultDto,
+  GenerateCourseNotGroundedResultDto,
+  SaveGeneratedAssignmentsDto,
+  SavedGeneratedAssignmentDto,
 } from './dto';
 import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
@@ -64,6 +69,47 @@ export class AssignmentsController {
     @CurrentUser('organizationId') organizationId: string,
   ) {
     return this.assignmentsService.generateDraft(dto, organizationId);
+  }
+
+  @Roles('TEACHER')
+  @Post('generate-course')
+  @ApiExtraModels(
+    GenerateCourseGroundedResultDto,
+    GenerateCourseNotGroundedResultDto,
+  )
+  @ApiOperation({
+    summary:
+      'Draft an assignment and rubric from a course unit (or the entire course) for one or more sections',
+  })
+  @ApiBody({ type: GenerateCourseAssignmentDto })
+  @ApiOkResponse({
+    schema: {
+      oneOf: [
+        { $ref: getSchemaPath(GenerateCourseGroundedResultDto) },
+        { $ref: getSchemaPath(GenerateCourseNotGroundedResultDto) },
+      ],
+    },
+  })
+  generateCourse(
+    @Body() dto: GenerateCourseAssignmentDto,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.assignmentsService.generateCourseDraft(dto, organizationId);
+  }
+
+  @Roles('TEACHER')
+  @Post('save-generated')
+  @ApiOperation({
+    summary:
+      'Persist an approved AI-generated assignment + confirmed rubric to one or more sections',
+  })
+  @ApiBody({ type: SaveGeneratedAssignmentsDto })
+  @ApiOkResponse({ type: SavedGeneratedAssignmentDto, isArray: true })
+  saveGenerated(
+    @Body() dto: SaveGeneratedAssignmentsDto,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.assignmentsService.saveGenerated(dto, organizationId);
   }
 
   @Roles('TEACHER', 'STUDENT')
