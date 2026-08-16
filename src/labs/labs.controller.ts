@@ -1,14 +1,26 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Post,
+  Query,
+  Res,
+} from '@nestjs/common';
 import { ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
+import type { Response } from 'express';
 import type { User } from '@prisma/client';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { RequiresTier } from '../auth/requires-tier.decorator';
 import { Roles } from '../auth/roles.decorator';
+import { ApiError } from '../common/errors/api-error';
 import {
   GenerateLabDto,
-  GenerateLabResponseDto,
   LabDto,
+  RefineLabDto,
   RejectLabDto,
+  type LabGenerationEvent,
 } from './dto';
 import { LabsService } from './labs.service';
 
@@ -22,11 +34,115 @@ export class LabsController {
   @RequiresTier('PRO', 'ENTERPRISE')
   @ApiOperation({
     summary:
-      'Generate a lab simulation: grounds the topic in curriculum material, generates Matter.js code, and runs an AI security review before returning.',
+      'Generate a lab (SSE: step events then a done event). Default mode builds a template game spec via the lab architect agent; mode "advanced" runs free-form generation of any self-contained interactive game code, checked by deterministic plain-code guards.',
   })
-  @ApiOkResponse({ type: GenerateLabResponseDto })
-  generate(@Body() dto: GenerateLabDto, @CurrentUser() user: User) {
-    return this.labsService.generate(user, dto);
+  async generate(
+    @Body() dto: GenerateLabDto,
+    @CurrentUser() user: User,
+    @Res() res: Response,
+  ): Promise<void> {
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders?.();
+
+    const send = (event: LabGenerationEvent) => {
+      res.write(`data: ${JSON.stringify(event)}\n\n`);
+    };
+
+    try {
+      const result = await this.labsService.generate(user, dto, (step) =>
+        send({ type: 'step', step }),
+      );
+      send({ type: 'done', data: result });
+      res.end();
+    } catch (error) {
+      const message =
+        error instanceof ApiError
+          ? error.message
+          : 'Something went wrong. Please try again.';
+      send({ type: 'error', message });
+      res.end();
+    }
+  }
+
+  @Post(':id/refine')
+  @Roles('TEACHER')
+  @ApiOperation({
+    summary:
+      'Iteratively refine a lab (SSE: step events then a done event). Template labs get their game spec modified in place; legacy labs get their code modified and re-reviewed. Never regenerates from scratch.',
+  })
+  async refine(
+    @Param('id') id: string,
+    @Body() dto: RefineLabDto,
+    @CurrentUser() user: User,
+    @Res() res: Response,
+  ): Promise<void> {
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders?.();
+
+    const send = (event: LabGenerationEvent) => {
+      res.write(`data: ${JSON.stringify(event)}\n\n`);
+    };
+
+    try {
+      const result = await this.labsService.refine(
+        user,
+        id,
+        dto.instruction,
+        (step) => send({ type: 'step', step }),
+      );
+      send({ type: 'done', data: result });
+      res.end();
+    } catch (error) {
+      const message =
+        error instanceof ApiError
+          ? error.message
+          : 'Something went wrong. Please try again.';
+      send({ type: 'error', message });
+      res.end();
+    }
+  }
+
+  @Post(':id/regenerate')
+  @Roles('TEACHER')
+  @ApiOperation({
+    summary:
+      'Restart a lab from scratch (SSE: step events then a done event). Replaces the current content with a fresh generation grounded in the same unit — use this instead of refine when the lab is beyond repair.',
+  })
+  async regenerate(
+    @Param('id') id: string,
+    @CurrentUser() user: User,
+    @Res() res: Response,
+  ): Promise<void> {
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders?.();
+
+    const send = (event: LabGenerationEvent) => {
+      res.write(`data: ${JSON.stringify(event)}\n\n`);
+    };
+
+    try {
+      const result = await this.labsService.regenerate(user, id, (step) =>
+        send({ type: 'step', step }),
+      );
+      send({ type: 'done', data: result });
+      res.end();
+    } catch (error) {
+      const message =
+        error instanceof ApiError
+          ? error.message
+          : 'Something went wrong. Please try again.';
+      send({ type: 'error', message });
+      res.end();
+    }
   }
 
   @Post(':id/publish')
@@ -52,6 +168,17 @@ export class LabsController {
     @CurrentUser() user: User,
   ) {
     return this.labsService.reject(user, id, dto.notes);
+  }
+
+  @Delete(':id')
+  @Roles('TEACHER')
+  @ApiOperation({
+    summary:
+      'Hard-delete a lab the teacher owns. Any status — deleting a published lab removes student access. Removes the lab and its offering links.',
+  })
+  @ApiOkResponse({ type: LabDto })
+  delete(@Param('id') id: string, @CurrentUser() user: User) {
+    return this.labsService.delete(user, id);
   }
 
   @Get()

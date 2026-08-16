@@ -12,15 +12,32 @@ export const LabStatusSchema = z.enum([
 
 // ─── Requests ───────────────────────────────────────────
 const GenerateLabSchema = z.object({
-  courseOfferingId: z
+  courseOfferingIds: z
+    .array(z.string().uuid())
+    .min(1)
+    .max(30)
+    .describe(
+      'The course offerings (sections) the lab should apply to. All must belong to the same course; the first is the primary used to ground the prompt in curriculum material.',
+    ),
+  chapterId: z
     .string()
     .uuid()
-    .describe('The course offering the lab belongs to.'),
-  topic: z
+    .describe(
+      'The material unit (chapter) of the selected course the lab is grounded in and generated from.',
+    ),
+  prompt: z
     .string()
-    .min(1)
-    .max(200)
-    .describe('The topic the simulation should be grounded in.'),
+    .min(3)
+    .max(2000)
+    .describe(
+      'The teacher’s prompt describing the lab to generate for the selected unit. Also stored as the lab topic.',
+    ),
+  mode: z
+    .enum(['template', 'advanced'])
+    .optional()
+    .describe(
+      "'template' (default) generates a reliable interactive game from a fixed template via the lab architect agent. 'advanced' runs free-form generation of any self-contained interactive game code, checked by deterministic plain-code guards, then runs in the sandbox.",
+    ),
 });
 export class GenerateLabDto extends createZodDto(GenerateLabSchema) {}
 
@@ -33,6 +50,17 @@ const RejectLabSchema = z.object({
 });
 export class RejectLabDto extends createZodDto(RejectLabSchema) {}
 
+const RefineLabSchema = z.object({
+  instruction: z
+    .string()
+    .min(3)
+    .max(2000)
+    .describe(
+      'The teacher’s requested modification. The AI modifies the existing generated code in place — it never regenerates from scratch.',
+    ),
+});
+export class RefineLabDto extends createZodDto(RefineLabSchema) {}
+
 // ─── Responses ──────────────────────────────────────────
 const ReviewFlagsSchema = z.object({
   flags: z.array(z.string()),
@@ -42,8 +70,12 @@ const ReviewFlagsSchema = z.object({
 const LabSchema = z.object({
   id: z.string().uuid(),
   courseOfferingId: z.string().uuid(),
+  courseOfferingIds: z.array(z.string().uuid()),
   topic: z.string(),
+  chapterId: z.string().uuid().nullable(),
   status: LabStatusSchema,
+  template: z.string().nullable(),
+  gameSpec: z.unknown().nullable(),
   generatedCode: z.string().nullable(),
   reviewApproved: z.boolean().nullable(),
   reviewFlags: ReviewFlagsSchema.nullable(),
@@ -55,7 +87,7 @@ export class LabDto extends createZodDto(LabSchema) {}
 
 /**
  * POST /labs/generate response. `grounded: false` means no curriculum
- * material matched the topic and neither agent was invoked. When grounded,
+ * material matched the unit and neither agent was invoked. When grounded,
  * `labId` points at the created lab whose status is either
  * PENDING_TEACHER_REVIEW (approved) or AI_REVIEW_FAILED (with flags).
  */
@@ -70,3 +102,17 @@ const GenerateLabResponseSchema = z.object({
 export class GenerateLabResponseDto extends createZodDto(
   GenerateLabResponseSchema,
 ) {}
+
+// ─── AI pipeline events (SSE) ───────────────────────────
+export type LabAgentStep =
+  | 'thinking'
+  | 'search_curriculum'
+  | 'generate_code'
+  | 'design_game'
+  | 'load_lab'
+  | 'modify_lab';
+
+export type LabGenerationEvent =
+  | { type: 'step'; step: LabAgentStep }
+  | { type: 'done'; data: GenerateLabResponseDto }
+  | { type: 'error'; message: string };
