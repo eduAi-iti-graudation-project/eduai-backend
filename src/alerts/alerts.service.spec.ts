@@ -236,7 +236,7 @@ describe('AlertsService', () => {
   });
 
   describe('findByGuardian', () => {
-    it('returns active alerts for the guardian\'s children', async () => {
+    it("returns active alerts for the guardian's children", async () => {
       mockPrisma.alert.findMany.mockResolvedValue([
         {
           id: 'a1',

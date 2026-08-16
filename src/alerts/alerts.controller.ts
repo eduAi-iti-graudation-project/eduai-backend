@@ -30,7 +30,7 @@ export class AlertsController {
 
   @Get('guardian')
   @Roles('GUARDIAN')
-  @ApiOperation({ summary: 'List ACTIVE alerts for the guardian\'s children' })
+  @ApiOperation({ summary: "List ACTIVE alerts for the guardian's children" })
   @ApiOkResponse({ type: AlertDto, isArray: true })
   findByGuardian(@CurrentUser('id') guardianId: string) {
     return this.alertsService.findByGuardian(guardianId);
