@@ -585,4 +585,370 @@ describe('InsightsService', () => {
       ).rejects.toMatchObject({ code: 'INSIGHTS_STUDENT_NOT_FOUND' });
     });
   });
+
+  describe('section detail drill-down', () => {
+    const dayStr = (d: Date) => d.toISOString().slice(0, 10);
+
+    beforeEach(() => {
+      fixtures.submissions = [];
+      fixtures.gradingScores.pending = [];
+      fixtures.gradingScores.confirmedTrend = [];
+      fixtures.gradingScores.confirmedAll = [];
+      fixtures.alerts.created = [];
+      fixtures.alerts.resolved = [];
+      fixtures.alerts.all = [];
+      fixtures.attendance = [];
+      fixtures.interactions = [];
+      fixtures.usersGrowth = [];
+      fixtures.teachers = [];
+      fixtures.reports = [];
+      fixtures.targetStudent = { id: 's1', name: 'S1', role: 'STUDENT' };
+      fixtures.guardianMatch = { id: 'g1' };
+      fixtures.teacherClass = { id: 'c1' };
+    });
+
+    it('teacher: filters submissions_volume to the clicked bucket', async () => {
+      const inBucket = current();
+      fixtures.submissions = [
+        {
+          id: 'sub1',
+          createdAt: inBucket,
+          student: { id: 's1', name: 'S1' },
+          assignment: {
+            title: 'HW1',
+            offering: { course: { name: 'Math' } },
+          },
+        },
+        {
+          id: 'sub2',
+          createdAt: new Date(current() - 30 * DAY),
+          student: { id: 's2', name: 'S2' },
+          assignment: {
+            title: 'HW2',
+            offering: { course: { name: 'Math' } },
+          },
+        },
+      ];
+
+      const detail = await service.getSectionDetail(
+        teacherUser,
+        'week',
+        'submissions_volume',
+        dayStr(inBucket),
+      );
+
+      expect(detail.unit).toBe('count');
+      expect(detail.bucket).toBe(dayStr(inBucket));
+      expect(detail.totalRecords).toBe(1);
+      expect(detail.value).toBe(1);
+      expect(detail.records[0]).toMatchObject({
+        label: 'S1',
+        ref: { kind: 'submission', id: 'sub1' },
+      });
+    });
+
+    it('teacher: a non-date bucket yields an empty trend detail', async () => {
+      fixtures.submissions = [
+        {
+          id: 'sub1',
+          createdAt: current(),
+          student: { name: 'S1' },
+          assignment: null,
+        },
+      ];
+
+      const detail = await service.getSectionDetail(
+        teacherUser,
+        'week',
+        'submissions_volume',
+        'garbage',
+      );
+
+      expect(detail.totalRecords).toBe(0);
+      expect(detail.records).toEqual([]);
+    });
+
+    it('teacher: groups criterion_average by criterion and percents records', async () => {
+      fixtures.gradingScores.confirmedAll = [
+        {
+          pointsAwarded: 8,
+          criteria: { maxPoints: 10, description: 'Clarity' },
+          submission: {
+            id: 'sub1',
+            createdAt: current(),
+            student: { id: 's1', name: 'S1' },
+            assignment: {
+              title: 'HW1',
+              offering: { course: { name: 'Math' }, section: { name: 'Math' } },
+            },
+          },
+        },
+        {
+          pointsAwarded: 4,
+          criteria: { maxPoints: 10, description: 'Clarity' },
+          submission: {
+            id: 'sub2',
+            createdAt: current(),
+            student: { id: 's2', name: 'S2' },
+            assignment: {
+              title: 'HW2',
+              offering: { course: { name: 'Math' }, section: { name: 'Math' } },
+            },
+          },
+        },
+      ];
+
+      const detail = await service.getSectionDetail(
+        teacherUser,
+        'week',
+        'criterion_average',
+        'Clarity',
+      );
+
+      expect(detail.unit).toBe('percent');
+      expect(detail.totalRecords).toBe(2);
+      expect(detail.records.map((r) => r.value)).toEqual([80, 40]);
+      expect(detail.records[0].ref).toEqual({ kind: 'student', id: 's1' });
+    });
+
+    it('teacher: unknown section key returns 404', async () => {
+      await expect(
+        service.getSectionDetail(teacherUser, 'week', 'nope', 'x'),
+      ).rejects.toMatchObject({ code: 'INSIGHTS_SECTION_NOT_FOUND' });
+    });
+
+    it('student: grade_trend returns per-assignment records in the bucket', async () => {
+      const when = current();
+      fixtures.gradingScores.confirmedAll = [
+        {
+          pointsAwarded: 9,
+          criteria: { maxPoints: 10, description: 'Clarity' },
+          submission: {
+            id: 'sub1',
+            createdAt: when,
+            assignment: {
+              title: 'HW1',
+              offering: { course: { name: 'Math' } },
+            },
+          },
+        },
+      ];
+
+      const detail = await service.getSectionDetail(
+        studentUser,
+        'week',
+        'grade_trend',
+        dayStr(when),
+      );
+
+      expect(detail.records[0]).toMatchObject({
+        label: 'HW1',
+        meta: 'Math',
+        value: 90,
+      });
+      expect(detail.totalRecords).toBe(1);
+    });
+
+    it('student: help_action_split lists the questions behind a bucket', async () => {
+      fixtures.interactions = [
+        { action: 'HINT', question: 'help me', createdAt: current() },
+        { action: 'HINT', question: '', createdAt: current() },
+      ];
+
+      const detail = await service.getSectionDetail(
+        studentUser,
+        'week',
+        'help_action_split',
+        'HINT',
+      );
+
+      expect(detail.records.map((r) => r.label)).toEqual(['help me', 'HINT']);
+    });
+
+    it('guardian: child_<ward>_grades returns the ward assignment records', async () => {
+      const when = current();
+      fixtures.targetStudent = { name: 'Ward One' };
+      fixtures.gradingScores.confirmedAll = [
+        {
+          pointsAwarded: 7,
+          criteria: { maxPoints: 10, description: 'Clarity' },
+          submission: {
+            id: 'sub1',
+            createdAt: when,
+            assignment: {
+              title: 'HW1',
+              offering: { course: { name: 'Science' } },
+            },
+          },
+        },
+      ];
+
+      const detail = await service.getSectionDetail(
+        guardianUser,
+        'week',
+        'child_11111111-1111-1111-1111-111111111111_grades',
+        dayStr(when),
+      );
+
+      expect(detail.title).toBe('Ward One grades over time');
+      expect(detail.records[0]).toMatchObject({
+        label: 'HW1',
+        meta: 'Science',
+        value: 70,
+      });
+    });
+
+    it('guardian: rejects a ward they are not linked to', async () => {
+      fixtures.guardianMatch = null;
+      await expect(
+        service.getSectionDetail(
+          guardianUser,
+          'week',
+          'child_22222222-2222-2222-2222-222222222222_grades',
+          'x',
+        ),
+      ).rejects.toMatchObject({ code: 'INSIGHTS_FORBIDDEN' });
+    });
+
+    it('admin: alert_status_split returns the alerts behind a status', async () => {
+      fixtures.alerts.all = [
+        {
+          id: 'al1',
+          status: 'ACTIVE',
+          type: 'FAILING',
+          createdAt: current(),
+          student: { id: 's1', name: 'S1' },
+        },
+        {
+          id: 'al2',
+          status: 'RESOLVED',
+          type: 'ABSENT',
+          createdAt: current(),
+          student: { id: 's2', name: 'S2' },
+        },
+      ];
+
+      const detail = await service.getSectionDetail(
+        adminUser,
+        'week',
+        'alert_status_split',
+        'ACTIVE',
+      );
+
+      expect(detail.totalRecords).toBe(1);
+      expect(detail.records[0].ref).toEqual({ kind: 'alert', id: 'al1' });
+    });
+
+    it('drill-down: student can view their own detail', async () => {
+      fixtures.gradingScores.confirmedAll = [
+        {
+          pointsAwarded: 9,
+          criteria: { maxPoints: 10, description: 'Clarity' },
+          submission: {
+            id: 'sub1',
+            createdAt: current(),
+            assignment: {
+              title: 'HW1',
+              offering: { course: { name: 'Math' } },
+            },
+          },
+        },
+      ];
+
+      const detail = await service.getStudentSectionDetail(
+        studentUser,
+        's1',
+        'week',
+        'grade_trend',
+        dayStr(current()),
+      );
+
+      expect(detail.records[0]).toMatchObject({ label: 'HW1', value: 90 });
+    });
+
+    it('drill-down: a student cannot view someone else', async () => {
+      await expect(
+        service.getStudentSectionDetail(
+          studentUser,
+          's2',
+          'week',
+          'grade_trend',
+          'x',
+        ),
+      ).rejects.toMatchObject({ code: 'INSIGHTS_FORBIDDEN' });
+    });
+
+    it('drill-down: forbids a teacher who does not teach the student', async () => {
+      fixtures.teacherClass = null;
+      await expect(
+        service.getStudentSectionDetail(
+          teacherUser,
+          's1',
+          'week',
+          'grade_trend',
+          'x',
+        ),
+      ).rejects.toMatchObject({ code: 'INSIGHTS_FORBIDDEN' });
+    });
+
+    it('drill-down: allows a teacher whose class the student is in', async () => {
+      fixtures.gradingScores.confirmedAll = [
+        {
+          pointsAwarded: 6,
+          criteria: { maxPoints: 10, description: 'Clarity' },
+          submission: {
+            id: 'sub1',
+            createdAt: current(),
+            assignment: { title: 'HW1' },
+          },
+        },
+      ];
+
+      const detail = await service.getStudentSectionDetail(
+        teacherUser,
+        's1',
+        'week',
+        'grade_trend',
+        dayStr(current()),
+      );
+
+      expect(detail.records).toHaveLength(1);
+    });
+
+    it('drill-down: admin in another organization is forbidden', async () => {
+      fixtures.targetStudent = {
+        id: 's1',
+        role: 'STUDENT',
+        organizationId: 'org-other',
+      };
+      const otherAdmin = {
+        id: 'a1',
+        role: 'ADMIN',
+        organizationId: 'org-1',
+      } as User;
+
+      await expect(
+        service.getStudentSectionDetail(
+          otherAdmin,
+          's1',
+          'week',
+          'grade_trend',
+          'x',
+        ),
+      ).rejects.toMatchObject({ code: 'INSIGHTS_FORBIDDEN' });
+    });
+
+    it('drill-down: returns 404 for a missing student', async () => {
+      fixtures.targetStudent = null;
+      await expect(
+        service.getStudentSectionDetail(
+          adminUser,
+          'missing',
+          'week',
+          'grade_trend',
+          'x',
+        ),
+      ).rejects.toMatchObject({ code: 'INSIGHTS_STUDENT_NOT_FOUND' });
+    });
+  });
 });

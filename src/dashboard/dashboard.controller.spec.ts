@@ -14,6 +14,8 @@ describe('DashboardController', () => {
   const mockInsightsService = {
     getInsights: jest.fn(),
     getStudentInsights: jest.fn(),
+    getSectionDetail: jest.fn(),
+    getStudentSectionDetail: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -109,6 +111,96 @@ describe('DashboardController', () => {
         expect.objectContaining({ code: 'VALIDATION_FAILED' }) as Error,
       );
       expect(mockInsightsService.getStudentInsights).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('GET /dashboard/insights/sections/:sectionKey/detail', () => {
+    it('defaults the interval to week and passes the bucket', async () => {
+      const user = { id: 't1', role: 'TEACHER' } as User;
+      const expected = { sectionKey: 'x', records: [] };
+
+      mockInsightsService.getSectionDetail.mockResolvedValue(expected);
+
+      const result = await controller.getSectionDetail(
+        user,
+        'submissions_volume',
+        undefined,
+        '2026-08-10',
+      );
+
+      expect(mockInsightsService.getSectionDetail).toHaveBeenCalledWith(
+        user,
+        'week',
+        'submissions_volume',
+        '2026-08-10',
+      );
+      expect(result).toEqual(expected);
+    });
+
+    it('rejects an invalid interval with 400', () => {
+      const user = { id: 't1', role: 'TEACHER' } as User;
+
+      expect(() =>
+        controller.getSectionDetail(user, 'submissions_volume', 'year', 'x'),
+      ).toThrow(
+        expect.objectContaining({ code: 'VALIDATION_FAILED' }) as Error,
+      );
+      expect(mockInsightsService.getSectionDetail).not.toHaveBeenCalled();
+    });
+
+    it('rejects a missing bucket with 400', () => {
+      const user = { id: 't1', role: 'TEACHER' } as User;
+
+      expect(() =>
+        controller.getSectionDetail(user, 'submissions_volume', 'week'),
+      ).toThrow(
+        expect.objectContaining({ code: 'VALIDATION_FAILED' }) as Error,
+      );
+    });
+  });
+
+  describe('GET /dashboard/insights/students/:id/sections/:sectionKey/detail', () => {
+    it('delegates with student id, interval and bucket', async () => {
+      const user = { id: 't1', role: 'TEACHER' } as User;
+      const expected = { sectionKey: 'grade_trend', records: [] };
+
+      mockInsightsService.getStudentSectionDetail.mockResolvedValue(expected);
+
+      const result = await controller.getStudentSectionDetail(
+        user,
+        's1',
+        'grade_trend',
+        'month',
+        '2026-08-01',
+      );
+
+      expect(mockInsightsService.getStudentSectionDetail).toHaveBeenCalledWith(
+        user,
+        's1',
+        'month',
+        'grade_trend',
+        '2026-08-01',
+      );
+      expect(result).toEqual(expected);
+    });
+
+    it('rejects an invalid interval with 400', () => {
+      const user = { id: 't1', role: 'TEACHER' } as User;
+
+      expect(() =>
+        controller.getStudentSectionDetail(
+          user,
+          's1',
+          'grade_trend',
+          'daily',
+          '2026-08-01',
+        ),
+      ).toThrow(
+        expect.objectContaining({ code: 'VALIDATION_FAILED' }) as Error,
+      );
+      expect(
+        mockInsightsService.getStudentSectionDetail,
+      ).not.toHaveBeenCalled();
     });
   });
 });

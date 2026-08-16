@@ -14,7 +14,12 @@ import { AllowGuardianless } from '../auth/allow-guardianless.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { RequiresTier } from '../auth/requires-tier.decorator';
 import type { User } from '@prisma/client';
-import { InsightsQuerySchema, InsightsResponseDto } from './dto';
+import {
+  InsightsQuerySchema,
+  InsightsResponseDto,
+  SectionDetailQuerySchema,
+  SectionDetailDto,
+} from './dto';
 
 @ApiTags('dashboard')
 @Controller('dashboard')
@@ -93,6 +98,95 @@ export class DashboardController {
       user,
       id,
       parsed.data.interval,
+    );
+  }
+
+  @Get('insights/sections/:sectionKey/detail')
+  @Roles('TEACHER', 'STUDENT', 'GUARDIAN', 'ADMIN')
+  @AllowGuardianless()
+  @RequiresTier('ENTERPRISE')
+  @ApiOperation({ summary: 'Underlying records for one insight chart point' })
+  @ApiQuery({
+    name: 'interval',
+    required: false,
+    enum: ['week', 'month'],
+    description: 'Bucket interval — defaults to week',
+  })
+  @ApiQuery({
+    name: 'bucket',
+    required: true,
+    description: 'The clicked chart point label (bucket date or category)',
+  })
+  @ApiOkResponse({
+    type: SectionDetailDto,
+    description:
+      'Records behind a single chart point (or category) for the caller role',
+  })
+  getSectionDetail(
+    @CurrentUser() user: User,
+    @Param('sectionKey') sectionKey: string,
+    @Query('interval') interval?: string,
+    @Query('bucket') bucket?: string,
+  ) {
+    const parsed = SectionDetailQuerySchema.safeParse({ interval, bucket });
+    if (!parsed.success) {
+      throw new ApiError(
+        ErrorCode.VALIDATION_FAILED,
+        HttpStatus.BAD_REQUEST,
+        'Provide a valid interval and a non-empty bucket label.',
+      );
+    }
+    return this.insightsService.getSectionDetail(
+      user,
+      parsed.data.interval,
+      sectionKey,
+      parsed.data.bucket,
+    );
+  }
+
+  @Get('insights/students/:id/sections/:sectionKey/detail')
+  @Roles('TEACHER', 'STUDENT', 'GUARDIAN', 'ADMIN')
+  @RequiresTier('ENTERPRISE')
+  @ApiOperation({
+    summary: 'Underlying records for one student insight chart point',
+  })
+  @ApiQuery({
+    name: 'interval',
+    required: false,
+    enum: ['week', 'month'],
+    description: 'Bucket interval — defaults to week',
+  })
+  @ApiQuery({
+    name: 'bucket',
+    required: true,
+    description: 'The clicked chart point label (bucket date or category)',
+  })
+  @ApiOkResponse({
+    type: SectionDetailDto,
+    description:
+      'Records behind a single student insight chart point; 403 when the caller has no access',
+  })
+  getStudentSectionDetail(
+    @CurrentUser() user: User,
+    @Param('id') id: string,
+    @Param('sectionKey') sectionKey: string,
+    @Query('interval') interval?: string,
+    @Query('bucket') bucket?: string,
+  ) {
+    const parsed = SectionDetailQuerySchema.safeParse({ interval, bucket });
+    if (!parsed.success) {
+      throw new ApiError(
+        ErrorCode.VALIDATION_FAILED,
+        HttpStatus.BAD_REQUEST,
+        'Provide a valid interval and a non-empty bucket label.',
+      );
+    }
+    return this.insightsService.getStudentSectionDetail(
+      user,
+      id,
+      parsed.data.interval,
+      sectionKey,
+      parsed.data.bucket,
     );
   }
 }
