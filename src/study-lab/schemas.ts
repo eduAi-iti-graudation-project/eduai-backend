@@ -610,24 +610,36 @@ const GuideSectionSchema = z
   .object({
     heading: z.string().optional(),
     title: z.string().optional(),
-    content: z.string().min(40),
+    content: z.union([
+      z.string(),
+      z.array(z.string()).transform((a) => a.join('\n\n')),
+    ]).optional(),
+    text: z.string().optional(),
+    body: z.string().optional(),
   })
   .transform((s) => ({
-    heading: s.heading ?? s.title ?? '',
-    content: s.content,
+    heading: (s.heading ?? s.title ?? 'Overview').trim(),
+    content: (s.content ?? s.text ?? s.body ?? '').trim(),
   }));
 
 export const StudyGuideSchema = z
-  .object({
-    title: z.string().optional().default('Study Guide'),
-    summary: z.string(),
-    sections: z.array(GuideSectionSchema).min(3).max(10),
-  })
+  .union([
+    z.object({
+      title: z.string().optional().default('Study Guide'),
+      summary: z.string().optional().default(''),
+      sections: z.array(GuideSectionSchema).min(1).max(15),
+    }),
+    z.array(GuideSectionSchema).min(1).max(15).transform((sections) => ({
+      title: 'Study Guide',
+      summary: '',
+      sections,
+    })),
+  ])
   .transform((g) => ({
-    title: g.title,
-    summary: g.summary,
+    title: 'title' in g && g.title ? g.title : 'Study Guide',
+    summary: 'summary' in g && g.summary ? g.summary : '',
     sections: g.sections.map((s) => ({
-      heading: s.heading,
+      heading: s.heading || 'Section',
       content: s.content,
     })),
   }));
