@@ -125,6 +125,16 @@ eduai-backend/
 │   ├── grading/           # Grading Agent — retrieval + LLM call + citation
 │   ├── analysis/          # Analysis Agent — threshold rule + explanation LLM call
 │   ├── assistant/         # Assistant Agent — tool-calling loop
+│   ├── ai-chat/           # Shared ChatGPT-style conversation persistence
+│   ├── quizzes/           # Quiz Engine — generation agent, CRUD, anti-cheat, grading
+│   ├── feedback-writer/   # Feedback Writer — per-criterion feedback
+│   ├── homework-helper/   # Homework Helper — student tool-loop, never the answer
+│   ├── communication-agent/ # Communication Agent — post-confirm diagnosis + alerts
+│   ├── guardian-chat/     # Guardian copilot — ward-data Q&A
+│   ├── struggle-signals/  # Meeting-transcript struggle signals (Mastra extractor)
+│   ├── labs/              # Lab Architect + Lab Generator (Mastra, template + code)
+│   ├── study-lab/         # Study Lab — grounded generators (podcast, slides, notes)
+│   ├── mastra/            # Global Mastra instance
 │   ├── alerts/
 │   ├── materials/         # ClassMaterial, MaterialChunk, curriculum chunking
 │   │
@@ -139,7 +149,8 @@ eduai-backend/
 │   └── main.ts             # Swagger/OpenAPI setup lives here
 │
 ├── docs/
-│   └── erd.png             # See Entity Relationship Diagram above
+│   ├── erd.png             # See Entity Relationship Diagram above
+│   └── agents.md           # Complete AI agent inventory (see Agent Architecture)
 │
 ├── .claude/skills/
 │   ├── nestjs-conventions/
@@ -222,14 +233,24 @@ the latter, so this table is a map of what exists, not the source of truth.
 
 ## 🤖 Agent Architecture
 
-The honest version — see `specs.md` §7 for the full rationale:
+The honest version — see `specs.md` §7 for the full rationale and
+[`docs/agents.md`](docs/agents.md) for the complete, always-current inventory.
 
 | Piece | What it actually is |
 |---|---|
 | Grading Agent | One LLM call, retrieval feeds it, no tool use |
 | Analysis Agent | Plain code decides the flag; LLM only writes the explanation |
-| Assistant Agent | Real tool-calling loop (`search_curriculum`, `create_quiz`), max 5 iterations |
+| Assistant Agent | Real tool-calling loop (`search_curriculum`, `create_quiz`, `draft_rubric`, `summarize_lesson`, `plan_lesson`, `class_analytics`, `draft_assignment`), max 5 iterations |
+| Feedback Writer | One LLM call per criterion (write-feedback tool); saves to `GradingScore.aiFeedback`; fires after `confirmAll` + backfill endpoint |
+| Homework Helper | Multi-tool agent (`search_curriculum`, `lookup_assignment`, `search_web`, `log_interaction`); student-facing, never gives away the answer |
+| Communication Agent | Plain-code verdict + LLM explanations after `confirmAll`; creates alerts, notifies teacher/guardian/admin, auto-triggers reports + Study Lab practice |
+| Quiz Generation | Tool loop (`search_curriculum`, `generate_questions`, `review_questions`, `save_quiz`) |
+| Guardian Chat | Guardian copilot grounded in ward data (grades/attendance/quizzes/fees/alerts) |
+| Struggle Signal Extractor | Real executed Mastra agent over meeting transcripts; auto-dispatches quiz + re-explanation (PII-tokenized) |
+| Lab Architect / Lab Generator | Real executed Mastra agents — template game specs and sandbox-safe game code, grounded in curriculum |
+| Study Lab generators | Grounded structured LLM generators: podcast, slides (pptx), study guide, flashcards, practice set, cheat sheet |
 | Orchestrator | Not an LLM at all — deterministic status-transition logic |
+| Criterion Detector / Notification Dispatcher | Plain code, never AI — same rule as Analysis |
 
 RAG has two independent retrieval paths: rubric criteria retrieval (grading) and curriculum chunk retrieval (the Assistant). Both use pgvector cosine similarity. Full design in `specs.md` §6.
 
@@ -237,8 +258,8 @@ RAG has two independent retrieval paths: rubric criteria retrieval (grading) and
 
 ## 🗄️ Database & Migrations
 
-- Embeddings: **OpenAI, 1536 dimensions** — locked decision, changing providers means a schema migration, not a config change.
-- Vector columns are `Unsupported("vector(1536)")` — Prisma creates the column but **not** a similarity index. Add the HNSW index as a raw SQL migration:
+- Embeddings: **HuggingFace, 1024 dimensions** (default model `mixedbread-ai/mxbai-embed-large-v1`, override with `HF_EMBED_MODEL`) — served through `common/ai/ProviderService`. Locked decision, changing providers means a schema migration, not a config change.
+- Vector columns are `Unsupported("vector(1024)")` — Prisma creates the column but **not** a similarity index. Add the HNSW index as a raw SQL migration:
   ```sql
   CREATE INDEX ON "RubricCriteria" USING hnsw (embedding vector_cosine_ops);
   CREATE INDEX ON "SubmissionChunk" USING hnsw (embedding vector_cosine_ops);

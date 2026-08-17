@@ -180,22 +180,29 @@ CREATE INDEX ON material_chunks USING hnsw (embedding vector_cosine_ops);
 
 ## 7. Agent architecture — the honest version
 
+> Detailed, always-current reference: `docs/agents.md`.
+
 | Piece | What it actually is |
-|---|---|---|
+|---|---|
 | Grading Agent | One LLM call, retrieval feeds it, no tool use |
 | Analysis Agent | Plain code decides the flag; LLM only writes the explanation |
-| Assistant Agent | Real tool-calling loop (search_curriculum, create_quiz), max 5 iterations |
+| Assistant Agent | Real tool-calling loop (search_curriculum, create_quiz, draft_rubric, summarize_lesson, plan_lesson, class_analytics, draft_assignment), max 5 iterations; ChatGPT-style persistence via ai-chat |
 | Orchestrator | Not an LLM at all — deterministic status-transition logic |
-| Criterion Detector | Plain code decides the flag (50% × 2 consecutive); LLM generates three role-specific reports |
+| Criterion Detector | Plain code decides the flag (weak-criterion stats on confirmed scores); LLM only explains |
 | Notification Dispatcher | Not AI — plain code that calls NotificationService after a report is created |
-| Feedback Writer | Mastra agent with one tool per criterion; calls LlmService, saves to GradingScore.aiFeedback; fires after confirmAll + via backfill endpoint |
-| Homework Helper | Mastra multi-tool agent (search_curriculum, lookup_assignment, log_interaction); student-facing POST endpoint |
-| Communication Agent | Mastra agent (student_profile, class_context, create_alert, log_analysis, notify_recipient); fires after confirmAll, creates alerts |
-| Quiz Generation | Mastra agent (generate_questions, review_questions, save_quiz, search_curriculum); teachers generate quizzes from curriculum |
+| Feedback Writer | One LLM call per criterion via the write-feedback tool; saves to GradingScore.aiFeedback; fires after confirmAll + via backfill endpoint |
+| Homework Helper | Multi-tool agent (search_curriculum, lookup_assignment, search_web, log_interaction); student-facing POST endpoint; never gives away the answer |
+| Communication Agent | Diagnoses students/classes after confirmAll (plain-code verdict + LLM explanations), creates alerts + StudentAnalysis, notifies teacher/guardian/admin, auto-triggers reports and Study Lab practice recommendations |
+| Quiz Generation | Tool loop (search_curriculum, generate_questions, review_questions, save_quiz); teachers generate quizzes from curriculum |
+| Guardian Chat | Guardian copilot answering strictly from ward data (grades/attendance/quizzes/fees/alerts); ai-chat persistence |
+| Struggle Signal Extractor | Real executed Mastra agent over meeting transcripts; per-student confusion signals, PII-tokenized; auto-dispatches quiz + re-explanation |
+| Lab Architect | Real executed Mastra agent; picks a fixed game template + fills spec from curriculum (no AI code) |
+| Lab Generator | Real executed Mastra agent; writes self-contained sandbox-safe HTML5 game code (advanced mode), checked by deterministic plain-code guards |
+| Study Lab generators | Grounded structured LLM generators (podcast, slides, study guide, flashcards, practice set, cheat sheet) |
 
-Do not add tool-calling or autonomy to Grading or Analysis "to make it more
-agentic." Their determinism is a deliberate correctness choice, not a
-missing feature.
+Do not add tool-calling or autonomy to Grading, Analysis, or the
+Criterion/Struggle triggers "to make it more agentic." Their determinism is a
+deliberate correctness choice, not a missing feature.
 
 ## 8. Testing philosophy
 
