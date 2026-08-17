@@ -1097,7 +1097,9 @@ model QuizAttempt {
   totalScore  Int?
   status      AttemptStatus @default(IN_PROGRESS)
   violations  Json          @default("[]")
-
+  // Set when the QUIZ_VIOLATION alert + three-tier report have been produced
+  // for this attempt — guarantees one report per attempt.
+  violationReportedAt DateTime?
   quiz    Quiz         @relation(fields: [quizId], references: [id], onDelete: Cascade)
   student User         @relation(fields: [studentId], references: [id], onDelete: Cascade)
   answers QuizAnswer[]

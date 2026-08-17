@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { QuizzesService } from './quizzes.service';
 import { QuizzesGradingService } from './quizzes-grading.service';
+import { QuizViolationsService } from './quiz-violations.service';
 import { QuizGenerationAgent } from './agents/quiz-generation.agent';
 import { MaterialsService } from '../materials/materials.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -52,6 +53,11 @@ const mockMaterialsService = {
   listChaptersWithMaterial: jest.fn(),
 };
 
+const mockQuizViolationsService = {
+  report: jest.fn(),
+  runSweep: jest.fn(),
+};
+
 describe('QuizzesService', () => {
   let service: QuizzesService;
 
@@ -65,6 +71,7 @@ describe('QuizzesService', () => {
         { provide: QuizzesGradingService, useValue: mockGradingService },
         { provide: QuizGenerationAgent, useValue: mockGenerationAgent },
         { provide: MaterialsService, useValue: mockMaterialsService },
+        { provide: QuizViolationsService, useValue: mockQuizViolationsService },
       ],
     }).compile();
 
@@ -789,6 +796,56 @@ describe('QuizzesService', () => {
       { text: '5', isCorrect: false },
       { text: '6', isCorrect: false },
     ]);
+  });
+
+  it('should report violations when a submitted attempt recorded any', async () => {
+    mockPrisma.quizAttempt.findUnique
+      .mockResolvedValueOnce({
+        id: 'attempt-1',
+        quizId: 'quiz-1',
+        studentId: 'student-1',
+        status: 'IN_PROGRESS',
+        violations: [
+          { type: 'TAB_SWITCH', occurredAt: '2026-08-17T10:00:00Z' },
+        ],
+        answers: [],
+        quiz: { questions: [] },
+      })
+      .mockResolvedValueOnce({
+        id: 'attempt-1',
+        status: 'COMPLETED',
+        answers: [],
+      });
+
+    mockPrisma.quizAttempt.update.mockResolvedValue({ id: 'attempt-1' });
+
+    await service.submitAttempt('quiz-1', 'student-1', []);
+
+    expect(mockQuizViolationsService.report).toHaveBeenCalledWith('attempt-1');
+  });
+
+  it('should not report violations for a clean attempt', async () => {
+    mockPrisma.quizAttempt.findUnique
+      .mockResolvedValueOnce({
+        id: 'attempt-1',
+        quizId: 'quiz-1',
+        studentId: 'student-1',
+        status: 'IN_PROGRESS',
+        violations: [],
+        answers: [],
+        quiz: { questions: [] },
+      })
+      .mockResolvedValueOnce({
+        id: 'attempt-1',
+        status: 'COMPLETED',
+        answers: [],
+      });
+
+    mockPrisma.quizAttempt.update.mockResolvedValue({ id: 'attempt-1' });
+
+    await service.submitAttempt('quiz-1', 'student-1', []);
+
+    expect(mockQuizViolationsService.report).not.toHaveBeenCalled();
   });
 
   it('should grade essay answers via LLM and leave unconfirmed', async () => {

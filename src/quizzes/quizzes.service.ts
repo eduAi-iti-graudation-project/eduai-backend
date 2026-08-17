@@ -2,6 +2,7 @@ import { Injectable, Logger, HttpStatus } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { QuizzesGradingService } from './quizzes-grading.service';
+import { QuizViolationsService } from './quiz-violations.service';
 import { QuizGenerationAgent } from './agents/quiz-generation.agent';
 import { MaterialsService } from '../materials/materials.service';
 import { type QuizAgentStep } from './dto';
@@ -75,6 +76,7 @@ export class QuizzesService {
     private readonly gradingService: QuizzesGradingService,
     private readonly generationAgent: QuizGenerationAgent,
     private readonly materialsService: MaterialsService,
+    private readonly quizViolationsService: QuizViolationsService,
   ) {}
 
   // ─── AI Generation ────────────────────────────────────
@@ -739,6 +741,10 @@ export class QuizzesService {
         answers: { create: answerRecords },
       },
     });
+
+    if (toViolations(attempt.violations).length > 0) {
+      await this.quizViolationsService.report(attempt.id);
+    }
 
     const updated = await this.prisma.quizAttempt.findUnique({
       where: { id: attempt.id },
