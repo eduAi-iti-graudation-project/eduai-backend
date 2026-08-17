@@ -34,7 +34,10 @@ const RATE_LIMIT_MAX = 10;
 export class StudyLabService implements OnModuleInit {
   private readonly logger = new Logger(StudyLabService.name);
   private readonly bucket: string;
-  private readonly rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+  private readonly rateLimitMap = new Map<
+    string,
+    { count: number; resetAt: number }
+  >();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -49,7 +52,10 @@ export class StudyLabService implements OnModuleInit {
     const now = Date.now();
     const record = this.rateLimitMap.get(studentId);
     if (!record || record.resetAt < now) {
-      this.rateLimitMap.set(studentId, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+      this.rateLimitMap.set(studentId, {
+        count: 1,
+        resetAt: now + RATE_LIMIT_WINDOW_MS,
+      });
       return;
     }
     if (record.count >= RATE_LIMIT_MAX) {
@@ -344,7 +350,11 @@ export class StudyLabService implements OnModuleInit {
           generation.topic,
           generation.preset ?? 'OVERVIEW',
         );
-        const audio = await this.buildPodcastAudio(generationId, generation.courseOfferingId, script);
+        const audio = await this.buildPodcastAudio(
+          generationId,
+          generation.courseOfferingId,
+          script,
+        );
         return {
           payload: { ...script, audioAvailable: audio?.url ? true : false },
           audioUrl: audio?.url,

@@ -263,25 +263,13 @@ export function resolveTheme(theme: DeckTheme): Required<DeckTheme> & {
   return base;
 }
 
-const textish = (max: number) =>
-  z
-    .object({
-      text: z.string().min(1).max(max).optional(),
-      content: z.string().min(1).max(max).optional(),
-    })
-    .transform((v): { text: string } => ({
-      text: (v.text ?? v.content ?? '').trim(),
-    }))
-    .refine((v) => v.text.length > 0, {
-      message: 'text (or content) is required',
-      path: ['text'],
-    });
-
 const textContent = (max: number) =>
   z.union([
     z.string().min(1).max(max),
     z.array(z.string()).transform((arr) => arr.join(' ')),
-    z.object({ text: z.string().optional(), content: z.string().optional() }).transform((v) => v.text ?? v.content ?? ''),
+    z
+      .object({ text: z.string().optional(), content: z.string().optional() })
+      .transform((v) => v.text ?? v.content ?? ''),
   ]);
 
 export const SlideBlockSchema = z.union([
@@ -403,7 +391,10 @@ export const SlideBlockSchema = z.union([
       heading: z.union([
         z.string().min(1).max(200),
         z.array(z.string()).transform((a) => a.join(' ')),
-        z.object({ text: z.string(), level: z.enum(['h1', 'h2', 'h3']).optional() }),
+        z.object({
+          text: z.string(),
+          level: z.enum(['h1', 'h2', 'h3']).optional(),
+        }),
       ]),
     })
     .transform((v) =>
@@ -412,12 +403,15 @@ export const SlideBlockSchema = z.union([
         : {
             type: 'heading' as const,
             text: v.heading.text,
-            level: (v.heading.level ?? 'h2') as 'h2' | 'h1' | 'h3',
+            level: v.heading.level ?? 'h2',
           },
     ),
   z
     .object({
-      paragraph: z.union([z.string().min(1).max(1000), z.array(z.string()).transform((a) => a.join(' '))]),
+      paragraph: z.union([
+        z.string().min(1).max(1000),
+        z.array(z.string()).transform((a) => a.join(' ')),
+      ]),
     })
     .transform((v) => ({ type: 'paragraph' as const, text: v.paragraph })),
   z
@@ -445,7 +439,11 @@ export const SlideBlockSchema = z.union([
     .transform((v) =>
       typeof v.quote === 'string'
         ? { type: 'quote' as const, text: v.quote }
-        : { type: 'quote' as const, text: v.quote.text, attribution: v.quote.attribution },
+        : {
+            type: 'quote' as const,
+            text: v.quote.text,
+            attribution: v.quote.attribution,
+          },
     ),
   z
     .object({
@@ -463,7 +461,7 @@ export const SlideBlockSchema = z.union([
         : {
             type: 'callout' as const,
             text: v.callout.text,
-            tone: (v.callout.tone ?? 'info') as 'info' | 'tip' | 'warn',
+            tone: v.callout.tone ?? 'info',
           },
     ),
   z
@@ -610,10 +608,9 @@ const GuideSectionSchema = z
   .object({
     heading: z.string().optional(),
     title: z.string().optional(),
-    content: z.union([
-      z.string(),
-      z.array(z.string()).transform((a) => a.join('\n\n')),
-    ]).optional(),
+    content: z
+      .union([z.string(), z.array(z.string()).transform((a) => a.join('\n\n'))])
+      .optional(),
     text: z.string().optional(),
     body: z.string().optional(),
   })
@@ -629,11 +626,15 @@ export const StudyGuideSchema = z
       summary: z.string().optional().default(''),
       sections: z.array(GuideSectionSchema).min(1).max(15),
     }),
-    z.array(GuideSectionSchema).min(1).max(15).transform((sections) => ({
-      title: 'Study Guide',
-      summary: '',
-      sections,
-    })),
+    z
+      .array(GuideSectionSchema)
+      .min(1)
+      .max(15)
+      .transform((sections) => ({
+        title: 'Study Guide',
+        summary: '',
+        sections,
+      })),
   ])
   .transform((g) => ({
     title: 'title' in g && g.title ? g.title : 'Study Guide',
@@ -662,10 +663,14 @@ export const FlashcardsSchema = z
       title: z.string().optional().default('Flashcards'),
       cards: z.array(FlashcardSchema).min(3).max(50),
     }),
-    z.array(FlashcardSchema).min(3).max(50).transform((cards) => ({
-      title: 'Flashcards',
-      cards,
-    })),
+    z
+      .array(FlashcardSchema)
+      .min(3)
+      .max(50)
+      .transform((cards) => ({
+        title: 'Flashcards',
+        cards,
+      })),
   ])
   .transform((f) => ({
     title: 'title' in f && f.title ? f.title : 'Flashcards',
@@ -679,7 +684,9 @@ const PracticeQuestionSchema = z
     prompt: z.string().optional(),
     options: z.union([
       z.array(z.string()).min(2).max(6),
-      z.array(z.object({ text: z.string() })).transform((arr) => arr.map((o) => o.text)),
+      z
+        .array(z.object({ text: z.string() }))
+        .transform((arr) => arr.map((o) => o.text)),
     ]),
     answerIndex: z.number().int().optional(),
     answer_index: z.number().int().optional(),
@@ -696,18 +703,16 @@ const PracticeQuestionSchema = z
     const finalOptions = rawOptions.slice(0, 4);
 
     const idx =
-      q.answerIndex ??
-      q.answer_index ??
-      q.correctIndex ??
-      q.correct_index ??
-      0;
+      q.answerIndex ?? q.answer_index ?? q.correctIndex ?? q.correct_index ?? 0;
     const safeAnswerIndex = idx >= 0 && idx < 4 ? idx : 0;
 
     return {
       question: (q.question ?? q.title ?? q.prompt ?? 'Question').trim(),
       options: finalOptions,
       answerIndex: safeAnswerIndex,
-      explanation: (q.explanation ?? 'Review course materials for more details.').trim(),
+      explanation: (
+        q.explanation ?? 'Review course materials for more details.'
+      ).trim(),
     };
   });
 
@@ -717,10 +722,14 @@ export const PracticeSetSchema = z
       title: z.string().optional().default('Practice Questions'),
       questions: z.array(PracticeQuestionSchema).min(1).max(20),
     }),
-    z.array(PracticeQuestionSchema).min(1).max(20).transform((questions) => ({
-      title: 'Practice Questions',
-      questions,
-    })),
+    z
+      .array(PracticeQuestionSchema)
+      .min(1)
+      .max(20)
+      .transform((questions) => ({
+        title: 'Practice Questions',
+        questions,
+      })),
   ])
   .transform((p) => ({
     title: 'title' in p && p.title ? p.title : 'Practice Questions',
@@ -731,15 +740,26 @@ const CheatSectionSchema = z
   .object({
     heading: z.string().optional(),
     title: z.string().optional(),
-    bullets: z.union([
-      z.array(z.string()),
-      z.string().transform((str) => str.split('\n').map((line) => line.replace(/^[-•*]\s*/, '').trim()).filter(Boolean)),
-    ]).optional().default([]),
+    bullets: z
+      .union([
+        z.array(z.string()),
+        z.string().transform((str) =>
+          str
+            .split('\n')
+            .map((line) => line.replace(/^[-•*]\s*/, '').trim())
+            .filter(Boolean),
+        ),
+      ])
+      .optional()
+      .default([]),
     items: z.array(z.string()).optional(),
   })
   .transform((s) => ({
     heading: (s.heading ?? s.title ?? 'Key Notes').trim(),
-    bullets: (s.bullets.length > 0 ? s.bullets : (s.items ?? ['Review key material'])).map((b) => b.trim()),
+    bullets: (s.bullets.length > 0
+      ? s.bullets
+      : (s.items ?? ['Review key material'])
+    ).map((b) => b.trim()),
   }));
 
 export const CheatSheetSchema = z
@@ -748,10 +768,14 @@ export const CheatSheetSchema = z
       title: z.string().optional().default('Cheat Sheet'),
       sections: z.array(CheatSectionSchema).min(1).max(20),
     }),
-    z.array(CheatSectionSchema).min(1).max(20).transform((sections) => ({
-      title: 'Cheat Sheet',
-      sections,
-    })),
+    z
+      .array(CheatSectionSchema)
+      .min(1)
+      .max(20)
+      .transform((sections) => ({
+        title: 'Cheat Sheet',
+        sections,
+      })),
   ])
   .transform((c) => ({
     title: 'title' in c && c.title ? c.title : 'Cheat Sheet',

@@ -1,5 +1,5 @@
 import type { Deck, SlideBlock, SlideVisual, DeckTheme } from './schemas';
-import { resolveTheme, DEFAULT_DECK_THEME, THEME_PRESETS } from './schemas';
+import { resolveTheme, DEFAULT_DECK_THEME } from './schemas';
 
 export type PptxRun = {
   text: string;
@@ -463,10 +463,17 @@ export function buildDeckModel(
 
   deck.slides.forEach((slide, i) => {
     if (i === 0 && slide.layout === 'title') {
-      const isDark = deck.theme?.background === 'dark' || deck.theme?.preset === 'dark';
-      const isGradient = deck.theme?.background === 'gradient' || deck.theme?.preset === 'colorful';
-      
-      const titleBg = isDark ? palette.background : isGradient ? 'EEF2FF' : palette.background;
+      const isDark =
+        deck.theme?.background === 'dark' || deck.theme?.preset === 'dark';
+      const isGradient =
+        deck.theme?.background === 'gradient' ||
+        deck.theme?.preset === 'colorful';
+
+      const titleBg = isDark
+        ? palette.background
+        : isGradient
+          ? 'EEF2FF'
+          : palette.background;
       const titleFg = isDark ? 'F1F5F9' : palette.primary;
       const subtitleFg = isDark ? '94A3B8' : palette.muted;
       const barFill = palette.accent;

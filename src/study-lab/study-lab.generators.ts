@@ -13,7 +13,6 @@ import {
 import type {
   CheatSheet,
   Deck,
-  DeckTheme,
   Flashcards,
   PodcastScript,
   PracticeSet,

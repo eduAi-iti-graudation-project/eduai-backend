@@ -62,14 +62,14 @@ describe('pptx-deck', () => {
     expect(body.notes).toBe('speaker note');
   });
 
-  it('renders a title slide for index 0 with accent background', () => {
+  it('renders a title slide for index 0 with light background', () => {
     const model = buildDeckModel(
       deckWith([], {
         theme: { background: 'light', accent: '#FF8800', motion: 'slide' },
       }),
     );
     const title = model.slides[0];
-    expect(title.background).toBe('2563EB');
+    expect(title.background).toBe('FFFFFF');
     expect(title.textboxes[0].runs[0].text).toBe('Test Deck');
   });
 

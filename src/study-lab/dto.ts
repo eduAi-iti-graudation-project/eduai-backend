@@ -30,22 +30,16 @@ export const DeckThemePresetSchema = z.enum([
   'minimal',
 ]);
 
-export const DeckThemeBackgroundSchema = z.enum([
-  'light',
-  'dark',
-  'gradient',
-]);
+export const DeckThemeBackgroundSchema = z.enum(['light', 'dark', 'gradient']);
 
-export const DeckThemeMotionSchema = z.enum([
-  'fade',
-  'rise',
-  'slide',
-  'scale',
-]);
+export const DeckThemeMotionSchema = z.enum(['fade', 'rise', 'slide', 'scale']);
 
 export const GenerateStudyThemeSchema = z.object({
   preset: DeckThemePresetSchema.optional(),
-  accent: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+  accent: z
+    .string()
+    .regex(/^#[0-9a-fA-F]{6}$/)
+    .optional(),
   background: DeckThemeBackgroundSchema.optional(),
   motion: DeckThemeMotionSchema.optional(),
 });
