@@ -628,4 +628,49 @@ describe('MeetingsService', () => {
       }),
     );
   });
+
+  it('turns recordingEnabled off and stores the URL when egress ends', async () => {
+    mockPrisma.meeting.findUnique.mockResolvedValue(
+      baseMeeting({ recordingEnabled: true }),
+    );
+    mockPrisma.meeting.update.mockResolvedValue(baseMeeting());
+    await service.handleLivekitEvent({
+      event: 'egress_ended',
+      room: { name: 'meeting-abc' },
+      egressInfo: {
+        fileResults: [
+          { location: 's3://meetings/meetings/meeting-abc/recording-1.mp4' },
+        ],
+      },
+    } as never);
+    expect(mockPrisma.meeting.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: {
+          recordingUrl: 'meeting-abc/recording-1.mp4',
+          recordingEgressId: null,
+          recordingEnabled: false,
+        },
+      }),
+    );
+  });
+
+  it('turns recordingEnabled off when egress fails', async () => {
+    mockPrisma.meeting.findUnique.mockResolvedValue(
+      baseMeeting({ recordingEnabled: true }),
+    );
+    mockPrisma.meeting.update.mockResolvedValue(baseMeeting());
+    await service.handleLivekitEvent({
+      event: 'egress_failed',
+      room: { name: 'meeting-abc' },
+    } as never);
+    expect(mockPrisma.meeting.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: {
+          recordingEgressId: null,
+          recordingEnabled: false,
+          transcriptStatus: 'FAILED',
+        },
+      }),
+    );
+  });
 });
