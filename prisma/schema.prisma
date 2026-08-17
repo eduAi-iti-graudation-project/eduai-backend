@@ -1154,24 +1154,26 @@ model HomeworkHelpInteraction {
 }
 
 model StudyGeneration {
-  id                       String   @id @default(uuid()) @db.Uuid
-  studentId                String   @db.Uuid
-  courseOfferingId         String   @db.Uuid
-  kind                     String
-  materialKind             String?
-  preset                   String?
-  topic                    String
-  status                   String   @default("PROCESSING")
-  stage                    String   @default("QUEUED")
-  error                    String?
-  sources                  Json     @default("[]")
-  payload                  Json?
-  audioUrl                 String?
-  fileUrl                  String?
-  durationSeconds          Int?
-  recommendedForAnalysisId String?  @db.Uuid
-  createdAt                DateTime @default(now())
-  updatedAt                DateTime @updatedAt
+  id                     String   @id @default(uuid()) @db.Uuid
+  studentId              String   @db.Uuid
+  courseOfferingId       String   @db.Uuid
+  kind                   String
+  materialKind           String?
+  preset                 String?
+  theme                  Json?
+  topic                  String
+  status                 String   @default("PROCESSING")
+  stage                  String   @default("QUEUED")
+  error                  String?
+  sources                Json     @default("[]")
+  payload                Json?
+  audioUrl               String?
+  fileUrl                String?
+  durationSeconds        Int?
+  recommendedForAnalysisId String? @db.Uuid
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+  completedAt            DateTime?
 
   student        User             @relation(fields: [studentId], references: [id], onDelete: Cascade)
   offering       CourseOffering   @relation(fields: [courseOfferingId], references: [id], onDelete: Cascade)

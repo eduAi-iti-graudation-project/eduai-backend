@@ -13,6 +13,6 @@ export default defineConfig({
     url: process.env['DATABASE_URL'],
     shadowDatabaseUrl:
       process.env['SHADOW_DATABASE_URL'] ??
-      'postgresql://postgres:development_password@localhost:5432/eduai_shadow',
+      'postgresql://postgres:development_password@localhost:5433/eduai_shadow',
   },
 });

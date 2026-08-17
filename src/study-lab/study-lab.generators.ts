@@ -8,15 +8,18 @@ import {
   PodcastScriptSchema,
   PracticeSetSchema,
   StudyGuideSchema,
+  resolveTheme,
 } from './schemas';
 import type {
   CheatSheet,
   Deck,
+  DeckTheme,
   Flashcards,
   PodcastScript,
   PracticeSet,
   StudyGuide,
 } from './schemas';
+import type { GenerateStudyTheme } from './dto';
 
 const GROUNDING_RULES = `
 Grounding rules (strict):
@@ -50,27 +53,43 @@ export class StudyLabGenerators {
   ) {}
 
   async ground(courseOfferingId: string, topic: string, topK = 12) {
-    const chunks = await this.materialsService.searchChunks(
-      courseOfferingId,
-      topic,
-      topK,
-    );
+    let chunks: {
+      id: string;
+      content: string;
+      materialTitle: string;
+    }[] = [];
+    let embedFailed = false;
+
+    try {
+      chunks = await this.materialsService.searchChunks(
+        courseOfferingId,
+        topic,
+        topK,
+      );
+    } catch (err) {
+      embedFailed = true;
+      this.logger.warn(
+        `[study-lab] embedding/search failed for "${topic}" — falling back to ungrounded generation: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+
     const sources = [...new Set(chunks.map((c) => c.materialTitle))];
     let corpus = chunks
       .map((c, i) => `[chunk ${i + 1}] ${c.content}`)
       .join('\n\n');
 
-    if (chunks.length < 3) {
+    if (embedFailed || chunks.length < 3) {
       const materials =
         await this.materialsService.listMaterialTitles(courseOfferingId);
       if (materials.length > 0) {
         const titles = materials.map((m) => `- ${m.title}`).join('\n');
         corpus += `
-No semantically relevant chunks were found in this course for the requested topic${
-          chunks.length > 0 ? ' (only partial matches above)' : ''
-        }. The course contains these materials:
+Note on curriculum materials:
+The course contains these materials uploaded by the instructor:
 ${titles}
-If the requested topic does not match any of these materials, say so honestly to the user and point them to the closest material instead of inventing content.`;
+Use the curriculum chunks above as primary reference. If the requested topic is broad or directly relates to the course subject matter, synthesize a complete, highly educational slide deck covering the topic in detail while aligning closely with the course context. Avoid rejecting the request or returning an empty/stub deck.`;
       }
     }
 
@@ -128,21 +147,52 @@ ${corpus}`;
     return script;
   }
 
-  async deck(courseOfferingId: string, topic: string): Promise<Deck> {
+  async deck(
+    courseOfferingId: string,
+    topic: string,
+    theme?: GenerateStudyTheme,
+  ): Promise<Deck> {
     const { corpus, sources } = await this.ground(courseOfferingId, topic);
 
-    const systemPrompt = `
-You are a presentation designer for a premium AI study assistant. Design a polished, lecture-quality slide deck for the given topic.
+    // Build theme instructions for the LLM based on user selection
+    let themeInstructions = '';
+    if (theme) {
+      const resolved = resolveTheme({
+        preset: theme.preset,
+        background: theme.background ?? 'light',
+        accent: theme.accent,
+        motion: theme.motion ?? 'rise',
+      });
+      const presetLabel = theme.preset
+        ? `"${theme.preset}" preset`
+        : 'custom theme';
+      themeInstructions = `
+THEME INSTRUCTIONS (STRICT — the student chose a specific theme; you MUST honour it):
+- Use the ${presetLabel} for this deck's visual identity.
+- Set theme.background = "${resolved.background}".
+- Set theme.accent = "${resolved.colors.accent}" (this is the brand accent used throughout).
+- Set theme.motion = "${resolved.motion}".
+- Set theme.preset = "${resolved.preset ?? theme.preset ?? 'modern'}".
+- Keep these values consistent in EVERY slide — do not change the accent mid-deck.`;
+    } else {
+      themeInstructions = `
+THEME INSTRUCTIONS:
+- Choose a theme.background ("light" | "dark" | "gradient"), a single theme.accent (#RRGGBB) that fits the topic, and theme.motion ("fade" | "rise" | "slide" | "scale").
+- Keep these values consistent in EVERY slide.`;
+    }
 
-DECK RULES:
-- 3 to 14 slides.
-- Include a "theme" at the top level: { "background": "light" | "dark" | "gradient", "accent": "#RRGGBB" (a single brand accent color that fits the topic), "motion": "fade" | "rise" | "slide" | "scale" }.
+    const systemPrompt = `
+You are a presentation designer for a premium AI study assistant. Design a polished, comprehensive, lecture-quality slide deck for the given topic.
+
+DECK RULES (STRICT):
+- Generate between 8 and 14 slides (aim for 10-12 slides). DO NOT generate a short 3-5 slide deck.
+- Include a "theme" object at the top level with: background, accent, motion, and optionally preset.
 - Slide 1 uses layout "title" (title on an accent background; keep it short). End with layout "summary" (key takeaways as a list block).
-- Each slide: pick a "layout" ("title" | "bullets" | "split" | "statement" | "summary"), an optional short "eyebrow" kicker (e.g. "Section 2 · Forces"), a concise "title", and 1-6 "blocks". Slides may include a "visual" (diagram) and a one-line "note".
+- Every slide must feel rich and informative: include an "eyebrow" kicker, a clear "title", and 3-6 content blocks (paragraphs, detailed lists, stat callouts, quotes, key columns).
 - Use blocks, never free-form markdown:
   - heading: an intra-slide section heading (level h1-h3).
   - paragraph: one concise sentence or two of explanation.
-  - list: 2-6 tight bullets (one idea each, exam-ready phrasing). Ordered lists only for numbered sequences.
+  - list: 3-6 tight bullets (one idea each, detailed exam-ready phrasing).
   - quote: a definition or key statement worth calling out (attribution optional).
   - callout: an exam-critical idea, with tone "info" | "tip" | "warn".
   - code: a short snippet (language optional).
@@ -151,9 +201,11 @@ DECK RULES:
 - Layout guidance:
   - "statement": one bold idea, centered, minimal blocks — use for a memorable takeaway or definition.
   - "split": text blocks on the left, a visual on the right (add the "visual" field).
-  - "bullets": the default teaching slide.
-- DESIGN SYSTEM: one accent color per deck (consistent across slides), generous whitespace, no more than ~70 words per slide, one idea per block. Vary block types for visual rhythm — don't make every slide a plain bullet list.
-- Keep text plain — no markdown, no **, no *italics*, no bullets characters like "-" or "•" inside block text.
+  - "bullets": the default teaching slide with comprehensive explanations.
+- DESIGN SYSTEM: one accent color per deck (consistent across slides), generous whitespace, rich educational value per slide. Vary block types for visual rhythm.
+- Keep text plain — no markdown, no **, no *italics*, no bullet characters like "-" or "•" inside block text.
+
+${themeInstructions}
 
 VISUAL RULES (optional, high value):
 - Some slides may include a "visual" field rendered as a diagram. Only attach a visual when the curriculum genuinely supports it — never force one.

@@ -22,11 +22,42 @@ export const PodcastPresetSchema = z.enum([
   'BREAKDOWN',
 ]);
 
+export const DeckThemePresetSchema = z.enum([
+  'modern',
+  'classic',
+  'dark',
+  'colorful',
+  'minimal',
+]);
+
+export const DeckThemeBackgroundSchema = z.enum([
+  'light',
+  'dark',
+  'gradient',
+]);
+
+export const DeckThemeMotionSchema = z.enum([
+  'fade',
+  'rise',
+  'slide',
+  'scale',
+]);
+
+export const GenerateStudyThemeSchema = z.object({
+  preset: DeckThemePresetSchema.optional(),
+  accent: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+  background: DeckThemeBackgroundSchema.optional(),
+  motion: DeckThemeMotionSchema.optional(),
+});
+
+export type GenerateStudyTheme = z.infer<typeof GenerateStudyThemeSchema>;
+
 export const GenerateStudySchema = z.object({
   courseOfferingId: z.string().uuid(),
   kind: StudyGenerationKindSchema,
   materialKind: MaterialKindSchema.optional(),
   preset: PodcastPresetSchema.optional(),
+  theme: GenerateStudyThemeSchema.optional(),
   topic: z.string().min(3).max(500),
 });
 

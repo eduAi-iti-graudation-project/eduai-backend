@@ -47,6 +47,19 @@ export class StudyLabController {
     return this.studyLabService.submit(user.id, dto);
   }
 
+  @Post('study-lab/:generationId/retry')
+  @Roles('STUDENT')
+  @ApiOperation({
+    summary: 'Retry a failed study generation',
+  })
+  @ApiOkResponse({ type: StudyGenerationSubmitDto })
+  async retry(
+    @Param('generationId') generationId: string,
+    @CurrentUser() user: User,
+  ): Promise<StudyGenerationSubmitDto> {
+    return this.studyLabService.retry(user.id, generationId);
+  }
+
   @Get('study-lab/offerings')
   @Roles('STUDENT')
   @AllowGuardianless()

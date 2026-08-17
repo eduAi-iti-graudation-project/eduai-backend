@@ -115,7 +115,30 @@ export type ConceptMapVisual = z.infer<typeof ConceptMapVisualSchema>;
 export type SlideVisual = z.infer<typeof SlideVisualSchema>;
 
 export const DeckThemeSchema = z.object({
+  preset: z
+    .enum(['modern', 'classic', 'dark', 'colorful', 'minimal'])
+    .optional(),
   background: z.enum(['light', 'dark', 'gradient']).default('light'),
+  colors: z
+    .object({
+      primary: z
+        .string()
+        .regex(/^#[0-9a-fA-F]{6}$/)
+        .optional(),
+      secondary: z
+        .string()
+        .regex(/^#[0-9a-fA-F]{6}$/)
+        .optional(),
+      accent: z
+        .string()
+        .regex(/^#[0-9a-fA-F]{6}$/)
+        .optional(),
+      text: z
+        .string()
+        .regex(/^#[0-9a-fA-F]{6}$/)
+        .optional(),
+    })
+    .optional(),
   accent: z
     .string()
     .regex(/^#[0-9a-fA-F]{6}$/)
@@ -129,6 +152,116 @@ export const DEFAULT_DECK_THEME: DeckTheme = {
   background: 'light',
   motion: 'rise',
 };
+
+export const THEME_PRESETS: Record<string, Required<DeckTheme>> = {
+  modern: {
+    preset: 'modern',
+    background: 'light',
+    colors: {
+      primary: '#2563EB',
+      secondary: '#7C3AED',
+      accent: '#10B981',
+      text: '#1F2937',
+    },
+    accent: '#10B981',
+    motion: 'rise',
+  },
+  classic: {
+    preset: 'classic',
+    background: 'light',
+    colors: {
+      primary: '#1F2937',
+      secondary: '#6B7280',
+      accent: '#DC2626',
+      text: '#1F2937',
+    },
+    accent: '#DC2626',
+    motion: 'fade',
+  },
+  dark: {
+    preset: 'dark',
+    background: 'dark',
+    colors: {
+      primary: '#93C5FD',
+      secondary: '#A78BFA',
+      accent: '#6EE7B7',
+      text: '#F1F5F9',
+    },
+    accent: '#6EE7B7',
+    motion: 'slide',
+  },
+  colorful: {
+    preset: 'colorful',
+    background: 'gradient',
+    colors: {
+      primary: '#EC4899',
+      secondary: '#8B5CF6',
+      accent: '#F59E0B',
+      text: '#1F2937',
+    },
+    accent: '#F59E0B',
+    motion: 'scale',
+  },
+  minimal: {
+    preset: 'minimal',
+    background: 'light',
+    colors: {
+      primary: '#374151',
+      secondary: '#9CA3AF',
+      accent: '#6B7280',
+      text: '#1F2937',
+    },
+    accent: '#6B7280',
+    motion: 'fade',
+  },
+};
+
+export function resolveTheme(theme: DeckTheme): Required<DeckTheme> & {
+  colors: Required<NonNullable<DeckTheme['colors']>>;
+} {
+  if (theme.preset && THEME_PRESETS[theme.preset]) {
+    const preset = THEME_PRESETS[theme.preset];
+    return {
+      preset: preset.preset,
+      background: theme.background ?? preset.background,
+      colors: {
+        primary: theme.colors?.primary ?? preset.colors.primary!,
+        secondary: theme.colors?.secondary ?? preset.colors.secondary!,
+        accent: theme.accent ?? theme.colors?.accent ?? preset.colors.accent!,
+        text: theme.colors?.text ?? preset.colors.text!,
+      },
+      accent: theme.accent ?? preset.accent,
+      motion: theme.motion ?? preset.motion,
+    };
+  }
+
+  const background = theme.background ?? 'light';
+  const base: Required<DeckTheme> & {
+    colors: Required<NonNullable<DeckTheme['colors']>>;
+  } = {
+    preset: theme.preset ?? 'modern',
+    background,
+    colors: {
+      primary: theme.colors?.primary ?? '#2563EB',
+      secondary: theme.colors?.secondary ?? '#7C3AED',
+      accent: theme.accent ?? theme.colors?.accent ?? '#10B981',
+      text: theme.colors?.text ?? '#1F2937',
+    },
+    accent: theme.accent ?? theme.colors?.accent ?? '#10B981',
+    motion: theme.motion ?? 'rise',
+  };
+
+  if (background === 'dark') {
+    base.colors = {
+      primary: theme.colors?.primary ?? '#93C5FD',
+      secondary: theme.colors?.secondary ?? '#A78BFA',
+      accent: theme.accent ?? theme.colors?.accent ?? '#6EE7B7',
+      text: theme.colors?.text ?? '#F1F5F9',
+    };
+  }
+
+  return base;
+}
 
 const textish = (max: number) =>
   z
@@ -144,53 +277,227 @@ const textish = (max: number) =>
       path: ['text'],
     });
 
+const textContent = (max: number) =>
+  z.union([
+    z.string().min(1).max(max),
+    z.array(z.string()).transform((arr) => arr.join(' ')),
+    z.object({ text: z.string().optional(), content: z.string().optional() }).transform((v) => v.text ?? v.content ?? ''),
+  ]);
+
 export const SlideBlockSchema = z.union([
+  // 1. type: "heading"
   z
     .object({
       type: z.literal('heading'),
-      level: z.enum(['h1', 'h2', 'h3']).default('h2'),
+      text: textContent(300).optional(),
+      content: textContent(300).optional(),
+      level: z.enum(['h1', 'h2', 'h3']).optional().default('h2'),
     })
-    .and(textish(120)),
-  z.object({ type: z.literal('paragraph') }).and(textish(400)),
-  z.object({
-    type: z.literal('list'),
-    items: z.array(z.string().min(1).max(200)).min(1).max(8),
-    ordered: z.boolean().default(false),
-  }),
+    .transform((v) => ({
+      type: 'heading' as const,
+      text: (v.text || v.content || 'Heading').trim(),
+      level: v.level ?? 'h2',
+    })),
+  // 2. type: "paragraph"
+  z
+    .object({
+      type: z.literal('paragraph'),
+      text: textContent(1000).optional(),
+      content: textContent(1000).optional(),
+    })
+    .transform((v) => ({
+      type: 'paragraph' as const,
+      text: (v.text || v.content || '').trim(),
+    })),
+  // 3. type: "list"
+  z
+    .object({
+      type: z.literal('list'),
+      items: z.array(z.string().min(1).max(400)).min(1).max(12).optional(),
+      bullets: z.array(z.string().min(1).max(400)).optional(),
+      ordered: z.boolean().optional().default(false),
+    })
+    .transform((v) => ({
+      type: 'list' as const,
+      items: v.items ?? v.bullets ?? [],
+      ordered: v.ordered ?? false,
+    })),
+  // 4. type: "quote"
   z
     .object({
       type: z.literal('quote'),
-      attribution: z.string().max(80).optional(),
+      text: textContent(1000).optional(),
+      content: textContent(1000).optional(),
+      attribution: z.string().max(120).optional(),
     })
-    .and(textish(400)),
+    .transform((v) => ({
+      type: 'quote' as const,
+      text: (v.text || v.content || '').trim(),
+      attribution: v.attribution,
+    })),
+  // 5. type: "callout"
   z
     .object({
       type: z.literal('callout'),
-      tone: z.enum(['info', 'tip', 'warn']).default('info'),
+      text: textContent(1000).optional(),
+      content: textContent(1000).optional(),
+      tone: z.enum(['info', 'tip', 'warn']).optional().default('info'),
     })
-    .and(textish(400)),
-  z.object({
-    type: z.literal('code'),
-    code: z.string().min(1).max(2000),
-    language: z.string().max(20).optional(),
-  }),
-  z.object({
-    type: z.literal('stat'),
-    value: z.string().min(1).max(40),
-    label: z.string().min(1).max(120),
-  }),
-  z.object({
-    type: z.literal('columns'),
-    cols: z
-      .array(
+    .transform((v) => ({
+      type: 'callout' as const,
+      text: (v.text || v.content || '').trim(),
+      tone: v.tone ?? 'info',
+    })),
+  // 6. type: "code"
+  z
+    .object({
+      type: z.literal('code'),
+      code: z.string().min(1).max(4000).optional(),
+      snippet: z.string().optional(),
+      language: z.string().max(30).optional(),
+    })
+    .transform((v) => ({
+      type: 'code' as const,
+      code: v.code ?? v.snippet ?? '',
+      language: v.language,
+    })),
+  // 7. type: "stat"
+  z
+    .object({
+      type: z.literal('stat'),
+      value: z.string().min(1).max(80).optional(),
+      number: z.string().optional(),
+      label: z.string().min(1).max(200).optional(),
+      title: z.string().optional(),
+    })
+    .transform((v) => ({
+      type: 'stat' as const,
+      value: v.value ?? v.number ?? '100%',
+      label: v.label ?? v.title ?? 'Statistic',
+    })),
+  // 8. type: "columns"
+  z
+    .object({
+      type: z.literal('columns'),
+      cols: z
+        .array(
+          z.object({
+            heading: z.string().max(120).optional(),
+            title: z.string().optional(),
+            items: z.array(z.string().min(1).max(400)).optional().default([]),
+          }),
+        )
+        .optional()
+        .default([]),
+    })
+    .transform((v) => ({
+      type: 'columns' as const,
+      cols: v.cols.map((c) => ({
+        heading: c.heading ?? c.title,
+        items: c.items,
+      })),
+    })),
+  // Alternative key shorthand formats from LLM (e.g. { heading: "..." }, { paragraph: "..." }, { list: [...] })
+  z
+    .object({
+      heading: z.union([
+        z.string().min(1).max(200),
+        z.array(z.string()).transform((a) => a.join(' ')),
+        z.object({ text: z.string(), level: z.enum(['h1', 'h2', 'h3']).optional() }),
+      ]),
+    })
+    .transform((v) =>
+      typeof v.heading === 'string'
+        ? { type: 'heading' as const, text: v.heading, level: 'h2' as const }
+        : {
+            type: 'heading' as const,
+            text: v.heading.text,
+            level: (v.heading.level ?? 'h2') as 'h2' | 'h1' | 'h3',
+          },
+    ),
+  z
+    .object({
+      paragraph: z.union([z.string().min(1).max(1000), z.array(z.string()).transform((a) => a.join(' '))]),
+    })
+    .transform((v) => ({ type: 'paragraph' as const, text: v.paragraph })),
+  z
+    .object({
+      list: z.union([
+        z.array(z.string().min(1).max(400)),
         z.object({
-          heading: z.string().max(80).optional(),
-          items: z.array(z.string().min(1).max(200)).min(1).max(6),
+          items: z.array(z.string().min(1).max(400)),
+          ordered: z.boolean().optional(),
         }),
-      )
-      .min(2)
-      .max(3),
-  }),
+      ]),
+    })
+    .transform((v) => ({
+      type: 'list' as const,
+      items: Array.isArray(v.list) ? v.list : v.list.items,
+      ordered: Array.isArray(v.list) ? false : (v.list.ordered ?? false),
+    })),
+  z
+    .object({
+      quote: z.union([
+        z.string().min(1).max(1000),
+        z.object({ text: z.string(), attribution: z.string().optional() }),
+      ]),
+    })
+    .transform((v) =>
+      typeof v.quote === 'string'
+        ? { type: 'quote' as const, text: v.quote }
+        : { type: 'quote' as const, text: v.quote.text, attribution: v.quote.attribution },
+    ),
+  z
+    .object({
+      callout: z.union([
+        z.string().min(1).max(1000),
+        z.object({
+          text: z.string(),
+          tone: z.enum(['info', 'tip', 'warn']).optional(),
+        }),
+      ]),
+    })
+    .transform((v) =>
+      typeof v.callout === 'string'
+        ? { type: 'callout' as const, text: v.callout, tone: 'info' as const }
+        : {
+            type: 'callout' as const,
+            text: v.callout.text,
+            tone: (v.callout.tone ?? 'info') as 'info' | 'tip' | 'warn',
+          },
+    ),
+  z
+    .object({
+      code: z.string().min(1).max(4000),
+    })
+    .transform((v) => ({ type: 'code' as const, code: v.code })),
+  z
+    .object({
+      stat: z.object({
+        value: z.string().optional(),
+        label: z.string().optional(),
+      }),
+    })
+    .transform((v) => ({
+      type: 'stat' as const,
+      value: v.stat.value ?? '100%',
+      label: v.stat.label ?? 'Statistic',
+    })),
+  z
+    .object({
+      columns: z.object({
+        cols: z
+          .array(
+            z.object({
+              heading: z.string().optional(),
+              items: z.array(z.string()).optional().default([]),
+            }),
+          )
+          .optional()
+          .default([]),
+      }),
+    })
+    .transform((v) => ({ type: 'columns' as const, cols: v.columns.cols })),
 ]);
 
 export type SlideBlock = z.infer<typeof SlideBlockSchema>;
@@ -234,6 +541,7 @@ const DeckSlideSchema = z
     eyebrow: z.string().max(80).optional(),
     title: z.string().max(120).optional(),
     blocks: z.array(SlideBlockSchema).max(8).optional(),
+    block: SlideBlockSchema.optional(),
     note: z.string().optional(),
     visual: SlideVisualSchema.optional(),
     bullets: z.array(z.string()).min(1).max(6).optional(),
@@ -245,22 +553,24 @@ const DeckSlideSchema = z
   .refine(
     (s) =>
       (s.blocks && s.blocks.length > 0) ||
+      !!s.block ||
       (s.bullets && s.bullets.length > 0) ||
       !!s.title,
     'A slide needs at least a title, blocks, or bullets',
   )
   .transform((s): DeckSlide => {
+    const singleBlock = s.block ? [s.block] : [];
     if (s.blocks && s.blocks.length > 0) {
       return {
         layout: normalizeLayout(s.layout),
         eyebrow: s.eyebrow,
         title: s.title,
-        blocks: s.blocks,
+        blocks: [...singleBlock, ...s.blocks],
         note: s.note,
         visual: s.visual,
       };
     }
-    const blocks: SlideBlock[] = [];
+    const blocks: SlideBlock[] = [...singleBlock];
     const code = s.code ?? s.code_snippet;
     if (code) blocks.push({ type: 'code', code });
     const bullets = s.bullets ?? [];
@@ -300,79 +610,154 @@ const GuideSectionSchema = z
   .object({
     heading: z.string().optional(),
     title: z.string().optional(),
-    content: z.string().min(40),
+    content: z.union([
+      z.string(),
+      z.array(z.string()).transform((a) => a.join('\n\n')),
+    ]).optional(),
+    text: z.string().optional(),
+    body: z.string().optional(),
   })
   .transform((s) => ({
-    heading: s.heading ?? s.title ?? '',
-    content: s.content,
+    heading: (s.heading ?? s.title ?? 'Overview').trim(),
+    content: (s.content ?? s.text ?? s.body ?? '').trim(),
   }));
 
 export const StudyGuideSchema = z
-  .object({
-    title: z.string().optional().default('Study Guide'),
-    summary: z.string(),
-    sections: z.array(GuideSectionSchema).min(3).max(10),
-  })
+  .union([
+    z.object({
+      title: z.string().optional().default('Study Guide'),
+      summary: z.string().optional().default(''),
+      sections: z.array(GuideSectionSchema).min(1).max(15),
+    }),
+    z.array(GuideSectionSchema).min(1).max(15).transform((sections) => ({
+      title: 'Study Guide',
+      summary: '',
+      sections,
+    })),
+  ])
   .transform((g) => ({
-    title: g.title,
-    summary: g.summary,
+    title: 'title' in g && g.title ? g.title : 'Study Guide',
+    summary: 'summary' in g && g.summary ? g.summary : '',
     sections: g.sections.map((s) => ({
-      heading: s.heading,
+      heading: s.heading || 'Section',
       content: s.content,
     })),
   }));
 
-export const FlashcardSchema = z.object({
-  front: z.string().min(5).max(200),
-  back: z.string().min(5).max(300),
-});
+export const FlashcardSchema = z
+  .object({
+    front: z.string().optional(),
+    question: z.string().optional(),
+    back: z.string().optional(),
+    answer: z.string().optional(),
+  })
+  .transform((c) => ({
+    front: (c.front ?? c.question ?? 'Question').trim(),
+    back: (c.back ?? c.answer ?? 'Answer').trim(),
+  }));
 
-export const FlashcardsSchema = z.object({
-  title: z.string().optional().default('Flashcards'),
-  cards: z.array(FlashcardSchema).min(5).max(30),
-});
+export const FlashcardsSchema = z
+  .union([
+    z.object({
+      title: z.string().optional().default('Flashcards'),
+      cards: z.array(FlashcardSchema).min(3).max(50),
+    }),
+    z.array(FlashcardSchema).min(3).max(50).transform((cards) => ({
+      title: 'Flashcards',
+      cards,
+    })),
+  ])
+  .transform((f) => ({
+    title: 'title' in f && f.title ? f.title : 'Flashcards',
+    cards: f.cards,
+  }));
 
 const PracticeQuestionSchema = z
   .object({
-    question: z.string(),
-    options: z.array(z.string()).length(4),
-    answerIndex: z.number().int().min(0).max(3).optional(),
-    answer_index: z.number().int().min(0).max(3).optional(),
-    explanation: z.string(),
+    question: z.string().optional(),
+    title: z.string().optional(),
+    prompt: z.string().optional(),
+    options: z.union([
+      z.array(z.string()).min(2).max(6),
+      z.array(z.object({ text: z.string() })).transform((arr) => arr.map((o) => o.text)),
+    ]),
+    answerIndex: z.number().int().optional(),
+    answer_index: z.number().int().optional(),
+    correctIndex: z.number().int().optional(),
+    correct_index: z.number().int().optional(),
+    explanation: z.string().optional(),
   })
-  .transform((q) => ({
-    question: q.question,
-    options: q.options,
-    answerIndex: q.answerIndex ?? q.answer_index ?? 0,
-    explanation: q.explanation,
-  }));
+  .transform((q) => {
+    const rawOptions = q.options.map((o) => o.trim());
+    // Normalize to 4 options if fewer or more provided
+    while (rawOptions.length < 4) {
+      rawOptions.push(`Option ${String.fromCharCode(65 + rawOptions.length)}`);
+    }
+    const finalOptions = rawOptions.slice(0, 4);
 
-export const PracticeSetSchema = z.object({
-  title: z.string().optional().default('Practice Questions'),
-  questions: z.array(PracticeQuestionSchema).min(4).max(10),
-});
+    const idx =
+      q.answerIndex ??
+      q.answer_index ??
+      q.correctIndex ??
+      q.correct_index ??
+      0;
+    const safeAnswerIndex = idx >= 0 && idx < 4 ? idx : 0;
+
+    return {
+      question: (q.question ?? q.title ?? q.prompt ?? 'Question').trim(),
+      options: finalOptions,
+      answerIndex: safeAnswerIndex,
+      explanation: (q.explanation ?? 'Review course materials for more details.').trim(),
+    };
+  });
+
+export const PracticeSetSchema = z
+  .union([
+    z.object({
+      title: z.string().optional().default('Practice Questions'),
+      questions: z.array(PracticeQuestionSchema).min(1).max(20),
+    }),
+    z.array(PracticeQuestionSchema).min(1).max(20).transform((questions) => ({
+      title: 'Practice Questions',
+      questions,
+    })),
+  ])
+  .transform((p) => ({
+    title: 'title' in p && p.title ? p.title : 'Practice Questions',
+    questions: p.questions,
+  }));
 
 const CheatSectionSchema = z
   .object({
     heading: z.string().optional(),
     title: z.string().optional(),
-    bullets: z.array(z.string()).min(2).max(8),
+    bullets: z.union([
+      z.array(z.string()),
+      z.string().transform((str) => str.split('\n').map((line) => line.replace(/^[-•*]\s*/, '').trim()).filter(Boolean)),
+    ]).optional().default([]),
+    items: z.array(z.string()).optional(),
   })
   .transform((s) => ({
-    heading: s.heading ?? s.title ?? '',
-    bullets: s.bullets,
+    heading: (s.heading ?? s.title ?? 'Key Notes').trim(),
+    bullets: (s.bullets.length > 0 ? s.bullets : (s.items ?? ['Review key material'])).map((b) => b.trim()),
   }));
 
 export const CheatSheetSchema = z
-  .object({
-    title: z.string().optional().default('Cheat Sheet'),
-    sections: z.array(CheatSectionSchema).min(3).max(12),
-  })
+  .union([
+    z.object({
+      title: z.string().optional().default('Cheat Sheet'),
+      sections: z.array(CheatSectionSchema).min(1).max(20),
+    }),
+    z.array(CheatSectionSchema).min(1).max(20).transform((sections) => ({
+      title: 'Cheat Sheet',
+      sections,
+    })),
+  ])
   .transform((c) => ({
-    title: c.title,
+    title: 'title' in c && c.title ? c.title : 'Cheat Sheet',
     sections: c.sections.map((s) => ({
-      heading: s.heading,
-      bullets: s.bullets,
+      heading: s.heading || 'Section',
+      bullets: s.bullets.length > 0 ? s.bullets : ['Review key material'],
     })),
   }));
 
