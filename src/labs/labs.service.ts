@@ -590,6 +590,36 @@ export class LabsService {
   }
 
   /**
+   * Hard-delete multiple labs the teacher owns, any status. Every id must
+   * resolve to a lab the teacher owns — a single missing or foreign id fails
+   * the whole request so the frontend's selection and reality can never
+   * silently diverge.
+   */
+  async deleteMany(user: User, labIds: string[]): Promise<{ deleted: number }> {
+    const uniqueIds = [...new Set(labIds)];
+    const owned = await this.prisma.lab.findMany({
+      where: {
+        id: { in: uniqueIds },
+        organizationId: user.organizationId ?? undefined,
+        createdBy: user.id,
+      },
+      select: { id: true },
+    });
+    if (owned.length !== uniqueIds.length) {
+      throw new ApiError(
+        ErrorCode.LAB_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'One or more labs could not be found.',
+      );
+    }
+    const result = await this.prisma.lab.deleteMany({
+      where: { id: { in: uniqueIds } },
+    });
+    this.logger.log(`[labs] ${result.count} labs deleted by ${user.id}`);
+    return { deleted: result.count };
+  }
+
+  /**
    * Role-aware list. Students only ever see PUBLISHED labs in offerings they
    * are enrolled in — enforced here, server-side, not by the frontend.
    */
