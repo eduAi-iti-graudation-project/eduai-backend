@@ -27,5 +27,28 @@ export const ResolveAlertSchema = z.object({
   status: z.enum(['RESOLVED', 'DISMISSED']),
 });
 
+export const TeacherFlagSchema = z.object({
+  courseOfferingId: z.string().uuid(),
+  teacherId: z.string().uuid(),
+  teacherName: z.string(),
+  courseName: z.string(),
+  sectionName: z.string().nullable(),
+  attribution: z.enum(['CLASS', 'BOTH']),
+  severity: z.enum(['LOW', 'MEDIUM', 'HIGH']).nullable(),
+  reason: z.string().nullable(),
+  headline: z.string().nullable(),
+  classStats: z
+    .object({
+      studentCount: z.number(),
+      classAvgPct: z.number(),
+      droppingCount: z.number(),
+      belowAverageCount: z.number(),
+    })
+    .nullable(),
+  alertCount: z.number(),
+  latestAt: z.string(),
+});
+
 export class AlertDto extends createZodDto(AlertSchema) {}
 export class ResolveAlertDto extends createZodDto(ResolveAlertSchema) {}
+export class TeacherFlagDto extends createZodDto(TeacherFlagSchema) {}

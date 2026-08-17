@@ -7,7 +7,7 @@ import {
   ApiQuery,
 } from '@nestjs/swagger';
 import { AlertsService } from './alerts.service';
-import { AlertDto, ResolveAlertDto } from './dto';
+import { AlertDto, ResolveAlertDto, TeacherFlagDto } from './dto';
 import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
 
@@ -34,6 +34,16 @@ export class AlertsController {
   @ApiOkResponse({ type: AlertDto, isArray: true })
   findByGuardian(@CurrentUser('id') guardianId: string) {
     return this.alertsService.findByGuardian(guardianId);
+  }
+
+  @Get('teacher-flags')
+  @Roles('TEACHER', 'ADMIN')
+  @ApiOperation({
+    summary: 'List class-wide issues the analysis agent attributed to teachers',
+  })
+  @ApiOkResponse({ type: TeacherFlagDto, isArray: true })
+  findTeacherFlags(@CurrentUser('organizationId') organizationId: string) {
+    return this.alertsService.findTeacherFlags(organizationId);
   }
 
   @Get(':id/teacher-detail')

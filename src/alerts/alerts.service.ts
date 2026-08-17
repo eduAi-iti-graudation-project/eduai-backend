@@ -37,6 +37,33 @@ const alertInclude = {
   },
 } satisfies Prisma.AlertInclude;
 
+const severities = ['HIGH', 'MEDIUM', 'LOW'] as const;
+const severityRank: Record<(typeof severities)[number], number> = {
+  HIGH: 0,
+  MEDIUM: 1,
+  LOW: 2,
+};
+
+export interface TeacherFlag {
+  courseOfferingId: string;
+  teacherId: string;
+  teacherName: string;
+  courseName: string;
+  sectionName: string | null;
+  attribution: 'CLASS' | 'BOTH';
+  severity: (typeof severities)[number];
+  reason: string | null;
+  headline: string | null;
+  classStats: {
+    studentCount: number;
+    classAvgPct: number;
+    droppingCount: number;
+    belowAverageCount: number;
+  } | null;
+  alertCount: number;
+  latestAt: string;
+}
+
 @Injectable()
 export class AlertsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -92,6 +119,112 @@ export class AlertsService {
       where: { id },
       data: { status },
     });
+  }
+
+  async findTeacherFlags(organizationId: string): Promise<TeacherFlag[]> {
+    const analyses = await this.prisma.studentAnalysis.findMany({
+      where: {
+        offering: { organizationId },
+        alertId: { not: null },
+        OR: [
+          { diagnosis: { path: ['attribution'], equals: 'CLASS' } },
+          { diagnosis: { path: ['attribution'], equals: 'BOTH' } },
+          { diagnosis: { path: ['issueType'], equals: 'CLASS_ISSUE' } },
+          { diagnosis: { path: ['issueType'], equals: 'BOTH' } },
+        ],
+      },
+      select: {
+        id: true,
+        alertId: true,
+        createdAt: true,
+        diagnosis: true,
+        offering: {
+          select: {
+            id: true,
+            course: { select: { name: true } },
+            section: { select: { name: true } },
+            teacher: { select: { id: true, name: true } },
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const byOffering = new Map<string, TeacherFlag>();
+
+    for (const a of analyses) {
+      if (!a.alertId || !a.offering) continue;
+      const d = a.diagnosis as {
+        attribution?: 'CLASS' | 'BOTH' | 'STUDENT';
+        issueType?: string | null;
+        severity?: string | null;
+        reason?: string | null;
+        summary?: string | null;
+        brief?: { headline?: string | null };
+        classStats?: {
+          studentCount?: number;
+          classAvgPct?: number;
+          droppingCount?: number;
+          belowAverageCount?: number;
+        } | null;
+      } | null;
+      if (!d) continue;
+
+      const attribution: 'CLASS' | 'BOTH' | null =
+        d.attribution === 'CLASS' || d.attribution === 'BOTH'
+          ? d.attribution
+          : d.issueType === 'CLASS_ISSUE'
+            ? 'CLASS'
+            : d.issueType === 'BOTH'
+              ? 'BOTH'
+              : null;
+      if (!attribution) continue;
+
+      const severity = severities.find((s) => s === d.severity) ?? 'MEDIUM';
+      const existing = byOffering.get(a.offering.id);
+
+      if (!existing) {
+        byOffering.set(a.offering.id, {
+          courseOfferingId: a.offering.id,
+          teacherId: a.offering.teacher.id,
+          teacherName: a.offering.teacher.name,
+          courseName: a.offering.course.name,
+          sectionName: a.offering.section?.name ?? null,
+          attribution,
+          severity,
+          reason: d.reason ?? d.summary ?? null,
+          headline: d.brief?.headline ?? null,
+          classStats: d.classStats
+            ? {
+                studentCount: d.classStats.studentCount ?? 0,
+                classAvgPct: d.classStats.classAvgPct ?? 0,
+                droppingCount: d.classStats.droppingCount ?? 0,
+                belowAverageCount: d.classStats.belowAverageCount ?? 0,
+              }
+            : null,
+          alertCount: 1,
+          latestAt: a.createdAt.toISOString(),
+        });
+      } else {
+        existing.alertCount += 1;
+        if (severityRank[severity] < severityRank[existing.severity]) {
+          existing.severity = severity;
+        }
+        if (d.reason) existing.reason = d.reason;
+        const iso = a.createdAt.toISOString();
+        if (iso > existing.latestAt) existing.latestAt = iso;
+      }
+    }
+
+    return [...byOffering.values()]
+      .sort(
+        (a, b) =>
+          severityRank[a.severity] - severityRank[b.severity] ||
+          (a.classStats?.classAvgPct ?? 100) -
+            (b.classStats?.classAvgPct ?? 100) ||
+          a.latestAt.localeCompare(b.latestAt),
+      )
+      .slice(0, 50);
   }
 
   async getTeacherDetail(id: string, organizationId: string) {
