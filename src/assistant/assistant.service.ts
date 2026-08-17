@@ -1,8 +1,13 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, HttpStatus } from '@nestjs/common';
+import type { User } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { LlmService } from '../common/llm/llm.service';
 import { FORMATTING_RULES } from '../common/llm/formatting-rules';
 import { MaterialsService } from '../materials/materials.service';
+import { AiChatService } from '../ai-chat/ai-chat.service';
+import type { AiChatConversationDto, AiChatMessageDto } from '../ai-chat/dto';
+import { ApiError } from '../common/errors/api-error';
+import { ErrorCode } from '../common/errors/codes';
 import { createSaveQuizTool } from '../quizzes/agents/tools/save-quiz.tool';
 import {
   submissionPcts,
@@ -125,6 +130,17 @@ interface ConversationMessage {
   content: string;
 }
 
+export interface AssistantChatResult {
+  reply: string;
+  conversationId: string;
+  quiz?: Quiz;
+  savedQuiz?: { quizId: string; title: string; questionCount: number };
+  rubric?: RubricDraft;
+  lesson?: LessonSummary | LessonPlan;
+  assignment?: AssignmentDraft;
+  analytics?: ClassAnalytics;
+}
+
 @Injectable()
 export class AssistantService {
   private readonly logger = new Logger(AssistantService.name);
@@ -133,23 +149,88 @@ export class AssistantService {
     private readonly llm: LlmService,
     private readonly materials: MaterialsService,
     private readonly prisma: PrismaService,
+    private readonly aiChat: AiChatService,
   ) {}
 
-  async chat(dto: ChatDto): Promise<{
-    reply: string;
-    quiz?: Quiz;
-    savedQuiz?: { quizId: string; title: string; questionCount: number };
-    rubric?: RubricDraft;
-    lesson?: LessonSummary | LessonPlan;
-    assignment?: AssignmentDraft;
-    analytics?: ClassAnalytics;
-  }> {
-    const { courseOfferingId, messages, newMessage } = dto;
-    const history: ConversationMessage[] = [
-      ...messages,
-      { role: 'user', content: newMessage },
-    ];
+  async chat(user: User, dto: ChatDto): Promise<AssistantChatResult> {
+    const { courseOfferingId, conversationId, messages, newMessage } = dto;
 
+    let conversation: { id: string; courseOfferingId: string | null };
+    let history: ConversationMessage[];
+
+    if (conversationId) {
+      conversation = await this.aiChat.getOwnedConversation(
+        user.id,
+        conversationId,
+        'ASSISTANT',
+      );
+      const stored = await this.aiChat.getMessages(
+        user.id,
+        conversationId,
+        'ASSISTANT',
+      );
+      history = stored.map((m) => ({ role: m.role, content: m.content }));
+    } else {
+      if (!courseOfferingId) {
+        throw new ApiError(
+          ErrorCode.VALIDATION_FAILED,
+          HttpStatus.BAD_REQUEST,
+          'A class is required to start a new conversation.',
+        );
+      }
+      conversation = await this.aiChat.createConversation(
+        user.id,
+        'ASSISTANT',
+        { courseOfferingId },
+      );
+      history = messages.map((m) => ({ role: m.role, content: m.content }));
+    }
+
+    const offeringId = courseOfferingId ?? conversation.courseOfferingId;
+    if (!offeringId) {
+      throw new ApiError(
+        ErrorCode.VALIDATION_FAILED,
+        HttpStatus.BAD_REQUEST,
+        'A class is required for this conversation.',
+      );
+    }
+
+    history = [...history, { role: 'user', content: newMessage }];
+    await this.aiChat.addUserMessage(conversation.id, newMessage);
+
+    const result = await this.runGeneration(offeringId, newMessage, history);
+
+    await this.aiChat.addAssistantMessage(conversation.id, result.reply);
+
+    return { ...result, conversationId: conversation.id };
+  }
+
+  async listConversations(
+    userId: string,
+  ): Promise<{ items: AiChatConversationDto[] }> {
+    const items = await this.aiChat.listConversations(userId, 'ASSISTANT');
+    return { items };
+  }
+
+  async getConversation(
+    userId: string,
+    conversationId: string,
+  ): Promise<AiChatMessageDto[]> {
+    return this.aiChat.getMessages(userId, conversationId, 'ASSISTANT');
+  }
+
+  async deleteConversation(
+    userId: string,
+    conversationId: string,
+  ): Promise<void> {
+    await this.aiChat.deleteConversation(userId, conversationId, 'ASSISTANT');
+  }
+
+  private async runGeneration(
+    courseOfferingId: string,
+    newMessage: string,
+    history: ConversationMessage[],
+  ): Promise<Omit<AssistantChatResult, 'conversationId'>> {
     let lastSearchContext = '';
     let hasSearchContext = false;
 

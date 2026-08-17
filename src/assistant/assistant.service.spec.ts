@@ -1,13 +1,16 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import type { User } from '@prisma/client';
 import { AssistantService } from './assistant.service';
 import { LlmService } from '../common/llm/llm.service';
 import { MaterialsService } from '../materials/materials.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { AiChatService } from '../ai-chat/ai-chat.service';
 
 describe('AssistantService', () => {
   let service: AssistantService;
   let llm: Record<string, jest.Mock>;
   let materials: Record<string, jest.Mock>;
+  let aiChat: Record<string, jest.Mock>;
 
   const mockLlm = {
     generateStructured: jest.fn(),
@@ -18,11 +21,28 @@ describe('AssistantService', () => {
     getChunksByOffering: jest.fn(),
   };
 
+  const mockAiChat = {
+    createConversation: jest.fn(),
+    getOwnedConversation: jest.fn(),
+    getMessages: jest.fn(),
+    listConversations: jest.fn(),
+    addUserMessage: jest.fn(),
+    addAssistantMessage: jest.fn(),
+    deleteConversation: jest.fn(),
+  };
+
   const mockPrisma = {
     courseOffering: { findUnique: jest.fn() },
     quiz: { create: jest.fn() },
     gradingScore: { findMany: jest.fn() },
   };
+
+  const user = {
+    id: 'user-1',
+    role: 'TEACHER',
+    name: 'Teacher',
+    email: 'teacher@eduai.test',
+  } as User;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -31,15 +51,32 @@ describe('AssistantService', () => {
         { provide: LlmService, useValue: mockLlm },
         { provide: MaterialsService, useValue: mockMaterials },
         { provide: PrismaService, useValue: mockPrisma },
+        { provide: AiChatService, useValue: mockAiChat },
       ],
     }).compile();
 
     service = module.get<AssistantService>(AssistantService);
     llm = mockLlm;
     materials = mockMaterials;
+    aiChat = mockAiChat;
 
     jest.clearAllMocks();
     materials.getChunksByOffering.mockResolvedValue([]);
+    aiChat.createConversation.mockResolvedValue({
+      id: 'convo-1',
+      kind: 'ASSISTANT',
+      courseOfferingId: null,
+      studentId: null,
+      title: null,
+      lastMessage: null,
+      lastMessageRole: null,
+      messageCount: 0,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    aiChat.addUserMessage.mockResolvedValue({});
+    aiChat.addAssistantMessage.mockResolvedValue({});
+    aiChat.getMessages.mockResolvedValue([]);
   });
 
   it('should be defined', () => {
@@ -55,7 +92,7 @@ describe('AssistantService', () => {
         reply: 'Hello! How can I help you today?',
       });
 
-      const result = await service.chat({
+      const result = await service.chat(user, {
         courseOfferingId,
         messages: [],
         newMessage: 'Hello!',
@@ -90,7 +127,7 @@ describe('AssistantService', () => {
         },
       ]);
 
-      const result = await service.chat({
+      const result = await service.chat(user, {
         courseOfferingId,
         messages: [],
         newMessage: 'Create a summary of the water cycle',
@@ -121,7 +158,7 @@ describe('AssistantService', () => {
       materials.searchChunks.mockResolvedValue([]);
       materials.getChunksByOffering.mockResolvedValue([]);
 
-      const result = await service.chat({
+      const result = await service.chat(user, {
         courseOfferingId,
         messages: [],
         newMessage: 'Explain quantum physics',
@@ -176,7 +213,7 @@ describe('AssistantService', () => {
         ],
       });
 
-      const result = await service.chat({
+      const result = await service.chat(user, {
         courseOfferingId,
         messages: [],
         newMessage: 'Summarize the course material',
@@ -204,7 +241,7 @@ describe('AssistantService', () => {
         materials.searchChunks.mockResolvedValue([]);
       }
 
-      const result = await service.chat({
+      const result = await service.chat(user, {
         courseOfferingId,
         messages: [],
         newMessage: 'Do something',
@@ -221,7 +258,7 @@ describe('AssistantService', () => {
         reply: 'Following up on your previous question about algebra.',
       });
 
-      const result = await service.chat({
+      const result = await service.chat(user, {
         courseOfferingId,
         messages: [
           { role: 'user', content: 'What is algebra?' },
@@ -231,6 +268,78 @@ describe('AssistantService', () => {
       });
 
       expect(result.reply).toContain('algebra');
+    });
+
+    it('should persist the message exchange and return a conversationId', async () => {
+      llm.generateStructured.mockResolvedValue({
+        action: 'respond',
+        reply: 'Sure!',
+      });
+
+      const result = await service.chat(user, {
+        courseOfferingId,
+        messages: [],
+        newMessage: 'Hello',
+      });
+
+      expect(result.conversationId).toBe('convo-1');
+      expect(aiChat.createConversation).toHaveBeenCalledWith(
+        'user-1',
+        'ASSISTANT',
+        { courseOfferingId },
+      );
+      expect(aiChat.addUserMessage).toHaveBeenCalledWith('convo-1', 'Hello');
+      expect(aiChat.addAssistantMessage).toHaveBeenCalledWith(
+        'convo-1',
+        'Sure!',
+      );
+    });
+
+    it('should reuse an existing conversation from server-side history', async () => {
+      aiChat.getOwnedConversation.mockResolvedValue({
+        id: 'convo-2',
+        courseOfferingId,
+      });
+      aiChat.getMessages.mockResolvedValue([
+        {
+          id: 'm1',
+          conversationId: 'convo-2',
+          role: 'user',
+          content: 'What is algebra?',
+          sources: null,
+          createdAt: new Date().toISOString(),
+        },
+        {
+          id: 'm2',
+          conversationId: 'convo-2',
+          role: 'assistant',
+          content: 'Algebra is a branch of mathematics.',
+          sources: null,
+          createdAt: new Date().toISOString(),
+        },
+      ]);
+      llm.generateStructured.mockResolvedValue({
+        action: 'respond',
+        reply: 'Here is an example.',
+      });
+
+      const result = await service.chat(user, {
+        courseOfferingId,
+        conversationId: 'convo-2',
+        messages: [],
+        newMessage: 'Give me an example',
+      });
+
+      expect(result.conversationId).toBe('convo-2');
+      expect(aiChat.createConversation).not.toHaveBeenCalled();
+      const llmMock = llm.generateStructured as jest.Mock<
+        Promise<Record<string, unknown>>,
+        [{ userPrompt: string }]
+      >;
+      const promptArg = llmMock.mock.calls[0][0].userPrompt;
+      expect(promptArg).toContain('What is algebra?');
+      expect(promptArg).toContain('Algebra is a branch of mathematics.');
+      expect(promptArg).toContain('USER: Give me an example');
     });
 
     it('should generate structured quiz via create_quiz tool after search', async () => {
@@ -276,7 +385,7 @@ describe('AssistantService', () => {
       // Third call is the quiz generation
       llm.generateStructured.mockResolvedValueOnce(quizResult);
 
-      const result = await service.chat({
+      const result = await service.chat(user, {
         courseOfferingId,
         messages: [],
         newMessage: 'Create a quiz about photosynthesis',
@@ -306,7 +415,7 @@ describe('AssistantService', () => {
 
       materials.searchChunks.mockResolvedValue([]);
 
-      const result = await service.chat({
+      const result = await service.chat(user, {
         courseOfferingId,
         messages: [],
         newMessage: 'Create a quiz about quantum mechanics',
@@ -324,7 +433,7 @@ describe('AssistantService', () => {
         questionCount: 2,
       });
 
-      const result = await service.chat({
+      const result = await service.chat(user, {
         courseOfferingId,
         messages: [],
         newMessage: 'Give me a math quiz',
@@ -381,7 +490,7 @@ describe('AssistantService', () => {
         title: 'Photosynthesis Quiz',
       });
 
-      const result = await service.chat({
+      const result = await service.chat(user, {
         courseOfferingId,
         messages: [],
         newMessage: 'Create a quiz about photosynthesis',
@@ -446,7 +555,7 @@ describe('AssistantService', () => {
         ],
       });
 
-      const result = await service.chat({
+      const result = await service.chat(user, {
         courseOfferingId,
         messages: [],
         newMessage: 'Draft a rubric for the persuasive essay',
@@ -489,7 +598,7 @@ describe('AssistantService', () => {
         },
       ]);
 
-      const result = await service.chat({
+      const result = await service.chat(user, {
         courseOfferingId,
         messages: [],
         newMessage: 'Summarize the water cycle lesson',
@@ -515,7 +624,7 @@ describe('AssistantService', () => {
 
       materials.searchChunks.mockResolvedValue([]);
 
-      const result = await service.chat({
+      const result = await service.chat(user, {
         courseOfferingId,
         messages: [],
         newMessage: 'Summarize the algebra lesson',
@@ -551,7 +660,7 @@ describe('AssistantService', () => {
         },
       ]);
 
-      await service.chat({
+      await service.chat(user, {
         courseOfferingId,
         messages: [],
         newMessage: 'Summarize the water cycle lesson',
@@ -591,7 +700,7 @@ describe('AssistantService', () => {
         },
       ]);
 
-      const result = await service.chat({
+      const result = await service.chat(user, {
         courseOfferingId,
         messages: [],
         newMessage: 'Summarize the water cycle lesson',
@@ -628,7 +737,7 @@ describe('AssistantService', () => {
         },
       ]);
 
-      const result = await service.chat({
+      const result = await service.chat(user, {
         courseOfferingId,
         messages: [],
         newMessage: 'Plan a lesson on plant cells',
@@ -672,7 +781,7 @@ describe('AssistantService', () => {
           recommendations: ['Offset targeted support'],
         });
 
-      const result = await service.chat({
+      const result = await service.chat(user, {
         courseOfferingId,
         messages: [],
         newMessage: 'How is the class doing?',
@@ -703,7 +812,7 @@ describe('AssistantService', () => {
         instructions: 'Pick an ecosystem\nDescribe its producers and consumers',
       });
 
-      const result = await service.chat({
+      const result = await service.chat(user, {
         courseOfferingId,
         messages: [],
         newMessage: 'Draft an assignment on ecosystems',
