@@ -55,7 +55,20 @@ export class OrganizationsService {
 
   async getOrganizationSummary(organizationId: string) {
     const [organization, userCount] = await Promise.all([
-      this.prisma.organization.findUnique({ where: { id: organizationId } }),
+      this.prisma.organization.findUnique({
+        where: { id: organizationId },
+        include: {
+          group: {
+            select: {
+              id: true,
+              name: true,
+              subscriptionStatus: true,
+              subscriptionTier: true,
+              seatLimit: true,
+            },
+          },
+        },
+      }),
       this.prisma.user.count({
         where: { organizationId, role: { not: 'ADMIN' } },
       }),
@@ -68,13 +81,19 @@ export class OrganizationsService {
       );
     }
 
+    // WP5: a grouped school inherits its billing home from the SchoolGroup
+    // (Enterprise-only, unlimited seats).
+    const owner = organization.group ?? organization;
+
     return {
       id: organization.id,
       name: organization.name,
       joinCode: organization.joinCode,
-      subscriptionStatus: organization.subscriptionStatus,
-      subscriptionTier: organization.subscriptionTier,
-      seatLimit: organization.seatLimit,
+      groupId: organization.group?.id ?? null,
+      groupName: organization.group?.name ?? null,
+      subscriptionStatus: owner.subscriptionStatus,
+      subscriptionTier: owner.subscriptionTier,
+      seatLimit: organization.group ? null : organization.seatLimit,
       userCount,
     };
   }
@@ -104,6 +123,19 @@ export class OrganizationsService {
       }
     }
     throw new Error('Could not allocate a unique join code');
+  }
+
+  /**
+   * Set the school login-identity domain (e.g. "westside.edu"). Only affects
+   * newly provisioned accounts — existing logins are not re-keyed.
+   */
+  async setEmailDomain(organizationId: string, emailDomain: string) {
+    const domain = emailDomain.trim().toLowerCase();
+    const organization = await this.prisma.organization.update({
+      where: { id: organizationId },
+      data: { emailDomain: domain },
+    });
+    return { emailDomain: organization.emailDomain };
   }
 
   async listRequests(
@@ -185,6 +217,45 @@ export class OrganizationsService {
         data: { status: 'APPROVED', resolvedAt: new Date() },
       }),
     ]);
+
+    const hasTeacherProfile =
+      request.role === 'TEACHER' &&
+      (request.photoUrl ||
+        request.ssnEncrypted ||
+        request.phone ||
+        request.street ||
+        request.city ||
+        request.nationality ||
+        request.personalEmail ||
+        request.dateOfBirth ||
+        request.emergencyContactName);
+
+    if (hasTeacherProfile) {
+      await this.prisma.$transaction([
+        this.prisma.teacherProfile.upsert({
+          where: { teacherId: user.id },
+          create: {
+            teacherId: user.id,
+            ssnEncrypted: request.ssnEncrypted,
+            ssnTail4: request.ssnTail4,
+            phone: request.phone,
+            street: request.street,
+            city: request.city,
+            nationality: request.nationality,
+            personalEmail: request.personalEmail,
+            dateOfBirth: request.dateOfBirth,
+            emergencyContactName: request.emergencyContactName,
+            emergencyContactPhone: request.emergencyContactPhone,
+            emergencyContactRelationship: request.emergencyContactRelationship,
+          },
+          update: {},
+        }),
+        this.prisma.user.update({
+          where: { id: user.id },
+          data: { avatarUrl: request.photoUrl ?? null },
+        }),
+      ]);
+    }
 
     return {
       id: user.id,

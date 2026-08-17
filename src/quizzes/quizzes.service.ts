@@ -3,6 +3,8 @@ import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { QuizzesGradingService } from './quizzes-grading.service';
 import { QuizGenerationAgent } from './agents/quiz-generation.agent';
+import { MaterialsService } from '../materials/materials.service';
+import { type QuizAgentStep } from './dto';
 import { ApiError } from '../common/errors/api-error';
 import { ErrorCode } from '../common/errors/codes';
 
@@ -15,6 +17,55 @@ function toViolations(value: Prisma.JsonValue | null): ViolationRecord[] {
   return value as ViolationRecord[];
 }
 
+type AssignmentInput = {
+  courseOfferingId: string;
+  targetStudentIds?: string[];
+};
+
+const ASSIGNMENTS_INCLUDE = {
+  assignments: {
+    include: {
+      offering: {
+        include: {
+          course: true,
+          section: { include: { gradeLevel: true } },
+          teacher: true,
+        },
+      },
+    },
+  },
+} satisfies Prisma.QuizInclude;
+
+function mapAssignments(quiz: {
+  assignments: {
+    id: string;
+    courseOfferingId: string;
+    targetStudentIds: string[];
+    offering: {
+      course: { id: string; name: string };
+      section: {
+        id: string;
+        name: string;
+        gradeLevel: { id: string; name: string | null };
+      };
+      teacher: { id: string } | null;
+    };
+  }[];
+}) {
+  return quiz.assignments.map((a) => ({
+    id: a.id,
+    courseOfferingId: a.courseOfferingId,
+    sectionId: a.offering.section.id,
+    sectionName: a.offering.section.name,
+    courseId: a.offering.course.id,
+    courseName: a.offering.course.name,
+    gradeLevelId: a.offering.section.gradeLevel.id,
+    gradeLevelName: a.offering.section.gradeLevel.name,
+    teacherId: a.offering.teacher?.id ?? null,
+    targetStudentIds: a.targetStudentIds,
+  }));
+}
+
 @Injectable()
 export class QuizzesService {
   private readonly logger = new Logger(QuizzesService.name);
@@ -23,28 +74,105 @@ export class QuizzesService {
     private readonly prisma: PrismaService,
     private readonly gradingService: QuizzesGradingService,
     private readonly generationAgent: QuizGenerationAgent,
+    private readonly materialsService: MaterialsService,
   ) {}
 
   // ─── AI Generation ────────────────────────────────────
-  async generate(params: {
+  async generate(
+    params: {
+      courseId: string;
+      assignments: AssignmentInput[];
+      teacherId: string;
+      chapterId?: string | null;
+      questionCount?: number;
+      types?: ('MCQ' | 'TRUE_FALSE' | 'SHORT_ANSWER' | 'ESSAY')[];
+      difficulty?: 'EASY' | 'MEDIUM' | 'HARD';
+      timeLimit: number;
+      endsAt: string;
+    },
+    onStep?: (step: QuizAgentStep) => void,
+  ) {
+    return this.generationAgent.generate(params, onStep);
+  }
+
+  /**
+   * Internal path used by automated flows (e.g. struggle signals) that have a
+   * weak-concept string but no teacher-chosen unit. The concept is used ONLY
+   * to resolve the best-matching unit; the quiz is then generated strictly
+   * from that unit's material — never from the concept string itself.
+   */
+  async generateForConcept(params: {
+    courseId: string;
     courseOfferingId: string;
+    studentId: string;
+    concept: string;
     teacherId: string;
-    topic?: string;
-    questionCount?: number;
-    types?: ('MCQ' | 'TRUE_FALSE' | 'SHORT_ANSWER' | 'ESSAY')[];
-    difficulty?: 'EASY' | 'MEDIUM' | 'HARD';
   }) {
-    return this.generationAgent.generate(params);
+    const chunks = await this.materialsService.searchChunksByCourse(
+      params.courseId,
+      params.concept,
+      5,
+    );
+    let chapterId = chunks.find((c) => c.chapterId)?.chapterId ?? null;
+    if (!chapterId) {
+      // The concept embedding may not rank above the threshold even when the
+      // course has material. Fall back to matching the concept against the
+      // course's units by title so a unit can still be resolved.
+      const chapters = await this.materialsService.listChaptersWithMaterial(
+        params.courseId,
+      );
+      const conceptWords = params.concept
+        .toLowerCase()
+        .split(/\W+/)
+        .filter(Boolean);
+      let bestScore = 0;
+      for (const chapter of chapters) {
+        const title = chapter.title.toLowerCase();
+        const score = conceptWords.reduce(
+          (acc, w) => acc + (title.includes(w) ? 1 : 0),
+          0,
+        );
+        if (score > bestScore) {
+          bestScore = score;
+          chapterId = chapter.id;
+        }
+      }
+    }
+    if (!chapterId) {
+      throw new ApiError(
+        ErrorCode.STRUGGLE_GENERATION_FAILED,
+        HttpStatus.UNPROCESSABLE_ENTITY,
+        'The follow-up quiz could not be generated for this concept. Organize the course material into units first.',
+      );
+    }
+    return this.generationAgent.generate({
+      courseId: params.courseId,
+      assignments: [
+        {
+          courseOfferingId: params.courseOfferingId,
+          targetStudentIds: [params.studentId],
+        },
+      ],
+      teacherId: params.teacherId,
+      chapterId,
+      questionCount: 5,
+      types: ['MCQ', 'TRUE_FALSE'],
+      difficulty: 'MEDIUM',
+      timeLimit: 15,
+      endsAt: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString(),
+    });
   }
 
   // ─── CRUD ─────────────────────────────────────────────
   async create(data: {
     title: string;
     description?: string;
-    courseOfferingId: string;
+    assignments: AssignmentInput[];
     teacherId: string;
-    timeLimit?: number;
+    timeLimit: number;
     passingScore?: number;
+    difficulty?: 'EASY' | 'MEDIUM' | 'HARD';
+    endsAt: string;
     questions: {
       type: 'MCQ' | 'TRUE_FALSE' | 'SHORT_ANSWER' | 'ESSAY';
       question: string;
@@ -57,10 +185,11 @@ export class QuizzesService {
       data: {
         title: data.title,
         description: data.description ?? null,
-        courseOfferingId: data.courseOfferingId,
         teacherId: data.teacherId,
-        timeLimit: data.timeLimit ?? null,
+        timeLimit: data.timeLimit,
         passingScore: data.passingScore ?? null,
+        difficulty: data.difficulty ?? 'MEDIUM',
+        endsAt: new Date(data.endsAt),
         questions: {
           create: data.questions.map((q) => ({
             type: q.type,
@@ -70,21 +199,43 @@ export class QuizzesService {
             order: q.order,
           })),
         },
+        assignments: {
+          create: data.assignments.map((a) => ({
+            courseOfferingId: a.courseOfferingId,
+            targetStudentIds: a.targetStudentIds ?? [],
+          })),
+        },
       },
-      include: { questions: { orderBy: { order: 'asc' } } },
+      include: {
+        questions: { orderBy: { order: 'asc' } },
+        assignments: ASSIGNMENTS_INCLUDE.assignments,
+      },
     });
 
     return quiz;
   }
 
-  async findAll(courseOfferingId?: string, teacherId?: string) {
+  async findAll(opts: {
+    courseOfferingId?: string;
+    teacherId?: string;
+    studentId?: string;
+  }) {
+    if (opts.studentId) {
+      return this.findAllForStudent(opts.studentId);
+    }
+
     const where: Prisma.QuizWhereInput = {};
-    if (courseOfferingId) where.courseOfferingId = courseOfferingId;
-    if (teacherId) where.teacherId = teacherId;
+    if (opts.teacherId) where.teacherId = opts.teacherId;
+    if (opts.courseOfferingId) {
+      where.assignments = { some: { courseOfferingId: opts.courseOfferingId } };
+    }
 
     const quizzes = await this.prisma.quiz.findMany({
       where,
-      include: { _count: { select: { questions: true } } },
+      include: {
+        _count: { select: { questions: true } },
+        ...ASSIGNMENTS_INCLUDE,
+      },
       orderBy: { createdAt: 'desc' },
     });
 
@@ -92,10 +243,12 @@ export class QuizzesService {
       id: q.id,
       title: q.title,
       description: q.description,
-      courseOfferingId: q.courseOfferingId,
+      assignments: mapAssignments(q),
       teacherId: q.teacherId,
       timeLimit: q.timeLimit,
       passingScore: q.passingScore,
+      difficulty: q.difficulty,
+      endsAt: q.endsAt?.toISOString() ?? null,
       status: q.status,
       questionCount: q._count.questions,
       createdAt: q.createdAt.toISOString(),
@@ -103,11 +256,77 @@ export class QuizzesService {
     }));
   }
 
-  async findOne(id: string, studentView = false) {
+  /**
+   * Student view: only PUBLISHED quizzes that are assigned to them, either
+   * because an assignment targets them explicitly (struggle-signal dispatch)
+   * or because an assignment covers their section and they are APPROVED-
+   * enrolled in it. Closed (endsAt in the past) quizzes are hidden.
+   */
+  private async findAllForStudent(studentId: string) {
+    const now = new Date();
+    const quizzes = await this.prisma.quiz.findMany({
+      where: {
+        status: 'PUBLISHED',
+        OR: [{ endsAt: null }, { endsAt: { gt: now } }],
+        assignments: {
+          some: {
+            OR: [
+              {
+                targetStudentIds: { isEmpty: true },
+                offering: {
+                  section: {
+                    enrollments: { some: { studentId, status: 'APPROVED' } },
+                  },
+                },
+              },
+              { targetStudentIds: { has: studentId } },
+            ],
+          },
+        },
+      },
+      include: {
+        _count: { select: { questions: true } },
+        ...ASSIGNMENTS_INCLUDE,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const attempts = await this.prisma.quizAttempt.findMany({
+      where: { studentId, quizId: { in: quizzes.map((q) => q.id) } },
+      select: { quizId: true, id: true, status: true },
+    });
+    const attemptByQuiz = new Map(
+      attempts.map((a) => [
+        a.quizId,
+        { attemptStatus: a.status, attemptId: a.id },
+      ]),
+    );
+
+    return quizzes.map((q) => ({
+      id: q.id,
+      title: q.title,
+      description: q.description,
+      assignments: mapAssignments(q),
+      teacherId: q.teacherId,
+      timeLimit: q.timeLimit,
+      passingScore: q.passingScore,
+      difficulty: q.difficulty,
+      source: q.source,
+      endsAt: q.endsAt?.toISOString() ?? null,
+      status: q.status,
+      questionCount: q._count.questions,
+      createdAt: q.createdAt.toISOString(),
+      updatedAt: q.updatedAt.toISOString(),
+      ...attemptByQuiz.get(q.id),
+    }));
+  }
+
+  async findOne(id: string, studentView = false, studentId?: string) {
     const quiz = await this.prisma.quiz.findUnique({
       where: { id },
       include: {
         questions: { orderBy: { order: 'asc' } },
+        ...ASSIGNMENTS_INCLUDE,
       },
     });
 
@@ -120,8 +339,16 @@ export class QuizzesService {
     }
 
     if (studentView) {
+      if (!(await this.isStudentEligible(id, studentId ?? ''))) {
+        throw new ApiError(
+          ErrorCode.QUIZ_NOT_FOUND,
+          HttpStatus.NOT_FOUND,
+          'This quiz could not be found.',
+        );
+      }
       return {
         ...quiz,
+        assignments: mapAssignments(quiz),
         questions: quiz.questions.map((q) => ({
           id: q.id,
           type: q.type,
@@ -135,6 +362,7 @@ export class QuizzesService {
           points: q.points,
           order: q.order,
         })),
+        endsAt: quiz.endsAt?.toISOString() ?? null,
         createdAt: quiz.createdAt.toISOString(),
         updatedAt: quiz.updatedAt.toISOString(),
       };
@@ -142,9 +370,38 @@ export class QuizzesService {
 
     return {
       ...quiz,
+      assignments: mapAssignments(quiz),
+      endsAt: quiz.endsAt?.toISOString() ?? null,
       createdAt: quiz.createdAt.toISOString(),
       updatedAt: quiz.updatedAt.toISOString(),
     };
+  }
+
+  /**
+   * A student may see/attempt a quiz when at least one assignment covers them:
+   * - targeted assignment whose targetStudentIds contains the student, or
+   * - section-wide assignment where the student is APPROVED-enrolled in the
+   *   offering's section.
+   */
+  private async isStudentEligible(quizId: string, studentId: string) {
+    const assignment = await this.prisma.quizAssignment.findFirst({
+      where: {
+        quizId,
+        OR: [
+          {
+            targetStudentIds: { isEmpty: true },
+            offering: {
+              section: {
+                enrollments: { some: { studentId, status: 'APPROVED' } },
+              },
+            },
+          },
+          { targetStudentIds: { has: studentId } },
+        ],
+      },
+      select: { id: true },
+    });
+    return assignment !== null;
   }
 
   async update(
@@ -154,6 +411,8 @@ export class QuizzesService {
       description?: string;
       timeLimit?: number | null;
       passingScore?: number | null;
+      difficulty?: 'EASY' | 'MEDIUM' | 'HARD';
+      endsAt?: string | null;
       status?: 'DRAFT' | 'PUBLISHED' | 'CLOSED';
       questions?: {
         type: 'MCQ' | 'TRUE_FALSE' | 'SHORT_ANSWER' | 'ESSAY';
@@ -183,6 +442,13 @@ export class QuizzesService {
             description: data.description,
             timeLimit: data.timeLimit ?? null,
             passingScore: data.passingScore ?? null,
+            difficulty: data.difficulty,
+            endsAt:
+              data.endsAt !== undefined
+                ? data.endsAt
+                  ? new Date(data.endsAt)
+                  : null
+                : undefined,
             status: data.status,
             questions: {
               create: data.questions.map((q) => ({
@@ -204,6 +470,13 @@ export class QuizzesService {
           description: data.description,
           timeLimit: data.timeLimit ?? null,
           passingScore: data.passingScore ?? null,
+          difficulty: data.difficulty,
+          endsAt:
+            data.endsAt !== undefined
+              ? data.endsAt
+                ? new Date(data.endsAt)
+                : null
+              : undefined,
           status: data.status,
         },
       });
@@ -247,6 +520,45 @@ export class QuizzesService {
     await this.prisma.quiz.delete({ where: { id } });
   }
 
+  // ─── Assignment management (multi-section reuse) ─────
+  async addAssignments(id: string, assignments: AssignmentInput[]) {
+    const quiz = await this.prisma.quiz.findUnique({ where: { id } });
+    if (!quiz) {
+      throw new ApiError(
+        ErrorCode.QUIZ_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This quiz could not be found.',
+      );
+    }
+
+    await this.prisma.quizAssignment.createMany({
+      data: assignments.map((a) => ({
+        quizId: id,
+        courseOfferingId: a.courseOfferingId,
+        targetStudentIds: a.targetStudentIds ?? [],
+      })),
+      skipDuplicates: true,
+    });
+
+    return this.findOne(id);
+  }
+
+  async removeAssignment(assignmentId: string) {
+    const assignment = await this.prisma.quizAssignment.findUnique({
+      where: { id: assignmentId },
+    });
+    if (!assignment) {
+      throw new ApiError(
+        ErrorCode.QUIZ_ASSIGNMENT_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This quiz assignment could not be found.',
+      );
+    }
+
+    await this.prisma.quizAssignment.delete({ where: { id: assignmentId } });
+    return this.findOne(assignment.quizId);
+  }
+
   // ─── Attempts ─────────────────────────────────────────
   async startAttempt(quizId: string, studentId: string) {
     const quiz = await this.prisma.quiz.findUnique({ where: { id: quizId } });
@@ -263,6 +575,21 @@ export class QuizzesService {
         HttpStatus.BAD_REQUEST,
         'This quiz is not published yet.',
       );
+    if (quiz.endsAt && quiz.endsAt.getTime() < Date.now())
+      throw new ApiError(
+        ErrorCode.QUIZ_CLOSED,
+        HttpStatus.BAD_REQUEST,
+        'This quiz has closed.',
+      );
+    // A quiz is only attemptable when it is actually assigned to this student
+    // (targeted explicitly or via an enrolled section).
+    if (!(await this.isStudentEligible(quizId, studentId))) {
+      throw new ApiError(
+        ErrorCode.QUIZ_FORBIDDEN,
+        HttpStatus.FORBIDDEN,
+        'This quiz is not assigned to you.',
+      );
+    }
 
     const existing = await this.prisma.quizAttempt.findUnique({
       where: { quizId_studentId: { quizId, studentId } },
@@ -500,6 +827,7 @@ export class QuizzesService {
       quizId: attempt.quizId,
       quiz: {
         ...attempt.quiz,
+        endsAt: attempt.quiz.endsAt?.toISOString() ?? null,
         createdAt: attempt.quiz.createdAt.toISOString(),
         updatedAt: attempt.quiz.updatedAt.toISOString(),
       },

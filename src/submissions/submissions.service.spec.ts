@@ -221,36 +221,144 @@ describe('SubmissionsService', () => {
   });
 
   describe('findAll', () => {
-    it('should return submissions with student and scores', async () => {
+    const teacherUser = { id: 'teacher-1', organizationId };
+
+    it('should return the teacher-scoped submissions with student, assignment, offering, and scores', async () => {
       const mockSubmissions = [
-        { id: '1', student: {}, scores: [] },
-        { id: '2', student: {}, scores: [] },
+        { id: '1', student: {}, assignment: {}, scores: [] },
+        { id: '2', student: {}, assignment: {}, scores: [] },
       ];
       mockPrisma.submission.findMany.mockResolvedValue(mockSubmissions);
 
-      const result = await service.findAll(
-        undefined,
-        undefined,
-        organizationId,
-      );
+      const result = await service.findAll({}, teacherUser);
       expect(result).toEqual(mockSubmissions);
       expect(mockPrisma.submission.findMany).toHaveBeenCalledWith({
-        where: { assignment: { offering: { organizationId } } },
-        include: { student: true, scores: { include: { criteria: true } } },
+        where: {
+          assignment: {
+            offering: { organizationId, teacherId: 'teacher-1' },
+          },
+        },
+        include: {
+          student: true,
+          assignment: {
+            include: {
+              offering: { include: { course: true, section: true } },
+            },
+          },
+          scores: { include: { criteria: true } },
+        },
+        orderBy: { createdAt: 'desc' },
       });
     });
 
     it('should filter by status and assignmentId', async () => {
       mockPrisma.submission.findMany.mockResolvedValue([]);
-      await service.findAll('SUBMITTED', 'assignment-id', organizationId);
+      await service.findAll(
+        { status: 'SUBMITTED', assignmentId: 'assignment-id' },
+        teacherUser,
+      );
 
       expect(mockPrisma.submission.findMany).toHaveBeenCalledWith({
         where: {
           status: 'SUBMITTED',
           assignmentId: 'assignment-id',
-          assignment: { offering: { organizationId } },
+          assignment: {
+            offering: { organizationId, teacherId: 'teacher-1' },
+          },
         },
-        include: { student: true, scores: { include: { criteria: true } } },
+        include: {
+          student: true,
+          assignment: {
+            include: {
+              offering: { include: { course: true, section: true } },
+            },
+          },
+          scores: { include: { criteria: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+    });
+
+    it('should filter by courseId inside the offering scope', async () => {
+      mockPrisma.submission.findMany.mockResolvedValue([]);
+      await service.findAll({ courseId: 'course-1' }, teacherUser);
+
+      expect(mockPrisma.submission.findMany).toHaveBeenCalledWith({
+        where: {
+          assignment: {
+            offering: {
+              organizationId,
+              teacherId: 'teacher-1',
+              courseId: 'course-1',
+            },
+          },
+        },
+        include: {
+          student: true,
+          assignment: {
+            include: {
+              offering: { include: { course: true, section: true } },
+            },
+          },
+          scores: { include: { criteria: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+    });
+
+    it('should filter by offeringId without dropping the teacher scope', async () => {
+      mockPrisma.submission.findMany.mockResolvedValue([]);
+      await service.findAll({ offeringId: 'offering-1' }, teacherUser);
+
+      expect(mockPrisma.submission.findMany).toHaveBeenCalledWith({
+        where: {
+          assignment: {
+            courseOfferingId: 'offering-1',
+            offering: {
+              organizationId,
+              teacherId: 'teacher-1',
+            },
+          },
+        },
+        include: {
+          student: true,
+          assignment: {
+            include: {
+              offering: { include: { course: true, section: true } },
+            },
+          },
+          scores: { include: { criteria: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+    });
+
+    it('should search by student name or email (case-insensitive)', async () => {
+      mockPrisma.submission.findMany.mockResolvedValue([]);
+      await service.findAll({ q: 'sara' }, teacherUser);
+
+      expect(mockPrisma.submission.findMany).toHaveBeenCalledWith({
+        where: {
+          assignment: {
+            offering: { organizationId, teacherId: 'teacher-1' },
+          },
+          student: {
+            OR: [
+              { name: { contains: 'sara', mode: 'insensitive' } },
+              { email: { contains: 'sara', mode: 'insensitive' } },
+            ],
+          },
+        },
+        include: {
+          student: true,
+          assignment: {
+            include: {
+              offering: { include: { course: true, section: true } },
+            },
+          },
+          scores: { include: { criteria: true } },
+        },
+        orderBy: { createdAt: 'desc' },
       });
     });
   });

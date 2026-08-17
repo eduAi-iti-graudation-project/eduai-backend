@@ -48,6 +48,12 @@ describe('BillingService', () => {
       findUnique: jest.fn(),
       update: jest.fn(),
     },
+    schoolGroup: {
+      update: jest.fn().mockResolvedValue({ id: 'group-1' }),
+    },
+    user: {
+      count: jest.fn(),
+    },
   };
 
   const originalPrices = {
@@ -105,6 +111,7 @@ describe('BillingService', () => {
 
     expect(mockPrisma.organization.findUnique).toHaveBeenCalledWith({
       where: { id: 'org-1' },
+      include: { group: true },
     });
     expect(mockStripe.customers.create).not.toHaveBeenCalled();
     expect(mockStripe.checkout.sessions.create).toHaveBeenCalledWith({
@@ -113,7 +120,11 @@ describe('BillingService', () => {
       line_items: [{ price: 'price_basic', quantity: 1 }],
       success_url: input.successUrl,
       cancel_url: input.cancelUrl,
-      metadata: { organizationId: 'org-1', planId: 'basic' },
+      metadata: {
+        organizationId: 'org-1',
+        planId: 'basic',
+        groupId: null,
+      },
     });
     expect(result).toEqual({ url: 'https://checkout.stripe.com/pay/cs_1' });
   });
@@ -354,6 +365,272 @@ describe('BillingService', () => {
 
       await expectApiError(
         service.createBillingPortalSession(portalInput),
+        ErrorCode.ORG_NOT_FOUND,
+        404,
+      );
+    });
+  });
+
+  describe('SchoolGroup resolution (WP5)', () => {
+    const groupedOrg = {
+      id: 'org-1',
+      name: 'Demo School',
+      stripeCustomerId: null,
+      stripeSubscriptionId: null,
+      groupId: 'group-1',
+      group: {
+        id: 'group-1',
+        name: 'Edu Chain',
+        stripeCustomerId: 'cus_group',
+        stripeSubscriptionId: 'sub_group',
+      },
+    };
+
+    function mockSchoolGroupUpdate() {
+      return mockPrisma.schoolGroup.update;
+    }
+
+    it('rejects a non-Enterprise checkout for a grouped school', async () => {
+      mockPrisma.organization.findUnique.mockResolvedValue(groupedOrg);
+
+      await expectApiError(
+        service.createCheckoutSession(input),
+        ErrorCode.GROUP_REQUIRES_ENTERPRISE,
+        403,
+      );
+      expect(mockStripe.checkout.sessions.create).not.toHaveBeenCalled();
+    });
+
+    it('uses the group customer for checkout and never persists to the org', async () => {
+      mockPrisma.organization.findUnique.mockResolvedValue(groupedOrg);
+      mockStripe.checkout.sessions.create.mockResolvedValue({
+        id: 'cs_g',
+        url: 'https://checkout.stripe.com/pay/cs_g',
+      });
+
+      const result = await service.createCheckoutSession({
+        ...input,
+        planId: 'enterprise',
+      });
+
+      expect(mockStripe.checkout.sessions.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          customer: 'cus_group',
+          metadata: {
+            organizationId: 'org-1',
+            planId: 'enterprise',
+            groupId: 'group-1',
+          },
+        }),
+      );
+      expect(mockStripe.customers.create).not.toHaveBeenCalled();
+      expect(result.url).toBe('https://checkout.stripe.com/pay/cs_g');
+    });
+
+    it('persists a new Stripe customer onto the group, not the org', async () => {
+      mockPrisma.organization.findUnique.mockResolvedValue({
+        ...groupedOrg,
+        group: { ...groupedOrg.group, stripeCustomerId: null },
+      });
+      mockStripe.customers.create.mockResolvedValue({ id: 'cus_new' });
+      const update = mockSchoolGroupUpdate();
+
+      await service.createBillingPortalSession({
+        organizationId: 'org-1',
+        returnUrl: 'https://app.example.com/settings',
+      });
+
+      expect(update).toHaveBeenCalledWith({
+        where: { id: 'group-1' },
+        data: { stripeCustomerId: 'cus_new' },
+      });
+    });
+
+    it('changes the plan through the group subscription', async () => {
+      mockPrisma.organization.findUnique.mockResolvedValue({
+        ...groupedOrg,
+        group: { ...groupedOrg.group, stripeSubscriptionId: 'sub_group' },
+      });
+      mockStripe.subscriptions.retrieve.mockResolvedValue({
+        id: 'sub_group',
+        items: { data: [{ id: 'item_g', price: { id: 'price_basic' } }] },
+        status: 'active',
+        cancel_at_period_end: false,
+      });
+      mockStripe.subscriptions.update.mockResolvedValue({
+        id: 'sub_group',
+        status: 'active',
+        cancel_at_period_end: false,
+      });
+
+      await service.changePlan({
+        organizationId: 'org-1',
+        planId: 'enterprise',
+        atPeriodEnd: false,
+      });
+
+      expect(mockStripe.subscriptions.retrieve).toHaveBeenCalledWith(
+        'sub_group',
+      );
+    });
+
+    it('throws GROUP_REQUIRES_ENTERPRISE when a group is downgraded', async () => {
+      mockPrisma.organization.findUnique.mockResolvedValue({
+        ...groupedOrg,
+        group: { ...groupedOrg.group, stripeSubscriptionId: 'sub_group' },
+      });
+
+      await expectApiError(
+        service.changePlan({
+          organizationId: 'org-1',
+          planId: 'basic',
+          atPeriodEnd: false,
+        }),
+        ErrorCode.GROUP_REQUIRES_ENTERPRISE,
+        403,
+      );
+      expect(mockStripe.subscriptions.retrieve).not.toHaveBeenCalled();
+    });
+
+    it('throws BILLING_NO_SUBSCRIPTION when neither the group nor the org has one', async () => {
+      mockPrisma.organization.findUnique.mockResolvedValue({
+        ...groupedOrg,
+        group: { ...groupedOrg.group, stripeSubscriptionId: null },
+        stripeSubscriptionId: null,
+      });
+
+      await expectApiError(
+        service.changePlan({
+          organizationId: 'org-1',
+          planId: 'enterprise',
+          atPeriodEnd: false,
+        }),
+        ErrorCode.BILLING_NO_SUBSCRIPTION,
+        400,
+      );
+    });
+  });
+
+  describe('getPlans', () => {
+    it('returns the public catalog with the agreed matrix', () => {
+      const result = service.getPlans();
+
+      expect(result.trial.days).toBe(14);
+      expect(result.plans.map((plan) => plan.id)).toEqual([
+        'basic',
+        'pro',
+        'enterprise',
+      ]);
+      const byId = Object.fromEntries(
+        result.plans.map((plan) => [plan.id, plan]),
+      );
+      expect(byId.basic.price).toBe(50);
+      expect(byId.basic.seatLimit).toBe(30);
+      expect(byId.pro.price).toBe(120);
+      expect(byId.pro.seatLimit).toBe(100);
+      expect(byId.enterprise.price).toBe(300);
+      expect(byId.enterprise.seatLimit).toBe(500);
+      expect(byId.enterprise.features).toEqual(
+        expect.arrayContaining(byId.pro.features),
+      );
+      expect(byId.basic.features.length).toBeGreaterThan(0);
+      expect(byId.basic.available).toBe(true);
+    });
+
+    it('flags a plan as unavailable when its price is not configured', () => {
+      delete process.env.STRIPE_PRICE_ENTERPRISE;
+
+      const result = service.getPlans();
+      const enterprise = result.plans.find((plan) => plan.id === 'enterprise');
+
+      expect(enterprise?.available).toBe(false);
+    });
+  });
+
+  describe('getBillingStatus', () => {
+    it('returns tier, status, seats and trial end for a lone org', async () => {
+      const createdAt = new Date('2026-08-01T00:00:00.000Z');
+      mockPrisma.organization.findUnique.mockResolvedValue({
+        id: 'org-1',
+        name: 'Demo School',
+        subscriptionTier: 'TRIAL',
+        subscriptionStatus: 'TRIALING',
+        seatLimit: null,
+        createdAt,
+        group: null,
+      });
+      mockPrisma.user.count.mockResolvedValue(12);
+
+      const result = await service.getBillingStatus('org-1');
+
+      expect(result.tier).toBe('TRIAL');
+      expect(result.status).toBe('TRIALING');
+      expect(result.seatLimit).toBeNull();
+      expect(result.seatUsage).toBe(12);
+      expect(result.planId).toBeNull();
+      expect(result.trialEndsAt).toBe('2026-08-15T00:00:00.000Z');
+      expect(mockPrisma.user.count).toHaveBeenCalledWith({
+        where: { organizationId: 'org-1' },
+      });
+    });
+
+    it('returns no trialEndsAt for an active subscription', async () => {
+      mockPrisma.organization.findUnique.mockResolvedValue({
+        id: 'org-1',
+        name: 'Demo School',
+        subscriptionTier: 'PRO',
+        subscriptionStatus: 'ACTIVE',
+        seatLimit: 100,
+        createdAt: new Date('2026-08-01T00:00:00.000Z'),
+        group: null,
+      });
+      mockPrisma.user.count.mockResolvedValue(42);
+
+      const result = await service.getBillingStatus('org-1');
+
+      expect(result.planId).toBe('pro');
+      expect(result.seatLimit).toBe(100);
+      expect(result.seatUsage).toBe(42);
+      expect(result.trialEndsAt).toBeNull();
+    });
+
+    it('counts seats across every school in a SchoolGroup', async () => {
+      mockPrisma.organization.findUnique.mockResolvedValue({
+        id: 'org-1',
+        name: 'Demo School',
+        subscriptionTier: 'BASIC',
+        subscriptionStatus: 'ACTIVE',
+        seatLimit: 30,
+        createdAt: new Date('2026-08-01T00:00:00.000Z'),
+        group: {
+          id: 'group-1',
+          name: 'Edu Chain',
+          subscriptionTier: 'PRO',
+          subscriptionStatus: 'ACTIVE',
+          seatLimit: 100,
+          createdAt: new Date('2026-08-01T00:00:00.000Z'),
+          organizations: [{ id: 'org-1' }, { id: 'org-2' }],
+        },
+      });
+      mockPrisma.user.count.mockResolvedValue(77);
+
+      const result = await service.getBillingStatus('org-1');
+
+      expect(result.tier).toBe('PRO');
+      expect(result.planId).toBe('pro');
+      expect(result.seatLimit).toBeNull();
+      expect(result.availablePlans.plans).toHaveLength(1);
+      expect(result.availablePlans.plans[0].id).toBe('enterprise');
+      expect(mockPrisma.user.count).toHaveBeenCalledWith({
+        where: { organizationId: { in: ['org-1', 'org-2'] } },
+      });
+    });
+
+    it('throws NotFound for a missing organization', async () => {
+      mockPrisma.organization.findUnique.mockResolvedValue(null);
+
+      await expectApiError(
+        service.getBillingStatus('nope'),
         ErrorCode.ORG_NOT_FOUND,
         404,
       );

@@ -4,6 +4,7 @@ import { PiiService } from '../pii/pii.service';
 import { ProviderService } from '../ai/provider.service';
 import { ValidationError } from '../validation/retry-once';
 import { z } from 'zod';
+import { GeneratedAssignmentSchema } from '../../assignments/dto';
 
 const mockHfEmbed = jest.fn().mockResolvedValue(new Array(1024).fill(0.1));
 const mockChat = jest
@@ -56,6 +57,41 @@ describe('LlmService', () => {
       expect(Array.isArray(result)).toBe(true);
       expect(result).toHaveLength(1024);
       expect(result[0]).toBe(0.1);
+    });
+  });
+
+  describe('chat', () => {
+    it('should redact, call the provider, and restore', async () => {
+      mockRedact.mockImplementation((text: string) => ({
+        redacted: text.replace('Jane Doe', '[REDACTED_0]'),
+        replacements: new Map([['[REDACTED_0]', 'Jane Doe']]),
+      }));
+      mockRestore.mockImplementation((text: string) =>
+        text.replace('[REDACTED_0]', 'Jane Doe'),
+      );
+      mockChat.mockResolvedValueOnce('Hello [REDACTED_0], here is help');
+
+      const result = await service.chat('You help Jane Doe', 'Hi Jane Doe');
+
+      expect(mockRedact).toHaveBeenCalled();
+      expect(mockChat).toHaveBeenCalled();
+      expect(result).toBe('Hello Jane Doe, here is help');
+      expect(result).not.toContain('[REDACTED_0]');
+      expect(result).toContain('Jane Doe');
+    });
+
+    it('should pass text through untouched when nothing is redacted', async () => {
+      mockRedact.mockImplementation((text: string) => ({
+        redacted: text,
+        replacements: new Map(),
+      }));
+      mockRestore.mockImplementation((text: string) => text);
+      mockChat.mockResolvedValueOnce('plain reply');
+
+      const result = await service.chat('system', 'user');
+
+      expect(result).toBe('plain reply');
+      expect(mockRestore).not.toHaveBeenCalled();
     });
   });
 
@@ -141,10 +177,12 @@ describe('LlmService', () => {
       ).rejects.toThrow(ValidationError);
     });
 
-    it('should retry 3 times total before succeeding on last attempt', async () => {
+    it('should retry 5 times total before succeeding on last attempt', async () => {
       mockChat
         .mockResolvedValueOnce('not json')
         .mockResolvedValueOnce('also not json')
+        .mockResolvedValueOnce('still not json')
+        .mockResolvedValueOnce('almost not json')
         .mockResolvedValueOnce(JSON.stringify({ name: 'retried', score: 90 }));
 
       const result = await service.generateStructured({
@@ -153,8 +191,27 @@ describe('LlmService', () => {
         schema,
       });
 
-      expect(mockChat).toHaveBeenCalledTimes(3);
+      expect(mockChat).toHaveBeenCalledTimes(5);
       expect(result).toEqual({ name: 'retried', score: 90 });
+    });
+
+    it('should retry and then fail cleanly on a malformed assignment draft (no invented fallback)', async () => {
+      mockChat
+        .mockResolvedValueOnce('not json')
+        .mockResolvedValueOnce('also not json')
+        .mockResolvedValueOnce('definitely not json')
+        .mockResolvedValueOnce('still not json')
+        .mockResolvedValueOnce('almost not json');
+
+      await expect(
+        service.generateStructured({
+          systemPrompt: 'Test',
+          userPrompt: 'Test',
+          schema: GeneratedAssignmentSchema,
+        }),
+      ).rejects.toThrow(ValidationError);
+
+      expect(mockChat).toHaveBeenCalledTimes(5);
     });
   });
 });

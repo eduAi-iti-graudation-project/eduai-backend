@@ -6,10 +6,9 @@ import {
   Delete,
   Param,
   Body,
+  Query,
   UploadedFile,
   UseInterceptors,
-  Res,
-  HttpStatus,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -18,59 +17,124 @@ import {
   ApiBody,
   ApiConsumes,
   ApiParam,
+  ApiQuery,
 } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
-import type { Response } from 'express';
 import { StudentsService } from './students.service';
+import type { User } from '@prisma/client';
 import {
   GradeDto,
   UpdateStudentDto,
   CreateDocumentDto,
   CreateFeeDto,
+  LinkGuardianDto,
 } from './dto';
 import { Roles } from '../auth/roles.decorator';
+import { AllowGuardianless } from '../auth/allow-guardianless.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
 @ApiTags('students')
 @Controller('students')
 export class StudentsController {
   constructor(private readonly studentsService: StudentsService) {}
 
+  @Roles('ADMIN')
+  @Get()
+  @ApiOperation({
+    summary: 'List students (optionally only those with no linked guardian)',
+  })
+  @ApiQuery({
+    name: 'withoutGuardian',
+    required: false,
+    type: String,
+    description: 'Set to "true" to list only guardian-less students',
+  })
+  list(
+    @Query('withoutGuardian') withoutGuardian: string | undefined,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.studentsService.listStudents(
+      organizationId,
+      withoutGuardian === 'true',
+    );
+  }
+
+  @Roles('ADMIN')
+  @Get('unassigned')
+  @ApiOperation({
+    summary:
+      'List students with no grade and/or no section — the post-import follow-up queue',
+  })
+  listUnassigned(@CurrentUser('organizationId') organizationId: string) {
+    return this.studentsService.listUnassignedStudents(organizationId);
+  }
+
   @Roles('STUDENT', 'GUARDIAN')
   @Get(':id/grades')
+  @AllowGuardianless()
   @ApiOperation({ summary: 'Get confirmed grades for a student' })
   @ApiOkResponse({ type: GradeDto, isArray: true })
   getGrades(
     @Param('id') id: string,
     @CurrentUser('organizationId') organizationId: string,
+    @CurrentUser() user: User,
   ) {
-    return this.studentsService.getGrades(id, organizationId);
+    return this.studentsService.getGrades(id, organizationId, user);
   }
 
   @Roles('STUDENT', 'GUARDIAN')
   @Get(':id/grades/:submissionId')
+  @AllowGuardianless()
   @ApiOperation({ summary: 'Get confirmed grades for a specific submission' })
   @ApiOkResponse({ type: GradeDto, isArray: true })
   getSubmissionGrades(
     @Param('id') id: string,
     @Param('submissionId') submissionId: string,
     @CurrentUser('organizationId') organizationId: string,
+    @CurrentUser() user: User,
   ) {
     return this.studentsService.getSubmissionGrades(
       id,
       submissionId,
       organizationId,
+      user,
     );
   }
 
   @Roles('STUDENT', 'GUARDIAN')
   @Get(':id/classes')
+  @AllowGuardianless()
   @ApiOperation({ summary: 'Get enrolled classes for a student' })
   getClasses(
     @Param('id') id: string,
     @CurrentUser('organizationId') organizationId: string,
+    @CurrentUser() user: User,
   ) {
-    return this.studentsService.getClasses(id, organizationId);
+    return this.studentsService.getClasses(id, organizationId, user);
+  }
+
+  @Roles('STUDENT', 'GUARDIAN')
+  @Get(':id/courses')
+  @AllowGuardianless()
+  @ApiOperation({ summary: 'Get the courses (offerings) of a student' })
+  getCourses(
+    @Param('id') id: string,
+    @CurrentUser('organizationId') organizationId: string,
+    @CurrentUser() user: User,
+  ) {
+    return this.studentsService.getCourses(id, organizationId, user);
+  }
+
+  @Roles('ADMIN')
+  @Post(':id/credentials/reset')
+  @ApiOperation({
+    summary: 'Email a set-password invite to the student',
+  })
+  resetCredentials(
+    @Param('id') id: string,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.studentsService.resetCredentials(id, organizationId);
   }
 
   @Roles('ADMIN')
@@ -87,19 +151,23 @@ export class StudentsController {
 
   @Roles('ADMIN')
   @Post(':id/guardian')
-  @ApiOperation({ summary: 'Link a guardian to a student' })
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: { guardianId: { type: 'string', format: 'uuid' } },
-    },
+  @ApiOperation({
+    summary:
+      'Link a guardian to a student (existing guardianId, or email + name to create one)',
   })
+  @ApiBody({ type: LinkGuardianDto })
   linkGuardian(
     @Param('id') id: string,
-    @Body('guardianId') guardianId: string,
+    @Body() dto: LinkGuardianDto,
     @CurrentUser('organizationId') organizationId: string,
+    @CurrentUser('id') decidedBy: string,
   ) {
-    return this.studentsService.linkGuardian(id, guardianId, organizationId);
+    return this.studentsService.linkGuardian(
+      id,
+      dto,
+      organizationId,
+      decidedBy,
+    );
   }
 
   @Roles('ADMIN')
@@ -160,10 +228,20 @@ export class StudentsController {
       properties: {
         file: { type: 'string', format: 'binary' },
         title: { type: 'string' },
-        type: { type: 'string' },
+        category: {
+          type: 'string',
+          enum: [
+            'BIRTH_CERTIFICATE',
+            'IMMUNIZATION_RECORD',
+            'PREVIOUS_TRANSCRIPT',
+            'PAYMENT_RECEIPT',
+            'ID_DOCUMENT',
+            'OTHER',
+          ],
+        },
         academicYear: { type: 'string', nullable: true },
       },
-      required: ['file', 'title', 'type'],
+      required: ['file', 'title'],
     },
   })
   createDocument(
@@ -184,28 +262,14 @@ export class StudentsController {
 
   @Roles('ADMIN')
   @Get(':id/documents/:documentId/file')
-  @ApiOperation({ summary: 'Stream a student document file' })
+  @ApiOperation({ summary: 'Get a signed download URL for a student document' })
   @ApiParam({ name: 'documentId', type: 'string' })
   async getDocumentFile(
     @Param('id') id: string,
     @Param('documentId') documentId: string,
     @CurrentUser('organizationId') organizationId: string,
-    @Res() res: Response,
   ) {
-    const doc = await this.studentsService.getDocumentFile(
-      id,
-      documentId,
-      organizationId,
-    );
-    res.setHeader('Content-Type', doc.mimeType ?? 'application/octet-stream');
-    res.setHeader('Content-Disposition', `inline; filename="${doc.fileName}"`);
-    res.sendFile(doc.fileUrl, (err) => {
-      if (err) {
-        res
-          .status(HttpStatus.NOT_FOUND)
-          .send({ error: 'FILE_NOT_FOUND', message: 'File is missing.' });
-      }
-    });
+    return this.studentsService.getDocumentFile(id, documentId, organizationId);
   }
 
   @Roles('ADMIN')

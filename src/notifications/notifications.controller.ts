@@ -1,12 +1,8 @@
-import { Controller, Get, Patch, Param, Query } from '@nestjs/common';
-import {
-  ApiTags,
-  ApiOperation,
-  ApiOkResponse,
-  ApiQuery,
-} from '@nestjs/swagger';
+import { Controller, Get, Patch, Param } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiOkResponse } from '@nestjs/swagger';
 import { NotificationsService } from './notifications.service';
 import { NotificationDto } from './dto';
+import { CurrentUser } from '../auth/current-user.decorator';
 
 @ApiTags('notifications')
 @Controller('notifications')
@@ -15,9 +11,8 @@ export class NotificationsController {
 
   @Get()
   @ApiOperation({ summary: 'List notifications for current user' })
-  @ApiQuery({ name: 'userId', required: false })
   @ApiOkResponse({ type: NotificationDto, isArray: true })
-  findAll(@Query('userId') userId?: string) {
+  findAll(@CurrentUser('id') userId: string) {
     return this.notificationsService.findAll(userId);
   }
 

@@ -15,6 +15,7 @@ describe('AssistantService', () => {
 
   const mockMaterials = {
     searchChunks: jest.fn(),
+    getChunksByOffering: jest.fn(),
   };
 
   const mockPrisma = {
@@ -38,6 +39,7 @@ describe('AssistantService', () => {
     materials = mockMaterials;
 
     jest.clearAllMocks();
+    materials.getChunksByOffering.mockResolvedValue([]);
   });
 
   it('should be defined', () => {
@@ -117,6 +119,7 @@ describe('AssistantService', () => {
         });
 
       materials.searchChunks.mockResolvedValue([]);
+      materials.getChunksByOffering.mockResolvedValue([]);
 
       const result = await service.chat({
         courseOfferingId,
@@ -126,6 +129,70 @@ describe('AssistantService', () => {
 
       expect(result.reply).toContain('quantum physics');
       expect(materials.searchChunks).toHaveBeenCalled();
+      expect(materials.getChunksByOffering).toHaveBeenCalledWith(
+        courseOfferingId,
+        50,
+      );
+    });
+
+    it('should fall back to the class raw chunks when the semantic search is empty', async () => {
+      llm.generateStructured
+        .mockResolvedValueOnce({
+          action: 'search_curriculum',
+          query: 'summarize the course material',
+        })
+        .mockResolvedValueOnce({
+          action: 'summarize_lesson',
+          topic: 'the whole course',
+        });
+
+      materials.searchChunks.mockResolvedValue([]);
+      materials.getChunksByOffering.mockResolvedValue([
+        {
+          id: 'c1',
+          content:
+            'Chapter 1: Cell Biology — the cell is the basic unit of all living organisms.',
+          distance: 0,
+          materialId: 'm1',
+          materialTitle: 'science301-cell-biology',
+        },
+        {
+          id: 'c2',
+          content:
+            'The plasma membrane is a phospholipid bilayer with embedded proteins.',
+          distance: 0,
+          materialId: 'm1',
+          materialTitle: 'science301-cell-biology',
+        },
+      ]);
+
+      llm.generateStructured.mockResolvedValueOnce({
+        title: 'Cell Biology Overview',
+        summary:
+          'The uploaded material covers cell theory, organelles, membranes and microscopy.',
+        keyPoints: [
+          'The cell is the basic unit of life.',
+          'Eukaryotic cells contain membrane-bound organelles.',
+        ],
+      });
+
+      const result = await service.chat({
+        courseOfferingId,
+        messages: [],
+        newMessage: 'Summarize the course material',
+      });
+
+      expect(result.reply).toContain('Cell Biology Overview');
+      expect(materials.searchChunks).toHaveBeenCalledWith(
+        courseOfferingId,
+        'summarize the course material',
+        5,
+      );
+      expect(materials.getChunksByOffering).toHaveBeenCalledWith(
+        courseOfferingId,
+        50,
+      );
+      expect(llm.generateStructured).toHaveBeenCalledTimes(3);
     });
 
     it('should stop after max iterations and return fallback', async () => {
@@ -455,6 +522,82 @@ describe('AssistantService', () => {
       });
 
       expect(result.reply).toContain('no curriculum material');
+      expect(result.lesson).toBeUndefined();
+    });
+
+    it('should append the strict JSON-only output rule to structured sub-prompts', async () => {
+      llm.generateStructured
+        .mockResolvedValueOnce({
+          action: 'search_curriculum',
+          query: 'the water cycle',
+        })
+        .mockResolvedValueOnce({
+          action: 'summarize_lesson',
+          topic: 'the water cycle',
+        })
+        .mockResolvedValueOnce({
+          title: 'The Water Cycle',
+          summary: 'Water moves between the atmosphere, land, and ocean.',
+          keyPoints: ['Evaporation', 'Condensation', 'Precipitation'],
+        });
+
+      materials.searchChunks.mockResolvedValue([
+        {
+          id: 'c1',
+          content: 'The water cycle describes evaporation and condensation.',
+          distance: 0.1,
+          materialId: 'm1',
+          materialTitle: 'Science Chapter 3',
+        },
+      ]);
+
+      await service.chat({
+        courseOfferingId,
+        messages: [],
+        newMessage: 'Summarize the water cycle lesson',
+      });
+
+      const genMock = llm.generateStructured as any as jest.Mock<
+        Promise<Record<string, unknown>>,
+        [{ systemPrompt: string; userPrompt: string }]
+      >;
+      const summarizeCall = genMock.mock.calls[2];
+      const systemPrompt = summarizeCall[0].systemPrompt;
+
+      expect(systemPrompt).toContain('ONLY a single valid JSON object');
+      expect(systemPrompt).toContain('"keyPoints"');
+      expect(systemPrompt).toContain('Expected JSON schema:');
+    });
+
+    it('should return a graceful reply instead of throwing when a structured sub-call fails', async () => {
+      llm.generateStructured
+        .mockResolvedValueOnce({
+          action: 'search_curriculum',
+          query: 'the water cycle',
+        })
+        .mockResolvedValueOnce({
+          action: 'summarize_lesson',
+          topic: 'the water cycle',
+        })
+        .mockRejectedValueOnce(new Error('Validation failed after retry'));
+
+      materials.searchChunks.mockResolvedValue([
+        {
+          id: 'c1',
+          content: 'The water cycle describes evaporation and condensation.',
+          distance: 0.1,
+          materialId: 'm1',
+          materialTitle: 'Science Chapter 3',
+        },
+      ]);
+
+      const result = await service.chat({
+        courseOfferingId,
+        messages: [],
+        newMessage: 'Summarize the water cycle lesson',
+      });
+
+      expect(result.reply).toContain('hit a snag');
       expect(result.lesson).toBeUndefined();
     });
 

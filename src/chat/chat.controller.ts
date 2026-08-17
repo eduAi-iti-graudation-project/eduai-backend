@@ -2,7 +2,12 @@ import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import type { User } from '@prisma/client';
 import { ChatService } from './chat.service';
-import { CreateThreadDto, GetMessagesQueryDto, SendMessageDto } from './dto';
+import {
+  CreateThreadDto,
+  CreateAdminThreadDto,
+  GetMessagesQueryDto,
+  SendMessageDto,
+} from './dto';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { Roles } from '../auth/roles.decorator';
 import { RequiresTier } from '../auth/requires-tier.decorator';
@@ -14,7 +19,7 @@ export class ChatController {
   constructor(private readonly chatService: ChatService) {}
 
   @Get('threads')
-  @Roles('TEACHER', 'STUDENT')
+  @Roles('TEACHER', 'STUDENT', 'GUARDIAN', 'ADMIN')
   @ApiOperation({ summary: 'List the current user chat threads' })
   listThreads(@CurrentUser() user: User) {
     return this.chatService.listThreads(user);
@@ -34,8 +39,25 @@ export class ChatController {
     );
   }
 
+  @Post('threads/admin')
+  @Roles('ADMIN')
+  @ApiOperation({
+    summary:
+      'Create or get an admin chat thread with a teacher or guardian (admin only)',
+  })
+  createAdminThread(
+    @CurrentUser() user: User,
+    @Body() dto: CreateAdminThreadDto,
+  ) {
+    return this.chatService.createAdminThreadOrGet(
+      user,
+      dto.peerId,
+      dto.peerRole,
+    );
+  }
+
   @Get('threads/:threadId/messages')
-  @Roles('TEACHER', 'STUDENT')
+  @Roles('TEACHER', 'STUDENT', 'GUARDIAN', 'ADMIN')
   @ApiOperation({ summary: 'Get chat messages in a thread (cursor paginated)' })
   getMessages(
     @Param('threadId') threadId: string,
@@ -51,7 +73,7 @@ export class ChatController {
   }
 
   @Post('threads/:threadId/messages')
-  @Roles('TEACHER', 'STUDENT')
+  @Roles('TEACHER', 'STUDENT', 'GUARDIAN', 'ADMIN')
   @ApiOperation({ summary: 'Send a chat message (REST fallback)' })
   sendMessage(
     @Param('threadId') threadId: string,
@@ -62,7 +84,7 @@ export class ChatController {
   }
 
   @Post('threads/:threadId/read')
-  @Roles('TEACHER', 'STUDENT')
+  @Roles('TEACHER', 'STUDENT', 'GUARDIAN', 'ADMIN')
   @ApiOperation({ summary: 'Mark counterparty messages in the thread as read' })
   markRead(
     @Param('threadId') threadId: string,

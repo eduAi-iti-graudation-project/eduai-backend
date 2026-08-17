@@ -63,7 +63,7 @@ npm install
 docker compose up -d
 ```
 
-This runs Postgres with the `pgvector` extension available (image: `pgvector/pgvector:pg16`). It's the **only** thing Docker is used for in this project — there's no containerized deploy.
+This runs Postgres with the `pgvector` extension available (image: `pgvector/pgvector:pg16`). It's the **only** thing Docker is used for in this project — there's no containerized deploy. `docker compose up -d` also starts the self-hosted **Kokoro TTS** container (`eduai_kokoro_tts`, port 8880) used by Study Lab podcast audio — first start downloads the ~1.6 GB image once, after which generation is free and offline.
 
 **4. Set up environment variables**
 

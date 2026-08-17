@@ -1,6 +1,7 @@
 import {
   Controller,
   Post,
+  Patch,
   Get,
   Delete,
   Param,
@@ -8,7 +9,10 @@ import {
   Body,
   UploadedFile,
   UseInterceptors,
+  HttpCode,
+  Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import {
@@ -20,7 +24,16 @@ import {
 } from '@nestjs/swagger';
 import type { User } from '@prisma/client';
 import { MaterialsService } from './materials.service';
-import { UploadMaterialDto } from './dto';
+import {
+  UploadMaterialDto,
+  CreateMaterialChapterDto,
+  CreateCourseChapterDto,
+  UpdateMaterialChapterDto,
+  ChunkSearchResultDto,
+  MaterialDto,
+  MaterialChapterDto,
+  MaterialGroupedDto,
+} from './dto';
 import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
 
@@ -29,6 +42,7 @@ import { CurrentUser } from '../auth/current-user.decorator';
 export class MaterialsController {
   constructor(private readonly materialsService: MaterialsService) {}
 
+  @Roles('TEACHER', 'ADMIN')
   @Post('upload')
   @UseInterceptors(
     FileInterceptor('file', {
@@ -45,21 +59,124 @@ export class MaterialsController {
         file: { type: 'string', format: 'binary' },
         title: { type: 'string' },
         courseOfferingId: { type: 'string', format: 'uuid' },
+        sectionId: { type: 'string', format: 'uuid' },
+        courseId: { type: 'string', format: 'uuid' },
       },
     },
   })
   upload(
     @UploadedFile() file: Express.Multer.File,
     @Body() dto: UploadMaterialDto,
-    @CurrentUser('organizationId') organizationId: string,
+    @CurrentUser() user: User,
   ) {
     return this.materialsService.upload(
       dto.title,
-      dto.courseOfferingId,
       file.buffer,
       file.originalname,
+      user,
+      {
+        courseOfferingId: dto.courseOfferingId,
+        sectionId: dto.sectionId,
+        courseId: dto.courseId,
+        assignmentId: dto.assignmentId,
+        chapterId: dto.chapterId,
+      },
+    );
+  }
+
+  @Roles('TEACHER', 'ADMIN')
+  @Post('chapters')
+  @ApiOperation({ summary: 'Create a material chapter in a class' })
+  createChapter(
+    @Body() dto: CreateMaterialChapterDto,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.materialsService.createChapter(
+      {
+        courseOfferingId: dto.courseOfferingId,
+        sectionId: dto.sectionId,
+        courseId: dto.courseId,
+      },
+      dto.title,
       organizationId,
     );
+  }
+
+  @Roles('TEACHER', 'STUDENT', 'GUARDIAN', 'ADMIN')
+  @Get('chapters/offering/:courseOfferingId')
+  @ApiOperation({
+    summary: 'List material chapters with their materials, plus ungrouped ones',
+  })
+  findByOfferingGrouped(
+    @Param('courseOfferingId') courseOfferingId: string,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.materialsService.findByOfferingGrouped(
+      courseOfferingId,
+      organizationId,
+    );
+  }
+
+  @Roles('TEACHER', 'ADMIN')
+  @Patch('chapters/:id')
+  @ApiOperation({ summary: 'Rename or reorder a material chapter' })
+  updateChapter(
+    @Param('id') id: string,
+    @Body() dto: UpdateMaterialChapterDto,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.materialsService.updateChapter(id, organizationId, dto);
+  }
+
+  @Roles('TEACHER', 'ADMIN')
+  @Delete('chapters/:id')
+  @ApiOperation({ summary: 'Delete a chapter (materials become ungrouped)' })
+  deleteChapter(
+    @Param('id') id: string,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.materialsService.deleteChapter(id, organizationId);
+  }
+
+  @Roles('TEACHER', 'ADMIN')
+  @Post('chapters/:id/materials/:materialId')
+  @ApiOperation({ summary: 'Link an existing material to a chapter' })
+  moveMaterialToChapter(
+    @Param('id') id: string,
+    @Param('materialId') materialId: string,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.materialsService.moveMaterialToChapter(
+      materialId,
+      id,
+      organizationId,
+    );
+  }
+
+  @Roles('TEACHER', 'ADMIN')
+  @HttpCode(200)
+  @Delete('chapters/:id/materials/:materialId')
+  @ApiOperation({ summary: 'Unlink a material from its chapter' })
+  removeMaterialFromChapter(
+    @Param('id') _id: string,
+    @Param('materialId') materialId: string,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.materialsService.moveMaterialToChapter(
+      materialId,
+      null,
+      organizationId,
+    );
+  }
+
+  @Roles('TEACHER', 'STUDENT', 'GUARDIAN', 'ADMIN')
+  @Get('assignment/:assignmentId')
+  @ApiOperation({ summary: 'List materials linked to an assignment' })
+  findByAssignment(
+    @Param('assignmentId') assignmentId: string,
+    @CurrentUser() user: User,
+  ) {
+    return this.materialsService.findByAssignment(assignmentId, user);
   }
 
   @Get('offering/:courseOfferingId/search')
@@ -68,21 +185,91 @@ export class MaterialsController {
     @Param('courseOfferingId') courseOfferingId: string,
     @Query('q') query: string,
     @Query('topK') topK?: string,
+    @Query('chapterId') chapterId?: string,
+    @CurrentUser('organizationId') organizationId?: string,
   ) {
     return this.materialsService.searchChunks(
       courseOfferingId,
       query,
       topK ? parseInt(topK, 10) : 5,
+      chapterId,
+      organizationId,
+    );
+  }
+
+  @Roles('TEACHER', 'ADMIN')
+  @Post('course/:courseId/chapters')
+  @ApiOperation({ summary: 'Create a material chapter for a course' })
+  @ApiOkResponse({ type: MaterialChapterDto })
+  createCourseChapter(
+    @Param('courseId') courseId: string,
+    @Body() dto: CreateCourseChapterDto,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.materialsService.createCourseChapter(
+      courseId,
+      dto.title,
+      organizationId,
+    );
+  }
+
+  @Roles('TEACHER', 'STUDENT', 'GUARDIAN', 'ADMIN')
+  @Get('course/:courseId/search')
+  @ApiOperation({ summary: 'Search material chunks across a course' })
+  @ApiOkResponse({ type: ChunkSearchResultDto, isArray: true })
+  searchCourseChunks(
+    @Param('courseId') courseId: string,
+    @Query('q') query: string,
+    @Query('topK') topK?: string,
+    @Query('chapterId') chapterId?: string,
+  ) {
+    return this.materialsService.searchChunksByCourse(
+      courseId,
+      query,
+      topK ? parseInt(topK, 10) : 5,
+      chapterId,
+    );
+  }
+
+  @Roles('TEACHER', 'STUDENT', 'GUARDIAN', 'ADMIN')
+  @Get('chapters/course/:courseId')
+  @ApiOperation({
+    summary: 'List material chapters for a course, plus ungrouped materials',
+  })
+  @ApiOkResponse({ type: MaterialGroupedDto })
+  findByCourseGrouped(
+    @Param('courseId') courseId: string,
+    @CurrentUser() user: User,
+  ) {
+    return this.materialsService.findByCourseGrouped(
+      courseId,
+      user.organizationId!,
+      user,
+    );
+  }
+
+  @Roles('TEACHER', 'STUDENT', 'GUARDIAN', 'ADMIN')
+  @Get('course/:courseId')
+  @ApiOperation({ summary: 'List materials for a course' })
+  @ApiOkResponse({ type: MaterialDto, isArray: true })
+  findByCourse(@Param('courseId') courseId: string, @CurrentUser() user: User) {
+    return this.materialsService.findByCourse(
+      courseId,
+      user.organizationId!,
+      user,
     );
   }
 
   @Get('offering/:courseOfferingId')
   @ApiOperation({ summary: 'List materials for a course offering' })
-  findByClass(
+  findByOffering(
     @Param('courseOfferingId') courseOfferingId: string,
     @CurrentUser('organizationId') organizationId: string,
   ) {
-    return this.materialsService.findByClass(courseOfferingId, organizationId);
+    return this.materialsService.findByOffering(
+      courseOfferingId,
+      organizationId,
+    );
   }
 
   @Get(':id')
@@ -107,6 +294,24 @@ export class MaterialsController {
   })
   getFile(@Param('id') id: string, @CurrentUser() user: User) {
     return this.materialsService.getMaterialFileUrl(id, user);
+  }
+
+  @Roles('TEACHER', 'STUDENT', 'GUARDIAN', 'ADMIN')
+  @Get(':id/download')
+  @ApiOperation({ summary: 'Download a material file (PDF or text)' })
+  async download(
+    @Param('id') id: string,
+    @CurrentUser() user: User,
+    @Res() res: Response,
+  ) {
+    const { buffer, contentType, filename } =
+      await this.materialsService.getMaterialDownload(id, user);
+    res.setHeader('Content-Type', contentType);
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`,
+    );
+    res.send(buffer);
   }
 
   @Delete(':id')

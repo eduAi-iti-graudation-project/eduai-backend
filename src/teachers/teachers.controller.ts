@@ -10,6 +10,7 @@ import {
   UseInterceptors,
   Res,
   HttpStatus,
+  ForbiddenException,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -26,6 +27,7 @@ import { TeachersService } from './teachers.service';
 import {
   AddTeacherGradeDto,
   UpdateTeacherProfileDto,
+  UpdateTeacherMeDto,
   CreateTeacherDocumentDto,
   CreateSalaryDto,
 } from './dto';
@@ -38,11 +40,70 @@ export class TeachersController {
   constructor(private readonly teachersService: TeachersService) {}
 
   @Roles('TEACHER', 'ADMIN')
+  @Get('me/profile')
+  @ApiOperation({ summary: 'Get own teacher profile (TEACHER self-service)' })
+  getMeProfile(
+    @CurrentUser('id') id: string,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.teachersService.getMyProfile(id, organizationId);
+  }
+
+  @Roles('TEACHER', 'ADMIN')
+  @Patch('me/profile')
+  @ApiOperation({
+    summary: 'Update own teacher profile (no SSN/gender changes)',
+  })
+  @ApiBody({ type: UpdateTeacherMeDto })
+  updateMeProfile(
+    @CurrentUser('id') id: string,
+    @CurrentUser('organizationId') organizationId: string,
+    @Body() dto: UpdateTeacherMeDto,
+  ) {
+    return this.teachersService.updateMyProfile(id, organizationId, dto);
+  }
+
+  @Roles('TEACHER', 'ADMIN')
+  @Post('me/avatar')
+  @UseInterceptors(
+    FileInterceptor('photo', {
+      storage: memoryStorage(),
+      limits: { fileSize: 5 * 1024 * 1024 },
+    }),
+  )
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: 'Upload own avatar photo' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: { photo: { type: 'string', format: 'binary' } },
+      required: ['photo'],
+    },
+  })
+  updateMeAvatar(
+    @CurrentUser('id') id: string,
+    @CurrentUser('organizationId') organizationId: string,
+    @UploadedFile() photo: Express.Multer.File | undefined,
+  ) {
+    return this.teachersService.updateMyAvatar(id, organizationId, photo);
+  }
+
+  @Roles('TEACHER', 'ADMIN')
   @Get(':id/grades')
   @ApiOperation({ summary: 'List grades assigned to a teacher' })
   @ApiOkResponse({ description: 'List of grades' })
   getGrades(@Param('id') id: string) {
     return this.teachersService.getGrades(id);
+  }
+
+  @Roles('TEACHER', 'ADMIN')
+  @Get(':id/grades/:gradeId')
+  @ApiOperation({
+    summary: 'Get one grade with its sections and courses for a teacher',
+  })
+  @ApiOkResponse({ description: 'Grade detail scoped to the teacher' })
+  getGrade(@Param('id') id: string, @Param('gradeId') gradeId: string) {
+    return this.teachersService.getGrade(id, gradeId);
   }
 
   @Roles('ADMIN')
@@ -88,12 +149,56 @@ export class TeachersController {
   }
 
   @Roles('ADMIN')
-  @Get(':id/classes')
-  @ApiOperation({ summary: 'List classes a teacher is currently teaching' })
-  getClasses(
+  @Get(':id/ssn')
+  @ApiOperation({ summary: 'Reveal a teacher SSN (admin only)' })
+  async getSsn(
     @Param('id') id: string,
     @CurrentUser('organizationId') organizationId: string,
   ) {
+    return this.teachersService.getSsn(id, organizationId);
+  }
+
+  @Roles('ADMIN')
+  @Post(':id/avatar')
+  @UseInterceptors(
+    FileInterceptor('photo', {
+      storage: memoryStorage(),
+      limits: { fileSize: 5 * 1024 * 1024 },
+    }),
+  )
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: 'Upload a teacher avatar photo' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: { photo: { type: 'string', format: 'binary' } },
+      required: ['photo'],
+    },
+  })
+  updateAvatar(
+    @Param('id') id: string,
+    @CurrentUser('organizationId') organizationId: string,
+    @UploadedFile() photo: Express.Multer.File | undefined,
+  ) {
+    return this.teachersService.updateAvatar(id, organizationId, photo);
+  }
+
+  @Roles('TEACHER', 'ADMIN')
+  @Get(':id/classes')
+  @ApiOperation({
+    summary: 'List classes a teacher is currently teaching (self-service)',
+  })
+  getClasses(
+    @Param('id') id: string,
+    @CurrentUser('id') userId: string,
+    @CurrentUser('role') role: string,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    if (role === 'TEACHER' && id !== userId) {
+      throw new ForbiddenException(
+        'You can only view your own teaching classes.',
+      );
+    }
     return this.teachersService.getClasses(id, organizationId);
   }
 

@@ -12,7 +12,14 @@ function callArgs<T>(mock: jest.Mock): T {
 describe('UsersService', () => {
   let service: UsersService;
 
-  const tx = {
+  type Tx = {
+    user: {
+      updateMany: jest.Mock;
+      delete: jest.Mock;
+    };
+  };
+
+  const tx: Tx = {
     user: {
       updateMany: jest.fn(),
       delete: jest.fn(),
@@ -31,7 +38,7 @@ describe('UsersService', () => {
     alert: { count: jest.fn() },
     quiz: { count: jest.fn() },
     courseOffering: { count: jest.fn() },
-    $transaction: jest.fn((cb: (tx: typeof tx) => unknown) => cb(tx)),
+    $transaction: jest.fn((cb: (tx: Tx) => unknown) => cb(tx)),
   };
 
   const mockAuthClient = {
@@ -98,7 +105,7 @@ describe('UsersService', () => {
       expect(arg.where).toEqual({ organizationId: 'org-1', role: 'TEACHER' });
     });
 
-    it('applies a case-insensitive name search when q is provided', async () => {
+    it('searches name OR email case-insensitively when q is provided', async () => {
       mockPrisma.user.findMany.mockResolvedValue([]);
 
       await service.findAll({ q: 'ali' }, 'org-1');
@@ -108,8 +115,38 @@ describe('UsersService', () => {
       );
       expect(arg.where).toEqual({
         organizationId: 'org-1',
-        name: { contains: 'ali', mode: 'insensitive' },
+        OR: [
+          { name: { contains: 'ali', mode: 'insensitive' } },
+          { email: { contains: 'ali', mode: 'insensitive' } },
+        ],
       });
+    });
+
+    it('caps search results to the limit', async () => {
+      mockPrisma.user.findMany.mockResolvedValue([]);
+
+      await service.findAll({ q: 'ali' }, 'org-1');
+
+      const arg = callArgs<{ take?: number }>(mockPrisma.user.findMany);
+      expect(arg.take).toBe(20);
+    });
+
+    it('respects a smaller requested take cap', async () => {
+      mockPrisma.user.findMany.mockResolvedValue([]);
+
+      await service.findAll({ q: 'ali', take: 5 }, 'org-1');
+
+      const arg = callArgs<{ take?: number }>(mockPrisma.user.findMany);
+      expect(arg.take).toBe(5);
+    });
+
+    it('does not cap listings without a search query', async () => {
+      mockPrisma.user.findMany.mockResolvedValue([]);
+
+      await service.findAll({}, 'org-1');
+
+      const arg = callArgs<{ take?: number }>(mockPrisma.user.findMany);
+      expect(arg.take).toBeUndefined();
     });
 
     it('includes linked grade and guardian details in the result', async () => {
@@ -119,7 +156,7 @@ describe('UsersService', () => {
 
       expect(result).toEqual([userRow]);
       expect(result[0].grade).toEqual({ id: 'g-1', level: 5, name: null });
-      expect(result[0].guardian.name).toBe('Guardian');
+      expect(result[0].guardian?.name).toBe('Guardian');
     });
   });
 

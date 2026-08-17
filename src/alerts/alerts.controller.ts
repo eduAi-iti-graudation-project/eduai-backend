@@ -28,6 +28,14 @@ export class AlertsController {
     return this.alertsService.findAll(status, organizationId);
   }
 
+  @Get('guardian')
+  @Roles('GUARDIAN')
+  @ApiOperation({ summary: "List ACTIVE alerts for the guardian's children" })
+  @ApiOkResponse({ type: AlertDto, isArray: true })
+  findByGuardian(@CurrentUser('id') guardianId: string) {
+    return this.alertsService.findByGuardian(guardianId);
+  }
+
   @Get(':id/teacher-detail')
   @Roles('TEACHER', 'ADMIN')
   @ApiOperation({ summary: 'Get structured analysis data for an alert' })
@@ -36,6 +44,16 @@ export class AlertsController {
     @CurrentUser('organizationId') organizationId: string,
   ) {
     return this.alertsService.getTeacherDetail(id, organizationId);
+  }
+
+  @Get(':id/guardian-detail')
+  @Roles('GUARDIAN')
+  @ApiOperation({ summary: 'Get guardian-facing alert content for a child' })
+  getGuardianDetail(
+    @Param('id') id: string,
+    @CurrentUser('id') guardianId: string,
+  ) {
+    return this.alertsService.getGuardianDetail(id, guardianId);
   }
 
   @Patch(':id')

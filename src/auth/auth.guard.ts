@@ -66,7 +66,7 @@ export class AuthGuard {
 
     const localUser = await this.prisma.user.findUnique({
       where: { authId: supabaseUser.id },
-      include: { organization: true },
+      include: { organization: { include: { group: true } } },
     });
 
     if (!localUser) {

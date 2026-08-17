@@ -83,6 +83,26 @@ const AdminDashboardSchema = z.object({
   averagePassRate: z.number(),
   pendingReportCount: z.number(),
   teachers: z.array(AdminTeacherSummarySchema),
+  activeAlertCount: z.number(),
+  resolvedAlertCount: z.number(),
+  recentAlerts: z.array(
+    z.object({
+      id: z.string().uuid(),
+      studentName: z.string(),
+      type: z.string(),
+      reason: z.string(),
+      createdAt: z.string(),
+    }),
+  ),
+  submissionsNeedingReview: z.array(
+    z.object({
+      id: z.string().uuid(),
+      studentName: z.string(),
+      assignmentTitle: z.string(),
+      createdAt: z.string(),
+    }),
+  ),
+  pendingConfirmations: z.number(),
   unreadNotifications: z.number(),
 });
 
@@ -95,6 +115,33 @@ export class AdminDashboardDto extends createZodDto(AdminDashboardSchema) {}
 
 export const InsightsQuerySchema = z.object({
   interval: z.enum(['week', 'month']).default('week'),
+});
+
+export const SectionDetailQuerySchema = z.object({
+  interval: z.enum(['week', 'month']).default('week'),
+  bucket: z.string().min(1).max(200),
+});
+
+export const SectionDetailRecordSchema = z.object({
+  label: z.string(),
+  meta: z.string().optional(),
+  value: z.number().optional(),
+  ref: z
+    .object({
+      kind: z.enum(['student', 'alert', 'submission']),
+      id: z.string(),
+    })
+    .optional(),
+});
+
+export const SectionDetailSchema = z.object({
+  sectionKey: z.string(),
+  title: z.string(),
+  unit: z.enum(['count', 'percent']),
+  bucket: z.string(),
+  value: z.number(),
+  totalRecords: z.number(),
+  records: z.array(SectionDetailRecordSchema),
 });
 
 const InsightSectionSchema = z.object({
@@ -141,3 +188,7 @@ const InsightsResponseSchema = z.object({
 
 export class InsightsQueryDto extends createZodDto(InsightsQuerySchema) {}
 export class InsightsResponseDto extends createZodDto(InsightsResponseSchema) {}
+export class SectionDetailQueryDto extends createZodDto(
+  SectionDetailQuerySchema,
+) {}
+export class SectionDetailDto extends createZodDto(SectionDetailSchema) {}

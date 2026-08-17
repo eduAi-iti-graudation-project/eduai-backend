@@ -74,6 +74,33 @@ describe('validateWithRetry', () => {
     expect(result).toEqual({ name: 'retried', score: 75 });
   });
 
+  it('should pass a feedback string describing the rejection to retryFn', async () => {
+    const invalid = { name: 123, score: 'bad' };
+    const retryFn = jest.fn<Promise<unknown>, [feedback?: string]>();
+    retryFn.mockResolvedValue({ name: 'retried', score: 75 });
+
+    await validateWithRetry(schema, invalid, retryFn);
+
+    expect(retryFn).toHaveBeenCalledTimes(1);
+    const feedback = retryFn.mock.calls[0]?.[0];
+    expect(feedback).toEqual(expect.any(String));
+    expect(feedback).toContain('Schema mismatch');
+  });
+
+  it('should pass the model parse error back as feedback when retryFn rejects', async () => {
+    const invalid = { name: 123, score: 'bad' };
+    const retryFn = jest.fn<Promise<unknown>, [feedback?: string]>();
+    retryFn
+      .mockRejectedValueOnce(new SyntaxError("Unexpected token 'B'"))
+      .mockResolvedValueOnce({ name: 'retried', score: 75 });
+
+    const result = await validateWithRetry(schema, invalid, retryFn, 3);
+
+    expect(result).toEqual({ name: 'retried', score: 75 });
+    expect(retryFn).toHaveBeenCalledTimes(2);
+    expect(retryFn.mock.calls[1]?.[0]).toContain("Unexpected token 'B'");
+  });
+
   it('should report 3 attempts when attempts is 3 and all fail', async () => {
     const invalid = { name: 123, score: 'bad' };
     const retryFn = jest

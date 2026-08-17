@@ -14,10 +14,25 @@ import {
   ApiOkResponse,
   ApiBody,
   ApiQuery,
+  ApiExtraModels,
+  getSchemaPath,
 } from '@nestjs/swagger';
 import { AssignmentsService } from './assignments.service';
-import { CreateAssignmentDto, UpdateAssignmentDto, AssignmentDto } from './dto';
+import {
+  CreateAssignmentDto,
+  UpdateAssignmentDto,
+  AssignmentDto,
+  GenerateAssignmentDto,
+  GenerateGroundedResultDto,
+  GenerateNotGroundedResultDto,
+  GenerateCourseAssignmentDto,
+  GenerateCourseGroundedResultDto,
+  GenerateCourseNotGroundedResultDto,
+  SaveGeneratedAssignmentsDto,
+  SavedGeneratedAssignmentDto,
+} from './dto';
 import { Roles } from '../auth/roles.decorator';
+import { CurrentUser } from '../auth/current-user.decorator';
 
 @ApiTags('assignments')
 @Controller('assignments')
@@ -31,6 +46,70 @@ export class AssignmentsController {
   @ApiOkResponse({ type: AssignmentDto })
   create(@Body() dto: CreateAssignmentDto) {
     return this.assignmentsService.create(dto);
+  }
+
+  @Roles('TEACHER')
+  @Post('generate')
+  @ApiExtraModels(GenerateGroundedResultDto, GenerateNotGroundedResultDto)
+  @ApiOperation({
+    summary:
+      'Draft an assignment and rubric from the course curriculum material',
+  })
+  @ApiBody({ type: GenerateAssignmentDto })
+  @ApiOkResponse({
+    schema: {
+      oneOf: [
+        { $ref: getSchemaPath(GenerateGroundedResultDto) },
+        { $ref: getSchemaPath(GenerateNotGroundedResultDto) },
+      ],
+    },
+  })
+  generate(
+    @Body() dto: GenerateAssignmentDto,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.assignmentsService.generateDraft(dto, organizationId);
+  }
+
+  @Roles('TEACHER')
+  @Post('generate-course')
+  @ApiExtraModels(
+    GenerateCourseGroundedResultDto,
+    GenerateCourseNotGroundedResultDto,
+  )
+  @ApiOperation({
+    summary:
+      'Draft an assignment and rubric from a course unit (or the entire course) for one or more sections',
+  })
+  @ApiBody({ type: GenerateCourseAssignmentDto })
+  @ApiOkResponse({
+    schema: {
+      oneOf: [
+        { $ref: getSchemaPath(GenerateCourseGroundedResultDto) },
+        { $ref: getSchemaPath(GenerateCourseNotGroundedResultDto) },
+      ],
+    },
+  })
+  generateCourse(
+    @Body() dto: GenerateCourseAssignmentDto,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.assignmentsService.generateCourseDraft(dto, organizationId);
+  }
+
+  @Roles('TEACHER')
+  @Post('save-generated')
+  @ApiOperation({
+    summary:
+      'Persist an approved AI-generated assignment + confirmed rubric to one or more sections',
+  })
+  @ApiBody({ type: SaveGeneratedAssignmentsDto })
+  @ApiOkResponse({ type: SavedGeneratedAssignmentDto, isArray: true })
+  saveGenerated(
+    @Body() dto: SaveGeneratedAssignmentsDto,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.assignmentsService.saveGenerated(dto, organizationId);
   }
 
   @Roles('TEACHER', 'STUDENT')

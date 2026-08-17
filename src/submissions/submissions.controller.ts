@@ -22,6 +22,7 @@ import {
 import { SubmissionsService } from './submissions.service';
 import { CreateSubmissionDto, SubmissionDto } from './dto';
 import { Roles } from '../auth/roles.decorator';
+import { AllowGuardianless } from '../auth/allow-guardianless.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { ApiError } from '../common/errors/api-error';
 import { ErrorCode } from '../common/errors/codes';
@@ -95,25 +96,36 @@ export class SubmissionsController {
   @Roles('TEACHER')
   @Get()
   @ApiOperation({
-    summary: 'List submissions, optionally filtered by status and assignment',
+    summary:
+      'List submissions for the teacher, optionally filtered by status, assignment, course, section, or student',
   })
   @ApiQuery({ name: 'status', required: false })
   @ApiQuery({ name: 'assignmentId', required: false })
+  @ApiQuery({ name: 'courseId', required: false })
+  @ApiQuery({ name: 'offeringId', required: false })
+  @ApiQuery({
+    name: 'q',
+    required: false,
+    description: 'Search by student name or email',
+  })
   @ApiOkResponse({ type: SubmissionDto, isArray: true })
   findAll(
     @Query('status') status?: string,
     @Query('assignmentId') assignmentId?: string,
-    @CurrentUser('organizationId') organizationId?: string,
+    @Query('courseId') courseId?: string,
+    @Query('offeringId') offeringId?: string,
+    @Query('q') q?: string,
+    @CurrentUser() user?: { id: string; organizationId: string },
   ) {
     return this.submissionsService.findAll(
-      status,
-      assignmentId,
-      organizationId!,
+      { status, assignmentId, courseId, offeringId, q },
+      user!,
     );
   }
 
   @Roles('STUDENT')
   @Get('mine')
+  @AllowGuardianless()
   @ApiOperation({
     summary: "List the current student's own submissions",
   })

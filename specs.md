@@ -90,9 +90,15 @@ Four roles: **Teacher**, **Student**, **Guardian**, **Admin**.
     explanations without giving away the answer. Logs interactions
     (`HomeworkHelpInteraction`) so the teacher knows who's struggling.
 15. **Quiz Engine** — teachers generate quizzes from curriculum context
-    (Mastra agent), manage quiz CRUD, and students take them with
+    (Mastra agent) and assign them to one or more sections (optionally
+    targeting specific students); students see quizzes for sections they're
+    approved-enrolled in or quizzes targeted at them, and take them with
     anti-cheat violation tracking; short answers are graded with teacher
-    confirmation before scores are real.
+    confirmation before scores are real. A quiz is reusable — the same quiz
+    can be assigned to many sections and reused across courses/grades, may
+    have an optional `endsAt` closing deadline, and carries a `difficulty`
+    (EASY/MEDIUM/HARD, default MEDIUM) that calibrates AI-generated
+    question depth.
 16. **Communication Agent** — after a teacher confirms grades, a Mastra
     agent analyzes the student's performance and creates alerts with
     plain-language explanations, notifying the guardian when tripped.
@@ -137,8 +143,12 @@ type, channel, read status), `StudentReport` (three-section LLM output per
 alert), `DeviceToken` (FCM push tokens), `Attendance` (student, class,
 date, status), `StudentAnalysis` (communication-agent output per student),
 `HomeworkHelpInteraction` (homework-helper Q&A log), and the quiz set:
-`Quiz` → `QuizQuestion` + `QuizAnswer`, `QuizAttempt` (status, violations
-log, unique per quiz+student).
+`Quiz` (has `endsAt`, `difficulty` — EASY/MEDIUM/HARD — and belongs to a
+teacher) → `QuizAssignment`
+(course offering + optional `targetStudentIds`; a quiz can be assigned to
+many sections and reused across courses/grades) → `QuizQuestion` +
+`QuizAnswer`, `QuizAttempt` (status, violations log, unique per
+quiz+student).
 
 Embeddings: **HuggingFace (via the ITI API gateway), 1024 dimensions.** This
 is a locked decision — do not switch embedding providers without a schema

@@ -12,7 +12,10 @@ export class UsersService {
     private readonly supabaseService: SupabaseService,
   ) {}
 
-  findAll(query: { role?: string; q?: string }, organizationId: string) {
+  findAll(
+    query: { role?: string; q?: string; take?: number },
+    organizationId: string,
+  ) {
     const filters: Record<string, unknown> = {
       organizationId,
     };
@@ -21,12 +24,20 @@ export class UsersService {
       filters.role = query.role;
     }
 
-    if (query.q) {
-      filters.name = { contains: query.q, mode: 'insensitive' };
+    const searchLimit = 20;
+    const search = query.q?.trim();
+    if (search) {
+      filters.OR = [
+        { name: { contains: search, mode: 'insensitive' } },
+        { email: { contains: search, mode: 'insensitive' } },
+      ];
     }
 
     return this.prisma.user.findMany({
       where: filters as never,
+      take: search
+        ? Math.min(query.take ?? searchLimit, searchLimit)
+        : undefined,
       select: {
         id: true,
         email: true,
@@ -164,6 +175,13 @@ export class UsersService {
       default:
         return base;
     }
+  }
+
+  async getAvatarById(id: string) {
+    return this.prisma.user.findFirst({
+      where: { id },
+      select: { avatarUrl: true },
+    });
   }
 
   async remove(id: string, organizationId: string, adminId: string) {

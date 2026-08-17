@@ -2,10 +2,14 @@ import { Injectable, HttpStatus } from '@nestjs/common';
 import { ApiError } from '../common/errors/api-error';
 import { ErrorCode } from '../common/errors/codes';
 import { PrismaService } from '../prisma/prisma.service';
+import { EnrollSyncService } from '../roster/enroll-sync.service';
 
 @Injectable()
 export class SectionsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly enrollSync: EnrollSyncService,
+  ) {}
 
   async create(
     dto: { gradeLevelId: string; name: string; description?: string },
@@ -37,7 +41,7 @@ export class SectionsService {
         'A section with this name already exists in this grade level.',
       );
     }
-    return this.prisma.section.create({
+    const section = await this.prisma.section.create({
       data: {
         gradeLevelId: dto.gradeLevelId,
         name: dto.name,
@@ -45,6 +49,7 @@ export class SectionsService {
         organizationId,
       },
     });
+    return section;
   }
 
   findAll(organizationId: string) {
@@ -135,23 +140,6 @@ export class SectionsService {
 
   // ── Enrollments (sections carry enrolled students) ─────────────────
 
-  async findAvailable(studentId: string) {
-    const student = await this.prisma.user.findUnique({
-      where: { id: studentId },
-      include: { grade: true },
-    });
-    if (!student?.grade) return [];
-
-    return this.prisma.section.findMany({
-      where: {
-        organizationId: student.organizationId,
-        gradeLevelId: student.grade.id,
-        enrollments: { none: { studentId } },
-      },
-      include: { gradeLevel: true, offerings: { include: { course: true } } },
-    });
-  }
-
   async addEnrollment(
     sectionId: string,
     studentId: string,
@@ -182,60 +170,29 @@ export class SectionsService {
         'This student could not be found.',
       );
     }
-    if (existing) {
+    if (existing && existing.status === 'APPROVED') {
       throw new ApiError(
         ErrorCode.ALREADY_ENROLLED,
         HttpStatus.CONFLICT,
         'This student is already enrolled in this section.',
       );
     }
-    return this.prisma.enrollment.create({
-      data: { sectionId, studentId, status: 'APPROVED' },
-    });
-  }
-
-  async joinSection(sectionId: string, studentId: string) {
-    const student = await this.prisma.user.findUnique({
-      where: { id: studentId },
-      select: { organizationId: true },
-    });
-    if (!student) {
-      throw new ApiError(
-        ErrorCode.STUDENT_NOT_FOUND,
-        HttpStatus.NOT_FOUND,
-        'This student could not be found.',
-      );
-    }
-    const section = await this.prisma.section.findFirst({
-      where: { id: sectionId, organizationId: student.organizationId },
-    });
-    if (!section) {
-      throw new ApiError(
-        ErrorCode.SECTION_NOT_FOUND,
-        HttpStatus.NOT_FOUND,
-        'This section could not be found.',
-      );
-    }
-    const existing = await this.prisma.enrollment.findUnique({
+    const enrollment = await this.prisma.enrollment.upsert({
       where: { sectionId_studentId: { sectionId, studentId } },
+      update: { status: 'APPROVED' },
+      create: { sectionId, studentId, status: 'APPROVED' },
     });
-    if (existing) {
-      throw new ApiError(
-        ErrorCode.ALREADY_ENROLLED,
-        HttpStatus.CONFLICT,
-        'You are already enrolled in this section.',
-      );
+    if (enrollment) {
+      await this.prisma.enrollment.deleteMany({
+        where: {
+          studentId,
+          status: 'APPROVED',
+          sectionId: { not: sectionId },
+          section: { organizationId, gradeLevelId: section.gradeLevelId },
+        },
+      });
     }
-    return this.prisma.enrollment.create({
-      data: { sectionId, studentId, status: 'PENDING' },
-    });
-  }
-
-  async getRequests(sectionId: string, organizationId: string) {
-    return this.prisma.enrollment.findMany({
-      where: { sectionId, status: 'PENDING', section: { organizationId } },
-      include: { student: true },
-    });
+    return enrollment;
   }
 
   async removeEnrollment(
@@ -253,39 +210,10 @@ export class SectionsService {
         'This enrollment could not be found.',
       );
     }
-    return this.prisma.enrollment.delete({ where: { id: enrollment.id } });
-  }
-
-  async approveEnrollment(enrollmentId: string, organizationId: string) {
-    const enrollment = await this.prisma.enrollment.findFirst({
-      where: { id: enrollmentId, section: { organizationId } },
-    });
-    if (!enrollment) {
-      throw new ApiError(
-        ErrorCode.ENROLLMENT_NOT_FOUND,
-        HttpStatus.NOT_FOUND,
-        'This enrollment could not be found.',
-      );
-    }
+    // Persist the exclusion: the student stays out of this section even
+    // though grade-based sync would otherwise re-enroll them.
     return this.prisma.enrollment.update({
-      where: { id: enrollmentId },
-      data: { status: 'APPROVED' },
-    });
-  }
-
-  async rejectEnrollment(enrollmentId: string, organizationId: string) {
-    const enrollment = await this.prisma.enrollment.findFirst({
-      where: { id: enrollmentId, section: { organizationId } },
-    });
-    if (!enrollment) {
-      throw new ApiError(
-        ErrorCode.ENROLLMENT_NOT_FOUND,
-        HttpStatus.NOT_FOUND,
-        'This enrollment could not be found.',
-      );
-    }
-    return this.prisma.enrollment.update({
-      where: { id: enrollmentId },
+      where: { id: enrollment.id },
       data: { status: 'REJECTED' },
     });
   }

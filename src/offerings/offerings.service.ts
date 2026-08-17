@@ -80,15 +80,22 @@ export class OfferingsService {
     });
   }
 
-  findAll(organizationId: string) {
+  findAll(
+    organizationId: string,
+    filters: { teacherId?: string; courseId?: string } = {},
+  ) {
     return this.prisma.courseOffering.findMany({
-      where: { organizationId },
+      where: {
+        organizationId,
+        ...(filters.teacherId ? { teacherId: filters.teacherId } : {}),
+        ...(filters.courseId ? { courseId: filters.courseId } : {}),
+      },
       include: {
         course: true,
         section: { include: { gradeLevel: true } },
         teacher: true,
         _count: {
-          select: { assignments: true, quizzes: true, materials: true },
+          select: { assignments: true, quizAssignments: true, materials: true },
         },
       },
       orderBy: { createdAt: 'desc' },

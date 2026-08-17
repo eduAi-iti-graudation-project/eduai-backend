@@ -107,18 +107,48 @@ export class SubmissionsService {
   }
 
   findAll(
-    status: string | undefined,
-    assignmentId: string | undefined,
-    organizationId: string,
+    filters: {
+      status?: string;
+      assignmentId?: string;
+      courseId?: string;
+      offeringId?: string;
+      q?: string;
+    },
+    user: { id: string; organizationId: string },
   ) {
-    const where: Record<string, unknown> = {
-      assignment: { offering: { organizationId } },
+    const offeringWhere: Record<string, unknown> = {
+      organizationId: user.organizationId,
+      teacherId: user.id,
     };
-    if (status) where.status = status;
-    if (assignmentId) where.assignmentId = assignmentId;
+    if (filters.courseId) offeringWhere.courseId = filters.courseId;
+    const assignmentWhere: Record<string, unknown> = {
+      offering: offeringWhere,
+    };
+    if (filters.offeringId)
+      assignmentWhere.courseOfferingId = filters.offeringId;
+    const where: Record<string, unknown> = { assignment: assignmentWhere };
+    if (filters.status) where.status = filters.status;
+    if (filters.assignmentId) where.assignmentId = filters.assignmentId;
+    if (filters.q) {
+      where.student = {
+        OR: [
+          { name: { contains: filters.q, mode: 'insensitive' } },
+          { email: { contains: filters.q, mode: 'insensitive' } },
+        ],
+      };
+    }
     return this.prisma.submission.findMany({
       where,
-      include: { student: true, scores: { include: { criteria: true } } },
+      include: {
+        student: true,
+        assignment: {
+          include: {
+            offering: { include: { course: true, section: true } },
+          },
+        },
+        scores: { include: { criteria: true } },
+      },
+      orderBy: { createdAt: 'desc' },
     });
   }
 

@@ -2,8 +2,10 @@ import { PrismaService } from '../prisma/prisma.service';
 import { Injectable, HttpStatus } from '@nestjs/common';
 import { ApiError } from '../common/errors/api-error';
 import { ErrorCode } from '../common/errors/codes';
-import * as path from 'path';
-import * as fs from 'fs';
+import { DocumentsService } from '../documents/documents.service';
+import { EnrollSyncService } from '../roster/enroll-sync.service';
+import { JoinRequestsService } from '../join-requests/join-requests.service';
+import type { User } from '@prisma/client';
 
 function academicYearOf(date: Date): string {
   const y = date.getFullYear();
@@ -14,9 +16,117 @@ function academicYearOf(date: Date): string {
 
 @Injectable()
 export class StudentsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly documentsService: DocumentsService,
+    private readonly enrollSync: EnrollSyncService,
+    private readonly joinRequests: JoinRequestsService,
+  ) {}
 
-  async getGrades(id: string, organizationId: string) {
+  /**
+   * The post-import follow-up queue: students of THIS organization who are
+   * missing a grade level and/or have no APPROVED section enrollment.
+   */
+  async listUnassignedStudents(organizationId: string) {
+    return this.prisma.user.findMany({
+      where: {
+        organizationId,
+        role: 'STUDENT',
+        OR: [
+          { gradeId: null },
+          { enrollments: { none: { status: 'APPROVED' } } },
+        ],
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        gradeId: true,
+        grade: { select: { id: true, level: true, name: true } },
+        enrollments: {
+          where: { status: 'APPROVED' },
+          select: {
+            sectionId: true,
+            section: { select: { id: true, name: true } },
+          },
+        },
+        createdAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  /**
+   * Org admin student list. `withoutGuardian = true` narrows to students with
+   * no linked guardian (the WP2 "students without guardian" widget).
+   */
+  async listStudents(organizationId: string, withoutGuardian: boolean) {
+    return this.prisma.user.findMany({
+      where: {
+        organizationId,
+        role: 'STUDENT',
+        ...(withoutGuardian ? { guardianId: null } : {}),
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        gradeId: true,
+        grade: { select: { id: true, level: true, name: true } },
+        guardian: { select: { id: true, name: true, email: true } },
+        createdAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  /**
+   * WP4 ownership audit: students may only read their own data; guardians
+   * only their wards' (404 so unrelated students stay invisible). Admin and
+   * teacher callers are unaffected.
+   */
+  private async assertStudentReadAccess(
+    studentId: string,
+    organizationId: string,
+    caller?: { id: string; role: User['role'] },
+  ): Promise<void> {
+    if (!caller || caller.role === 'ADMIN' || caller.role === 'TEACHER') return;
+    const student = await this.prisma.user.findFirst({
+      where: { id: studentId, role: 'STUDENT', organizationId },
+      select: { guardianId: true },
+    });
+    if (!student) {
+      throw new ApiError(
+        ErrorCode.STUDENT_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This student could not be found.',
+      );
+    }
+    if (caller.role === 'GUARDIAN') {
+      if (student.guardianId !== caller.id) {
+        throw new ApiError(
+          ErrorCode.STUDENT_NOT_FOUND,
+          HttpStatus.NOT_FOUND,
+          'This student could not be found.',
+        );
+      }
+      return;
+    }
+    if (caller.role === 'STUDENT' && caller.id !== studentId) {
+      throw new ApiError(
+        ErrorCode.FORBIDDEN,
+        HttpStatus.FORBIDDEN,
+        "You don't have permission to do that.",
+      );
+    }
+  }
+
+  async getGrades(
+    id: string,
+    organizationId: string,
+    caller?: { id: string; role: User['role'] },
+  ) {
+    await this.assertStudentReadAccess(id, organizationId, caller);
     const grades = await this.prisma.gradingScore.findMany({
       where: {
         submission: { studentId: id, student: { organizationId } },
@@ -44,7 +154,9 @@ export class StudentsService {
     studentId: string,
     submissionId: string,
     organizationId: string,
+    caller?: { id: string; role: User['role'] },
   ) {
+    await this.assertStudentReadAccess(studentId, organizationId, caller);
     const submission = await this.prisma.submission.findFirst({
       where: {
         id: submissionId,
@@ -80,8 +192,13 @@ export class StudentsService {
     }));
   }
 
-  async getClasses(studentId: string, organizationId: string) {
-    return this.prisma.section.findMany({
+  async getClasses(
+    studentId: string,
+    organizationId: string,
+    caller?: { id: string; role: User['role'] },
+  ) {
+    await this.assertStudentReadAccess(studentId, organizationId, caller);
+    const sections = await this.prisma.section.findMany({
       where: {
         organizationId,
         enrollments: {
@@ -94,11 +211,131 @@ export class StudentsService {
           include: {
             course: true,
             teacher: true,
-            assignments: { include: { rubrics: true } },
+            materials: { select: { id: true, title: true } },
+            quizAssignments: {
+              select: { id: true, targetStudentIds: true },
+            },
+            assignments: {
+              include: {
+                rubrics: true,
+                materials: { select: { id: true, title: true } },
+              },
+            },
           },
         },
       },
     });
+
+    const quizCountFor = (o: {
+      quizAssignments: { id: string; targetStudentIds: string[] }[];
+    }) =>
+      o.quizAssignments.filter(
+        (qa) =>
+          qa.targetStudentIds.length === 0 ||
+          qa.targetStudentIds.includes(studentId),
+      ).length;
+
+    return sections.map((s) => {
+      const teacherNames = [
+        ...new Set(
+          s.offerings
+            .map((o) => o.teacher?.name)
+            .filter((n): n is string => Boolean(n)),
+        ),
+      ];
+      return {
+        id: s.id,
+        name: s.name,
+        description: s.description ?? (s.gradeLevel ? s.gradeLevel.name : null),
+        teacherName: teacherNames.join(', '),
+        materialCount: s.offerings.reduce((n, o) => n + o.materials.length, 0),
+        materialTitles: [
+          ...new Set(
+            s.offerings.flatMap((o) => o.materials.map((m) => m.title)),
+          ),
+        ],
+        quizCount: s.offerings.reduce((n, o) => n + quizCountFor(o), 0),
+        assignments: s.offerings.flatMap((o) =>
+          o.assignments.map((a) => ({
+            id: a.id,
+            title: a.title,
+            description: a.description,
+            dueDate: a.dueDate.toISOString(),
+            totalPoints: a.totalPoints,
+            materials: a.materials.map((m) => ({ id: m.id, title: m.title })),
+          })),
+        ),
+      };
+    });
+  }
+
+  /**
+   * A student sits in exactly one section, so their real "classes" are the
+   * course offerings of that section. Returns one entry per offering (course),
+   * each scoped to its own teacher, materials, quizzes, and assignments.
+   */
+  async getCourses(
+    studentId: string,
+    organizationId: string,
+    caller?: { id: string; role: User['role'] },
+  ) {
+    await this.assertStudentReadAccess(studentId, organizationId, caller);
+    const sections = await this.prisma.section.findMany({
+      where: {
+        organizationId,
+        enrollments: {
+          some: { studentId, status: 'APPROVED' },
+        },
+      },
+      include: {
+        offerings: {
+          include: {
+            course: true,
+            teacher: true,
+            materials: { select: { id: true, title: true } },
+            quizAssignments: {
+              select: { id: true, targetStudentIds: true },
+            },
+            assignments: {
+              include: {
+                rubrics: true,
+                materials: { select: { id: true, title: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const quizCountFor = (o: {
+      quizAssignments: { id: string; targetStudentIds: string[] }[];
+    }) =>
+      o.quizAssignments.filter(
+        (qa) =>
+          qa.targetStudentIds.length === 0 ||
+          qa.targetStudentIds.includes(studentId),
+      ).length;
+
+    return sections.flatMap((s) =>
+      s.offerings.map((o) => ({
+        id: o.id,
+        name: o.course.name,
+        description: o.course.description,
+        colorTag: o.course.colorTag,
+        teacherName: o.teacher?.name ?? null,
+        materialCount: o.materials.length,
+        materialTitles: o.materials.map((m) => m.title),
+        quizCount: quizCountFor(o),
+        assignments: o.assignments.map((a) => ({
+          id: a.id,
+          title: a.title,
+          description: a.description,
+          dueDate: a.dueDate.toISOString(),
+          totalPoints: a.totalPoints,
+          materials: a.materials.map((m) => ({ id: m.id, title: m.title })),
+        })),
+      })),
+    );
   }
 
   async update(
@@ -133,7 +370,7 @@ export class StudentsService {
         );
       }
     }
-    return this.prisma.user.update({
+    const updated = await this.prisma.user.update({
       where: { id: studentId },
       data: {
         ...(dto.name !== undefined ? { name: dto.name } : {}),
@@ -144,12 +381,24 @@ export class StudentsService {
         ...(dto.guardianId !== undefined ? { guardianId: dto.guardianId } : {}),
       },
     });
+    if (
+      dto.gradeLevelId !== undefined &&
+      dto.gradeLevelId !== student.gradeId
+    ) {
+      await this.enrollSync.syncStudentToGrade(
+        studentId,
+        organizationId,
+        dto.gradeLevelId,
+      );
+    }
+    return updated;
   }
 
   async linkGuardian(
     studentId: string,
-    guardianId: string,
+    dto: { guardianId?: string; email?: string; name?: string },
     organizationId: string,
+    decidedBy: string,
   ) {
     const student = await this.prisma.user.findFirst({
       where: { id: studentId, organizationId },
@@ -161,8 +410,35 @@ export class StudentsService {
         'This student could not be found.',
       );
     }
+
+    // WP2: create the guardian from a real email (school identity provisioned,
+    // verify invite sent) and link — for rows imported without guardian data.
+    if (dto.email) {
+      if (!dto.name) {
+        throw new ApiError(
+          ErrorCode.VALIDATION_FAILED,
+          HttpStatus.BAD_REQUEST,
+          'A guardian name is required when creating a guardian from an email.',
+        );
+      }
+      return this.joinRequests.provisionGuardian({
+        organizationId,
+        studentId,
+        name: dto.name,
+        personalEmail: dto.email,
+        decidedBy,
+      });
+    }
+
+    if (!dto.guardianId) {
+      throw new ApiError(
+        ErrorCode.VALIDATION_FAILED,
+        HttpStatus.BAD_REQUEST,
+        'Provide either a guardianId (existing account) or an email + name to create the guardian.',
+      );
+    }
     const guardian = await this.prisma.user.findFirst({
-      where: { id: guardianId, organizationId },
+      where: { id: dto.guardianId, organizationId },
     });
     if (!guardian) {
       throw new ApiError(
@@ -173,8 +449,21 @@ export class StudentsService {
     }
     return this.prisma.user.update({
       where: { id: studentId },
-      data: { guardianId },
+      data: { guardianId: dto.guardianId },
     });
+  }
+
+  /**
+   * WP1 admin escape hatch: email a set-password invite to the student's real
+   * inbox. No password is generated or returned — the student chooses their
+   * own via the verify link.
+   */
+  async resetCredentials(id: string, organizationId: string) {
+    const { email } = await this.joinRequests.sendSetPasswordInvite(
+      id,
+      organizationId,
+    );
+    return { invited: true, email };
   }
 
   private async ensureStudent(id: string, organizationId: string) {
@@ -255,16 +544,22 @@ export class StudentsService {
         studentId,
         status: 'COMPLETED',
         submittedAt: { not: null },
-        quiz: { offering: { organizationId } },
+        quiz: {
+          assignments: { some: { offering: { organizationId } } },
+        },
       },
       include: {
         quiz: {
           include: {
-            offering: {
-              include: {
-                course: { select: { id: true, name: true } },
-                section: { select: { id: true, name: true } },
-                teacher: { select: { id: true, name: true } },
+            assignments: {
+              select: {
+                offering: {
+                  select: {
+                    course: { select: { id: true, name: true } },
+                    section: { select: { id: true, name: true } },
+                    teacher: { select: { id: true, name: true } },
+                  },
+                },
               },
             },
             questions: { select: { points: true } },
@@ -277,12 +572,13 @@ export class StudentsService {
     return attempts.map((a) => {
       const maxPoints = a.quiz.questions.reduce((sum, q) => sum + q.points, 0);
       const totalScore = a.totalScore ?? 0;
+      const offering = a.quiz.assignments[0]?.offering;
       return {
         id: a.id,
         quizId: a.quizId,
         quizTitle: a.quiz.title,
-        className: a.quiz.offering.section.name,
-        teacherName: a.quiz.offering.teacher?.name ?? null,
+        className: offering?.section.name ?? null,
+        teacherName: offering?.teacher?.name ?? null,
         totalScore,
         maxPoints,
         percent: maxPoints ? Math.round((totalScore / maxPoints) * 100) : 0,
@@ -299,7 +595,9 @@ export class StudentsService {
           studentId,
           status: 'COMPLETED',
           submittedAt: { not: null },
-          quiz: { offering: { organizationId } },
+          quiz: {
+            assignments: { some: { offering: { organizationId } } },
+          },
         },
         include: {
           quiz: {
@@ -429,7 +727,11 @@ export class StudentsService {
     organizationId: string,
     adminId: string,
     file: Express.Multer.File,
-    dto: { type: string; title: string; academicYear?: string | null },
+    dto: {
+      category?: string | null;
+      title: string;
+      academicYear?: string | null;
+    },
   ) {
     await this.ensureStudent(studentId, organizationId);
     if (!file) {
@@ -440,36 +742,38 @@ export class StudentsService {
       );
     }
 
-    const dir = path.resolve(
-      process.cwd(),
-      process.env.DOCUMENT_UPLOAD_DIR ?? 'uploads/documents',
+    const fileUrl = await this.documentsService.storeFile(
+      organizationId,
+      file.buffer,
+      file.originalname,
+      file.mimetype,
     );
-    fs.mkdirSync(dir, { recursive: true });
-    const safe = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
-    const fileName = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safe}`;
-    const fileUrl = path.join(dir, fileName);
 
-    try {
-      fs.writeFileSync(fileUrl, file.buffer);
-    } catch {
-      throw new ApiError(
-        ErrorCode.DOCUMENT_UPLOAD_FAILED,
-        HttpStatus.INTERNAL_SERVER_ERROR,
-        'Could not save the uploaded document.',
+    let aiSuggestedCategory: string | null = null;
+    if (!dto.category) {
+      const rawText = await this.documentsService.extractText(
+        file.buffer,
+        file.originalname,
       );
+      if (rawText) {
+        aiSuggestedCategory =
+          await this.documentsService.suggestCategory(rawText);
+      }
     }
 
     return this.prisma.studentDocument.create({
       data: {
         studentId,
+        organizationId,
         uploadedById: adminId,
-        type: dto.type as never,
+        category: (dto.category ?? 'OTHER') as never,
         title: dto.title,
         academicYear: dto.academicYear ?? null,
         fileName: file.originalname,
         fileUrl,
         mimeType: file.mimetype,
         sizeBytes: file.size,
+        aiSuggestedCategory,
       },
     });
   }
@@ -490,11 +794,7 @@ export class StudentsService {
         'This document could not be found.',
       );
     }
-    try {
-      fs.unlinkSync(doc.fileUrl);
-    } catch {
-      // file may already be gone; deletion of the row still succeeds
-    }
+    await this.documentsService.removeFromStorage(doc.fileUrl);
     return this.prisma.studentDocument.delete({ where: { id: doc.id } });
   }
 
@@ -514,7 +814,8 @@ export class StudentsService {
         'This document could not be found.',
       );
     }
-    return doc;
+    const url = await this.documentsService.createSignedUrl(doc.fileUrl);
+    return { url, fileName: doc.fileName, mimeType: doc.mimeType };
   }
 
   async getFees(studentId: string, organizationId: string) {

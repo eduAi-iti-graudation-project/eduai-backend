@@ -4,12 +4,18 @@ import {
   Get,
   HttpStatus,
   Param,
+  Patch,
   Post,
   Query,
 } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { OrganizationsService } from './organizations.service';
-import { ApproveRequestDto, InviteMemberDto, RequestStatusSchema } from './dto';
+import {
+  ApproveRequestDto,
+  EmailDomainDto,
+  InviteMemberDto,
+  RequestStatusSchema,
+} from './dto';
 import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { SkipSubscriptionCheck } from '../auth/skip-subscription.decorator';
@@ -36,6 +42,22 @@ export class OrganizationsController {
   @ApiOperation({ summary: 'Regenerate the organization join code' })
   regenerateJoinCode(@CurrentUser('organizationId') organizationId: string) {
     return this.organizationsService.regenerateJoinCode(organizationId);
+  }
+
+  @Roles('ADMIN')
+  @Patch('me/email-domain')
+  @ApiOperation({
+    summary:
+      'Set the school login-identity domain used for provisioned accounts',
+  })
+  setEmailDomain(
+    @Body() dto: EmailDomainDto,
+    @CurrentUser('organizationId') organizationId: string,
+  ) {
+    return this.organizationsService.setEmailDomain(
+      organizationId,
+      dto.emailDomain,
+    );
   }
 
   @Roles('ADMIN')

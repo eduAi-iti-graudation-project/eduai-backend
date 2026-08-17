@@ -116,6 +116,44 @@ export class RubricsService {
     return criteria;
   }
 
+  /**
+   * Creates a rubric that is immediately confirmed (approved) with embedded
+   * criteria. Used by the AI assignment+rubric flow after the teacher approves
+   * the generated draft — avoids a separate confirm round-trip per section.
+   */
+  async createConfirmed(
+    dto: {
+      title: string;
+      assignmentId: string;
+      criteria: { description: string; maxPoints: number }[];
+    },
+    organizationId: string,
+  ) {
+    const assignment = await this.prisma.assignment.findFirst({
+      where: { id: dto.assignmentId, offering: { organizationId } },
+    });
+    if (!assignment) {
+      throw new ApiError(
+        ErrorCode.ASSIGNMENT_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'This assignment could not be found.',
+      );
+    }
+
+    const created = await this.prisma.rubric.create({
+      data: {
+        title: dto.title,
+        assignmentId: dto.assignmentId,
+        isConfirmed: true,
+        criteria: { create: dto.criteria },
+      },
+      include: { criteria: true },
+    });
+
+    await this.embedCriteria(created.criteria);
+    return created;
+  }
+
   async confirm(id: string, organizationId: string) {
     const rubric = await this.prisma.rubric.findFirst({
       where: { id, assignment: { offering: { organizationId } } },
@@ -135,7 +173,12 @@ export class RubricsService {
       include: { criteria: true },
     });
 
-    for (const criterion of updated.criteria) {
+    await this.embedCriteria(updated.criteria);
+    return updated;
+  }
+
+  private async embedCriteria(criteria: { id: string; description: string }[]) {
+    for (const criterion of criteria) {
       try {
         const embedding = await this.llm.embed(criterion.description);
         const vectorStr = `[${embedding.join(',')}]`;
@@ -151,8 +194,6 @@ export class RubricsService {
         );
       }
     }
-
-    return updated;
   }
 
   async importPdf(buffer: Buffer) {

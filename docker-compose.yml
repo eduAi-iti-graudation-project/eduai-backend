@@ -5,7 +5,7 @@ services:
     image: pgvector/pgvector:pg16
     container_name: eduai_postgres_dev
     ports:
-      - "5432:5432"
+      - "5433:5432"
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: development_password
@@ -17,6 +17,15 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+
+  # Self-hosted Kokoro-82M TTS used by Study Lab podcasts (CPU image, ~1.6 GB first pull).
+  # Exposes an OpenAI-compatible /v1/audio/speech endpoint consumed via KOKORO_TTS_URL.
+  kokoro:
+    image: ghcr.io/remsky/kokoro-fastapi-cpu:latest
+    container_name: eduai_kokoro_tts
+    ports:
+      - "8880:8880"
+    restart: unless-stopped
 
 volumes:
   postgres_data:

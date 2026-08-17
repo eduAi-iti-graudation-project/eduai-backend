@@ -18,6 +18,23 @@ const SubmissionSchema = z.object({
   ]),
   createdAt: z.string(),
   updatedAt: z.string(),
+  student: z
+    .object({
+      id: z.string().uuid(),
+      email: z.string(),
+      name: z.string().nullable(),
+    })
+    .optional(),
+  assignment: z
+    .object({
+      id: z.string().uuid(),
+      title: z.string(),
+      description: z.string().nullable(),
+      dueDate: z.string(),
+      totalPoints: z.number(),
+      courseOfferingId: z.string().uuid(),
+    })
+    .optional(),
 });
 
 export class CreateSubmissionDto extends createZodDto(CreateSubmissionSchema) {}

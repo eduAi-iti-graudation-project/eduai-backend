@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { LlmService } from '../common/llm/llm.service';
 import { FORMATTING_RULES } from '../common/llm/formatting-rules';
@@ -44,7 +44,7 @@ Available actions and their exact JSON format:
 3. Draft a grading rubric:
 {"action": "draft_rubric", "topic": "what the rubric should assess"}
 
-4. Summarize a lesson (only AFTER search_curriculum returned results):
+4. Summarize a lesson (only AFTER search_curriculum returned results; works for a whole-course overview too when the search returned the full material):
 {"action": "summarize_lesson", "topic": "lesson topic"}
 
 5. Plan a lesson (only AFTER search_curriculum returned results):
@@ -63,9 +63,12 @@ Rules:
 1. Always call search_curriculum first when you need curriculum information.
 2. After receiving search results, call create_quiz, summarize_lesson, or plan_lesson if the teacher asked for one.
 3. Base all answers and quizzes ONLY on the curriculum search results. Never use your own knowledge or information outside the results.
-4. If the search returned no material, tell the teacher the topic is not covered in the uploaded curriculum material. Never fall back to general knowledge.
+4. If the search returned no material, tell the teacher the class has no uploaded curriculum material covering the request. Never fall back to general knowledge. IMPORTANT: the search results may contain the class's full uploaded curriculum when the teacher asks a general question (e.g. "summarize the course material", "give me an overview of the course"). In that case summarize_lesson / plan_lesson / create_quiz should still run, using the provided context, and you should never claim there is no material.
 5. class_analytics and draft_rubric/draft_assignment do not require a search first.
 6. Be thorough and detailed in your responses.` + `${FORMATTING_RULES}`;
+
+const STRUCTURED_OUTPUT_RULE =
+  '\n\nCRITICAL: Respond with ONLY a single valid JSON object matching the schema below. No markdown code fences, no prose before or after, no explanation, no keys outside the schema. The response is parsed with JSON.parse and validated against a strict schema, so field names, types and nesting must match exactly.\n\nExpected JSON schema: ';
 
 const QUIZ_PROMPT = `You are a quiz generator for an educator. Given a topic and context from curriculum materials, create a quiz with a mix of multiple-choice and short-answer questions.
 
@@ -74,35 +77,37 @@ Rules:
 2. Short answer questions must have a clear correct answer.
 3. Questions should be grade-level appropriate and test understanding.
 4. Include an explanation for the correct answer where helpful.
-5. Base every question ONLY on the provided curriculum context. Never use outside knowledge.`;
+5. Base every question ONLY on the provided curriculum context. Never use outside knowledge.${STRUCTURED_OUTPUT_RULE}
+{"title": "string", "questions": [{"type": "mcq" | "short_answer", "question": "string", "options": ["4 strings", "optional"], "correctAnswer": "string", "explanation": "string", "optional"}]}`;
 
 const RUBRIC_PROMPT = `You are a rubric designer for an educator. Given a topic, create a grading rubric.
 Rules:
 1. Define 3-6 criteria, each with a clear description of what is being evaluated.
 2. maxPoints must be a positive integer; use sensible point distributions that sum to a round total (e.g. 100 or 20).
 3. Criteria must be specific, observable, and grade-appropriate.
-Base the rubric ONLY on the provided topic context. Never use outside knowledge.`;
+Base the rubric ONLY on the provided topic context. Never use outside knowledge.${STRUCTURED_OUTPUT_RULE}
+{"title": "string", "criteria": [{"description": "string", "maxPoints": "number"}]}`;
 
 const LESSON_SUMMARY_PROMPT = `You are a lesson summarizer for an educator. Given a topic and curriculum context, produce a concise summary with key points students must know.
 Rules:
 1. Base the summary ONLY on the provided curriculum context.
-2. keyPoints should be 3-6 scannable, concrete takeaways.
-`;
+2. keyPoints should be 3-6 scannable, concrete takeaways.${STRUCTURED_OUTPUT_RULE}
+{"title": "string", "summary": "string", "keyPoints": ["string"]}`;
 
 const LESSON_PLAN_PROMPT = `You are a lesson planner for an educator. Given a topic and curriculum context, produce a practical lesson plan.
 Rules:
 1. Base the plan ONLY on the provided curriculum context.
 2. Objectives: 2-5 measurable, student-facing goals.
-3. Activities: 3-8 concrete, time-box-able classroom activities that build understanding.
-`;
+3. Activities: 3-8 concrete, time-box-able classroom activities that build understanding.${STRUCTURED_OUTPUT_RULE}
+{"title": "string", "objectives": ["string"], "activities": ["string"], "assessmentHint": "string"}`;
 
 const ASSIGNMENT_DRAFT_PROMPT = `You are an assignment drafter for an educator. Given a topic, draft a ready-to-post assignment.
 Rules:
 1. title: a clear, short name for the assignment.
 2. description: a motivating overview for students.
 3. instructions: numbered, unambiguous steps a student can follow.
-Base the assignment ONLY on the provided topic context. Never use outside knowledge.
-`;
+Base the assignment ONLY on the provided topic context. Never use outside knowledge.${STRUCTURED_OUTPUT_RULE}
+{"title": "string", "description": "string", "instructions": "string"}`;
 
 const ANALYTICS_PROMPT =
   `You are a teacher-facing class analyst. You will receive real numbers computed from confirmed grades. Turn them into a precise summary.
@@ -111,6 +116,8 @@ Rules:
 2. strugglingAreas: list the specific weak skills/patterns the numbers reveal.
 3. recommendations: 2-4 concrete actions for the teacher.
 Never invent numbers that are not in the provided data.` +
+  `${STRUCTURED_OUTPUT_RULE}
+{"overall": "string", "strugglingAreas": ["string"], "recommendations": ["string"]}` +
   `${FORMATTING_RULES}`;
 
 interface ConversationMessage {
@@ -120,6 +127,8 @@ interface ConversationMessage {
 
 @Injectable()
 export class AssistantService {
+  private readonly logger = new Logger(AssistantService.name);
+
   constructor(
     private readonly llm: LlmService,
     private readonly materials: MaterialsService,
@@ -144,170 +153,194 @@ export class AssistantService {
     let lastSearchContext = '';
     let hasSearchContext = false;
 
-    for (let i = 0; i < MAX_ITERATIONS; i++) {
-      const userPrompt = history
-        .map((m) => `${m.role.toUpperCase()}: ${m.content}`)
-        .join('\n\n');
+    try {
+      for (let i = 0; i < MAX_ITERATIONS; i++) {
+        const userPrompt = history
+          .map((m) => `${m.role.toUpperCase()}: ${m.content}`)
+          .join('\n\n');
 
-      const result = await this.llm.generateStructured({
-        systemPrompt: SYSTEM_PROMPT,
-        userPrompt,
-        schema: ToolCallSchema,
-      });
+        const result = await this.llm.generateStructured({
+          systemPrompt: SYSTEM_PROMPT,
+          userPrompt,
+          schema: ToolCallSchema,
+        });
 
-      if (result.action === 'respond') {
-        return { reply: result.reply };
-      }
+        if (result.action === 'respond') {
+          return { reply: result.reply };
+        }
 
-      if (result.action === 'search_curriculum') {
-        const topK = result.topK ?? 5;
-        const chunks = await this.materials.searchChunks(
-          courseOfferingId,
-          result.query,
-          topK,
-        );
+        if (result.action === 'search_curriculum') {
+          const topK = result.topK ?? 5;
+          let chunks = await this.materials.searchChunks(
+            courseOfferingId,
+            result.query,
+            topK,
+          );
 
-        hasSearchContext = chunks.length > 0;
-        lastSearchContext =
-          chunks.length > 0
-            ? chunks
-                .map(
-                  (c, idx) =>
-                    `[Result ${idx + 1}] (from: ${c.materialTitle}, relevance: ${c.distance.toFixed(4)})\n${c.content}`,
-                )
-                .join('\n\n')
-            : 'No relevant curriculum material found.';
+          // A weak or generic query (e.g. "summarize the course material")
+          // may embed too far from the content to pass the similarity
+          // threshold even though the class has uploaded material. Fall back
+          // to the class's raw chunks so generation still has real context —
+          // the same guard quizzes and labs apply.
+          if (chunks.length === 0) {
+            chunks = await this.materials.getChunksByOffering(
+              courseOfferingId,
+              50,
+            );
+          }
 
-        history.push(
-          {
-            role: 'assistant',
-            content: `I'll search the curriculum for: "${result.query}"`,
-          },
-          {
-            role: 'user',
-            content: `Search results for "${result.query}":\n${lastSearchContext}`,
-          },
-        );
-      }
+          hasSearchContext = chunks.length > 0;
+          lastSearchContext =
+            chunks.length > 0
+              ? chunks
+                  .map(
+                    (c, idx) =>
+                      `[Result ${idx + 1}] (from: ${c.materialTitle}, relevance: ${c.distance.toFixed(4)})\n${c.content}`,
+                  )
+                  .join('\n\n')
+              : 'No relevant curriculum material found.';
 
-      if (result.action === 'create_quiz') {
-        if (!hasSearchContext) {
+          history.push(
+            {
+              role: 'assistant',
+              content: `I'll search the curriculum for: "${result.query}"`,
+            },
+            {
+              role: 'user',
+              content: `Search results for "${result.query}":\n${lastSearchContext}`,
+            },
+          );
+        }
+
+        if (result.action === 'create_quiz') {
+          if (!hasSearchContext) {
+            return {
+              reply: `The topic "${result.topic}" is not covered in this class's uploaded curriculum material, so I can't create a quiz on it. Upload material covering this topic first, then ask me again.`,
+            };
+          }
+
+          const questionCount = result.questionCount ?? 5;
+          const types = result.types ?? ['mcq', 'short_answer'];
+
+          const quiz = await this.llm.generateStructured<Quiz>({
+            systemPrompt: QUIZ_PROMPT,
+            userPrompt: `Topic: ${result.topic}\nNumber of questions: ${questionCount}\nQuestion types: ${types.join(', ')}\n\nCurriculum context:\n${lastSearchContext}`,
+            schema: QuizSchema,
+          });
+
+          const formatted = this.formatQuiz(quiz);
+          const savedQuiz = await this.persistQuiz(quiz, courseOfferingId);
+
           return {
-            reply: `The topic "${result.topic}" is not covered in this class's uploaded curriculum material, so I can't create a quiz on it. Upload material covering this topic first, then ask me again.`,
+            reply: savedQuiz
+              ? `${formatted}\n\n(Draft saved to your quiz library — quizId: ${savedQuiz.quizId})`
+              : formatted,
+            quiz,
+            ...(savedQuiz ? { savedQuiz } : {}),
           };
         }
 
-        const questionCount = result.questionCount ?? 5;
-        const types = result.types ?? ['mcq', 'short_answer'];
+        if (result.action === 'draft_rubric') {
+          const rubric = await this.llm.generateStructured<RubricDraft>({
+            systemPrompt: RUBRIC_PROMPT,
+            userPrompt: [
+              `Topic: ${result.topic}`,
+              lastSearchContext
+                ? `Curriculum context:\n${lastSearchContext}`
+                : '',
+              `Teacher's request: ${newMessage}`,
+            ]
+              .filter(Boolean)
+              .join('\n\n'),
+            schema: RubricDraftSchema,
+          });
 
-        const quiz = await this.llm.generateStructured<Quiz>({
-          systemPrompt: QUIZ_PROMPT,
-          userPrompt: `Topic: ${result.topic}\nNumber of questions: ${questionCount}\nQuestion types: ${types.join(', ')}\n\nCurriculum context:\n${lastSearchContext}`,
-          schema: QuizSchema,
-        });
-
-        const formatted = this.formatQuiz(quiz);
-        const savedQuiz = await this.persistQuiz(quiz, courseOfferingId);
-
-        return {
-          reply: savedQuiz
-            ? `${formatted}\n\n(Draft saved to your quiz library — quizId: ${savedQuiz.quizId})`
-            : formatted,
-          quiz,
-          ...(savedQuiz ? { savedQuiz } : {}),
-        };
-      }
-
-      if (result.action === 'draft_rubric') {
-        const rubric = await this.llm.generateStructured<RubricDraft>({
-          systemPrompt: RUBRIC_PROMPT,
-          userPrompt: [
-            `Topic: ${result.topic}`,
-            lastSearchContext
-              ? `Curriculum context:\n${lastSearchContext}`
-              : '',
-            `Teacher's request: ${newMessage}`,
-          ]
-            .filter(Boolean)
-            .join('\n\n'),
-          schema: RubricDraftSchema,
-        });
-
-        return {
-          reply: this.formatRubric(rubric),
-          rubric,
-        };
-      }
-
-      if (result.action === 'summarize_lesson') {
-        if (!hasSearchContext) {
           return {
-            reply: `There's no curriculum material to summarize for "${result.topic}" yet. Upload material covering this topic first, then ask me again.`,
+            reply: this.formatRubric(rubric),
+            rubric,
           };
         }
 
-        const lesson = await this.llm.generateStructured<LessonSummary>({
-          systemPrompt: LESSON_SUMMARY_PROMPT,
-          userPrompt: `Topic: ${result.topic}\n\nCurriculum context:\n${lastSearchContext}`,
-          schema: LessonSummarySchema,
-        });
+        if (result.action === 'summarize_lesson') {
+          if (!hasSearchContext) {
+            return {
+              reply: `There's no curriculum material to summarize for "${result.topic}" yet. Upload material covering this topic first, then ask me again.`,
+            };
+          }
 
-        return {
-          reply: this.formatLessonSummary(lesson),
-          lesson,
-        };
-      }
+          const lesson = await this.llm.generateStructured<LessonSummary>({
+            systemPrompt: LESSON_SUMMARY_PROMPT,
+            userPrompt: `Topic: ${result.topic}\n\nCurriculum context:\n${lastSearchContext}`,
+            schema: LessonSummarySchema,
+          });
 
-      if (result.action === 'plan_lesson') {
-        if (!hasSearchContext) {
           return {
-            reply: `There's no curriculum material to plan a lesson for "${result.topic}" yet. Upload material covering this topic first, then ask me again.`,
+            reply: this.formatLessonSummary(lesson),
+            lesson,
           };
         }
 
-        const lesson = await this.llm.generateStructured<LessonPlan>({
-          systemPrompt: LESSON_PLAN_PROMPT,
-          userPrompt: `Topic: ${result.topic}\n\nCurriculum context:\n${lastSearchContext}`,
-          schema: LessonPlanSchema,
-        });
+        if (result.action === 'plan_lesson') {
+          if (!hasSearchContext) {
+            return {
+              reply: `There's no curriculum material to plan a lesson for "${result.topic}" yet. Upload material covering this topic first, then ask me again.`,
+            };
+          }
 
-        return {
-          reply: this.formatLessonPlan(lesson),
-          lesson,
-        };
+          const lesson = await this.llm.generateStructured<LessonPlan>({
+            systemPrompt: LESSON_PLAN_PROMPT,
+            userPrompt: `Topic: ${result.topic}\n\nCurriculum context:\n${lastSearchContext}`,
+            schema: LessonPlanSchema,
+          });
+
+          return {
+            reply: this.formatLessonPlan(lesson),
+            lesson,
+          };
+        }
+
+        if (result.action === 'class_analytics') {
+          const analytics = await this.runClassAnalytics(
+            courseOfferingId,
+            newMessage,
+          );
+          return {
+            reply: this.formatAnalytics(analytics),
+            analytics,
+          };
+        }
+
+        if (result.action === 'draft_assignment') {
+          const assignment = await this.llm.generateStructured<AssignmentDraft>(
+            {
+              systemPrompt: ASSIGNMENT_DRAFT_PROMPT,
+              userPrompt: [
+                `Topic: ${result.topic}`,
+                lastSearchContext
+                  ? `Curriculum context:\n${lastSearchContext}`
+                  : '',
+                `Teacher's request: ${newMessage}`,
+              ]
+                .filter(Boolean)
+                .join('\n\n'),
+              schema: AssignmentDraftSchema,
+            },
+          );
+
+          return {
+            reply: this.formatAssignment(assignment),
+            assignment,
+          };
+        }
       }
-
-      if (result.action === 'class_analytics') {
-        const analytics = await this.runClassAnalytics(
-          courseOfferingId,
-          newMessage,
-        );
-        return {
-          reply: this.formatAnalytics(analytics),
-          analytics,
-        };
-      }
-
-      if (result.action === 'draft_assignment') {
-        const assignment = await this.llm.generateStructured<AssignmentDraft>({
-          systemPrompt: ASSIGNMENT_DRAFT_PROMPT,
-          userPrompt: [
-            `Topic: ${result.topic}`,
-            lastSearchContext
-              ? `Curriculum context:\n${lastSearchContext}`
-              : '',
-            `Teacher's request: ${newMessage}`,
-          ]
-            .filter(Boolean)
-            .join('\n\n'),
-          schema: AssignmentDraftSchema,
-        });
-
-        return {
-          reply: this.formatAssignment(assignment),
-          assignment,
-        };
-      }
+    } catch (error) {
+      this.logger.warn(
+        `Assistant generation failed; returning graceful reply: ${String(error)}`,
+      );
+      return {
+        reply:
+          'I hit a snag generating that response. Please try rephrasing your request or ask again in a moment.',
+      };
     }
 
     return {
@@ -330,7 +363,7 @@ export class AssistantService {
     try {
       return await saveQuiz.execute({
         title: quiz.title,
-        courseOfferingId: courseOfferingId,
+        assignments: [{ courseOfferingId: courseOfferingId }],
         teacherId: offering.teacherId,
         questions: quiz.questions.map((q, idx) =>
           q.type === 'mcq'
@@ -352,6 +385,10 @@ export class AssistantService {
                 order: idx,
               },
         ),
+        // Chat-generated quizzes still need a time limit and close date —
+        // apply sensible defaults the teacher can adjust in the editor.
+        timeLimit: 15,
+        endsAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
       });
     } catch {
       return null;

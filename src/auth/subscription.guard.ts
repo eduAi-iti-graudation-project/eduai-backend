@@ -5,7 +5,11 @@ import {
   Injectable,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import type { Organization, SubscriptionTier } from '@prisma/client';
+import type {
+  Organization,
+  SchoolGroup,
+  SubscriptionTier,
+} from '@prisma/client';
 import { SKIP_SUBSCRIPTION_KEY } from './skip-subscription.decorator';
 import { REQUIRED_TIERS_KEY } from './requires-tier.decorator';
 import { ApiError } from '../common/errors/api-error';
@@ -13,6 +17,8 @@ import { ErrorCode } from '../common/errors/codes';
 import { ErrorHint } from '../common/errors/hints';
 
 const TRIAL_DAYS = 14;
+
+type GroupedOrganization = Organization & { group?: SchoolGroup | null };
 
 @Injectable()
 export class SubscriptionGuard implements CanActivate {
@@ -27,18 +33,20 @@ export class SubscriptionGuard implements CanActivate {
 
     const request = context
       .switchToHttp()
-      .getRequest<{ user?: { organization?: Organization } | null }>();
+      .getRequest<{ user?: { organization?: GroupedOrganization } | null }>();
     const organization = request.user?.organization;
     if (!organization) return true;
 
-    const { subscriptionStatus } = organization;
+    // WP5: a grouped school inherits status/tier/trial from its SchoolGroup.
+    const owner = organization.group ?? organization;
+    const { subscriptionStatus } = owner;
     if (subscriptionStatus === 'ACTIVE') {
-      this.enforceTier(context, organization);
+      this.enforceTier(context, owner);
       return true;
     }
 
     if (subscriptionStatus === 'TRIALING') {
-      const trialEnd = new Date(organization.createdAt);
+      const trialEnd = new Date(owner.createdAt);
       trialEnd.setDate(trialEnd.getDate() + TRIAL_DAYS);
       if (new Date() <= trialEnd) return true;
     }
@@ -53,7 +61,7 @@ export class SubscriptionGuard implements CanActivate {
 
   private enforceTier(
     context: ExecutionContext,
-    organization: Organization,
+    organization: { subscriptionTier: SubscriptionTier },
   ): void {
     const requiredTiers = this.reflector.getAllAndOverride<SubscriptionTier[]>(
       REQUIRED_TIERS_KEY,

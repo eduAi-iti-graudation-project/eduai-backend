@@ -33,6 +33,19 @@ describe('ChatService', () => {
       create: jest.fn(),
       updateMany: jest.fn(),
     },
+    adminChatThread: {
+      findUnique: jest.fn(),
+      findMany: jest.fn(),
+      upsert: jest.fn(),
+      update: jest.fn(),
+    },
+    adminChatMessage: {
+      findUnique: jest.fn(),
+      findMany: jest.fn(),
+      create: jest.fn(),
+      updateMany: jest.fn(),
+    },
+    user: { findUnique: jest.fn() },
   };
 
   beforeEach(async () => {
@@ -45,6 +58,8 @@ describe('ChatService', () => {
 
     service = module.get<ChatService>(ChatService);
     jest.clearAllMocks();
+    mockPrisma.adminChatThread.findUnique.mockResolvedValue(null);
+    mockPrisma.adminChatThread.findMany.mockResolvedValue([]);
   });
 
   describe('createThreadOrGet', () => {
@@ -361,6 +376,260 @@ describe('ChatService', () => {
       expect(result[0].lastMessage).toBe('last');
       expect(result[0].lastMessageAuthorId).toBe('student-1');
       expect(result[0].unreadCount).toBe(3);
+    });
+
+    it('merges admin threads for an admin user', async () => {
+      const admin = { id: 'admin-1', role: 'ADMIN' } as User;
+      mockPrisma.chatThread.findMany.mockResolvedValue([]);
+      mockPrisma.adminChatThread.findMany.mockResolvedValue([
+        {
+          id: 'adm-thread-1',
+          adminId: 'admin-1',
+          peerId: 'teacher-9',
+          peerRole: 'TEACHER',
+          createdAt: new Date('2026-01-01T00:00:00Z'),
+          updatedAt: new Date('2026-01-01T00:00:00Z'),
+          admin: { id: 'admin-1', name: 'Admin A' },
+          peer: { id: 'teacher-9', name: 'T9' },
+          messages: [{ text: 'hello admin', authorId: 'teacher-9' }],
+          _count: { messages: 1 },
+        },
+      ]);
+
+      const result = await service.listThreads(admin);
+
+      expect(mockPrisma.adminChatThread.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { adminId: 'admin-1' } }),
+      );
+      expect(result).toHaveLength(1);
+      expect(result[0].type).toBe('ADMIN');
+      expect(result[0].peerId).toBe('teacher-9');
+      expect(result[0].peerName).toBe('T9');
+      expect(result[0].className).toBe('Teacher');
+      expect(result[0].unreadCount).toBe(1);
+    });
+
+    it('merges admin threads for a teacher peer with the admin as peer', async () => {
+      mockPrisma.chatThread.findMany.mockResolvedValue([]);
+      mockPrisma.adminChatThread.findMany.mockResolvedValue([
+        {
+          id: 'adm-thread-2',
+          adminId: 'admin-1',
+          peerId: 'teacher-1',
+          peerRole: 'TEACHER',
+          createdAt: new Date('2026-01-01T00:00:00Z'),
+          updatedAt: new Date('2026-01-01T00:00:00Z'),
+          admin: { id: 'admin-1', name: 'Admin A' },
+          peer: { id: 'teacher-1', name: 'T' },
+          messages: [{ text: 'see you monday', authorId: 'admin-1' }],
+          _count: { messages: 2 },
+        },
+      ]);
+
+      const result = await service.listThreads(teacher);
+
+      expect(mockPrisma.adminChatThread.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { peerId: 'teacher-1' } }),
+      );
+      expect(result[0].type).toBe('ADMIN');
+      expect(result[0].peerId).toBe('admin-1');
+      expect(result[0].className).toBe('School admin');
+    });
+
+    it('never queries admin threads for students', async () => {
+      mockPrisma.chatThread.findMany.mockResolvedValue([]);
+
+      await service.listThreads(student);
+
+      expect(mockPrisma.adminChatThread.findMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('createAdminThreadOrGet', () => {
+    const admin = { id: 'admin-1', role: 'ADMIN' } as User;
+    const adminRow = {
+      id: 'adm-thread-1',
+      adminId: 'admin-1',
+      peerId: 'teacher-9',
+      peerRole: 'TEACHER',
+      createdAt: new Date('2026-01-01T00:00:00Z'),
+      updatedAt: new Date('2026-01-01T00:00:00Z'),
+    };
+
+    it('creates a thread with a teacher peer in the same organization', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({
+        id: 'teacher-9',
+        role: 'TEACHER',
+        organizationId: 'org-1',
+      });
+      mockPrisma.adminChatThread.upsert.mockResolvedValue(adminRow);
+
+      const result = await service.createAdminThreadOrGet(
+        { ...admin, organizationId: 'org-1' },
+        'teacher-9',
+        'TEACHER',
+      );
+
+      expect(mockPrisma.adminChatThread.upsert).toHaveBeenCalledWith({
+        where: {
+          adminId_peerId_peerRole: {
+            adminId: 'admin-1',
+            peerId: 'teacher-9',
+            peerRole: 'TEACHER',
+          },
+        },
+        update: {},
+        create: {
+          adminId: 'admin-1',
+          peerId: 'teacher-9',
+          peerRole: 'TEACHER',
+        },
+      });
+      expect(result.type).toBe('ADMIN');
+    });
+
+    it('rejects non-admin callers', async () => {
+      await expect(
+        service.createAdminThreadOrGet(
+          { ...teacher, organizationId: 'org-1' },
+          'guardian-1',
+          'GUARDIAN',
+        ),
+      ).rejects.toMatchObject({ code: 'CHAT_FORBIDDEN' });
+    });
+
+    it('rejects a peer whose role does not match the requested peerRole', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({
+        id: 'teacher-9',
+        role: 'STUDENT',
+        organizationId: 'org-1',
+      });
+
+      await expect(
+        service.createAdminThreadOrGet(
+          { ...admin, organizationId: 'org-1' },
+          'teacher-9',
+          'TEACHER',
+        ),
+      ).rejects.toMatchObject({ code: 'USER_NOT_FOUND' });
+      expect(mockPrisma.adminChatThread.upsert).not.toHaveBeenCalled();
+    });
+
+    it('rejects a peer from a different organization', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({
+        id: 'guardian-1',
+        role: 'GUARDIAN',
+        organizationId: 'org-2',
+      });
+
+      await expect(
+        service.createAdminThreadOrGet(
+          { ...admin, organizationId: 'org-1' },
+          'guardian-1',
+          'GUARDIAN',
+        ),
+      ).rejects.toMatchObject({ code: 'CHAT_FORBIDDEN' });
+      expect(mockPrisma.adminChatThread.upsert).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('admin thread message dispatch', () => {
+    it('getMessages dispatches to the admin message table', async () => {
+      mockPrisma.adminChatThread.findUnique.mockResolvedValue({
+        id: 'adm-thread-1',
+        adminId: 'admin-1',
+        peerId: 'teacher-9',
+        peerRole: 'TEACHER',
+      });
+      mockPrisma.adminChatMessage.findMany.mockResolvedValue([
+        {
+          id: 'am2',
+          threadId: 'adm-thread-1',
+          authorId: 'admin-1',
+          text: 'b',
+          readAt: null,
+          createdAt: new Date('2026-01-01T00:00:02Z'),
+        },
+        {
+          id: 'am1',
+          threadId: 'adm-thread-1',
+          authorId: 'teacher-9',
+          text: 'a',
+          readAt: null,
+          createdAt: new Date('2026-01-01T00:00:01Z'),
+        },
+      ]);
+
+      const result = await service.getMessages(
+        'adm-thread-1',
+        'admin-1',
+        undefined,
+        2,
+      );
+
+      expect(mockPrisma.adminChatMessage.findMany).toHaveBeenCalled();
+      expect(mockPrisma.chatMessage.findMany).not.toHaveBeenCalled();
+      expect(result.items.map((m) => m.id)).toEqual(['am1', 'am2']);
+      expect(result.nextCursor).toBeNull();
+    });
+
+    it('getMessages rejects a non-participant admin thread user', async () => {
+      mockPrisma.adminChatThread.findUnique.mockResolvedValue({
+        id: 'adm-thread-1',
+        adminId: 'admin-1',
+        peerId: 'teacher-9',
+        peerRole: 'TEACHER',
+      });
+
+      await expect(
+        service.getMessages('adm-thread-1', 'intruder-1'),
+      ).rejects.toMatchObject({ code: 'THREAD_NOT_PARTICIPANT' });
+    });
+
+    it('sendMessage writes to the admin message table and touches the admin thread', async () => {
+      mockPrisma.adminChatThread.findUnique.mockResolvedValue({
+        id: 'adm-thread-1',
+        adminId: 'admin-1',
+        peerId: 'teacher-9',
+        peerRole: 'TEACHER',
+      });
+      mockPrisma.adminChatMessage.create.mockResolvedValue({
+        id: 'am9',
+        threadId: 'adm-thread-1',
+        authorId: 'admin-1',
+        text: 'hi',
+        readAt: null,
+        createdAt: new Date('2026-01-01T00:00:03Z'),
+      });
+      mockPrisma.adminChatThread.update.mockResolvedValue({});
+
+      const result = await service.sendMessage('adm-thread-1', 'admin-1', 'hi');
+
+      expect(mockPrisma.adminChatMessage.create).toHaveBeenCalledWith({
+        data: { threadId: 'adm-thread-1', authorId: 'admin-1', text: 'hi' },
+      });
+      expect(mockPrisma.adminChatThread.update).toHaveBeenCalled();
+      expect(result.authorId).toBe('admin-1');
+    });
+
+    it('markRead clears unread admin messages from the counterparty', async () => {
+      mockPrisma.adminChatThread.findUnique.mockResolvedValue({
+        id: 'adm-thread-1',
+        adminId: 'admin-1',
+        peerId: 'teacher-9',
+        peerRole: 'TEACHER',
+      });
+
+      await service.markRead('adm-thread-1', 'teacher-9');
+
+      expect(mockPrisma.adminChatMessage.updateMany).toHaveBeenCalledWith({
+        where: {
+          threadId: 'adm-thread-1',
+          authorId: { not: 'teacher-9' },
+          readAt: null,
+        },
+        data: { readAt: expect.any(Date) as Date },
+      });
     });
   });
 });

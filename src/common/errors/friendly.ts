@@ -73,6 +73,11 @@ export const CODE_FALLBACK_MESSAGES: Partial<Record<ErrorCode, string>> = {
     'A course with this name already exists in this grade level.',
   OFFERING_NOT_FOUND: 'This course offering could not be found.',
   OFFERING_CONFLICT: 'This course is already offered in this section.',
+  TIMETABLE_SLOT_NOT_FOUND: 'This timetable slot could not be found.',
+  TIMETABLE_TEACHER_CONFLICT:
+    'This teacher is already teaching another course at that time.',
+  TIMETABLE_SECTION_CONFLICT:
+    'This section already has another course at that time.',
   TEACHER_NOT_FOUND: 'This teacher could not be found.',
   ENROLLMENT_NOT_FOUND: 'This enrollment could not be found.',
   ALREADY_ENROLLED: 'You are already enrolled in this section.',
@@ -115,6 +120,7 @@ export const CODE_FALLBACK_MESSAGES: Partial<Record<ErrorCode, string>> = {
 
   INSIGHTS_FORBIDDEN: 'You can only view your own insights.',
   INSIGHTS_STUDENT_NOT_FOUND: 'This student could not be found.',
+  INSIGHTS_SECTION_NOT_FOUND: 'This insight chart could not be found.',
 
   INTERACTION_NOT_FOUND: 'This interaction could not be found.',
   HOMEWORK_FORBIDDEN: 'You can only view your own homework help history.',

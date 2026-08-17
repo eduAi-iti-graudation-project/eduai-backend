@@ -14,11 +14,19 @@ const SaveQuestionSchema = z.object({
   correctAnswer: z.string().nullish(),
 });
 
+const SaveAssignmentSchema = z.object({
+  courseOfferingId: z.string().uuid(),
+  targetStudentIds: z.array(z.string().uuid()).optional(),
+});
+
 export const SaveQuizInputSchema = z.object({
   title: z.string().min(1),
   description: z.string().optional(),
-  courseOfferingId: z.string().uuid(),
   teacherId: z.string().uuid(),
+  assignments: z.array(SaveAssignmentSchema).min(1),
+  difficulty: z.enum(['EASY', 'MEDIUM', 'HARD']).optional(),
+  timeLimit: z.number().int().min(1),
+  endsAt: z.string().datetime(),
   questions: z.array(SaveQuestionSchema).min(1),
 });
 
@@ -41,9 +49,18 @@ export function createSaveQuizTool(prisma: PrismaService) {
         data: {
           title: input.title,
           description: input.description ?? null,
-          courseOfferingId: input.courseOfferingId,
           teacherId: input.teacherId,
           status: 'DRAFT',
+          difficulty: input.difficulty ?? 'MEDIUM',
+          source: 'AI',
+          timeLimit: input.timeLimit,
+          endsAt: new Date(input.endsAt),
+          assignments: {
+            create: input.assignments.map((a) => ({
+              courseOfferingId: a.courseOfferingId,
+              targetStudentIds: a.targetStudentIds ?? [],
+            })),
+          },
           questions: {
             create: input.questions.map((q) => ({
               type: q.type,

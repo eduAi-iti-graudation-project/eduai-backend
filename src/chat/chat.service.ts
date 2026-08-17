@@ -1,8 +1,44 @@
 import { Injectable, HttpStatus } from '@nestjs/common';
-import type { User } from '@prisma/client';
+import type { User, AdminChatPeerRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ApiError } from '../common/errors/api-error';
 import { ErrorCode } from '../common/errors/codes';
+
+type ThreadKind = 'CLASS' | 'ADMIN';
+
+interface MessageModel {
+  findUnique(args: {
+    where: { id: string };
+  }): Promise<{ id: string; createdAt: Date } | null>;
+  findMany(args: {
+    where: Record<string, unknown>;
+    orderBy: Array<Record<string, string>>;
+    take: number;
+  }): Promise<
+    Array<{
+      id: string;
+      threadId: string;
+      authorId: string;
+      text: string;
+      readAt: Date | null;
+      createdAt: Date;
+    }>
+  >;
+  create(args: {
+    data: { threadId: string; authorId: string; text: string };
+  }): Promise<{
+    id: string;
+    threadId: string;
+    authorId: string;
+    text: string;
+    readAt: Date | null;
+    createdAt: Date;
+  }>;
+  updateMany(args: {
+    where: Record<string, unknown>;
+    data: { readAt: Date };
+  }): Promise<{ count: number }>;
+}
 
 @Injectable()
 export class ChatService {
@@ -14,6 +50,7 @@ export class ChatService {
     studentId?: string,
   ): Promise<{
     id: string;
+    type: ThreadKind;
     courseOfferingId: string;
     teacherId: string;
     studentId: string;
@@ -64,6 +101,7 @@ export class ChatService {
 
     return {
       id: thread.id,
+      type: 'CLASS',
       courseOfferingId: thread.courseOfferingId,
       teacherId: thread.teacherId,
       studentId: thread.studentId,
@@ -72,12 +110,78 @@ export class ChatService {
     };
   }
 
+  async createAdminThreadOrGet(
+    user: User,
+    peerId: string,
+    peerRole: AdminChatPeerRole,
+  ): Promise<{
+    id: string;
+    type: ThreadKind;
+    adminId: string;
+    peerId: string;
+    peerRole: AdminChatPeerRole;
+    createdAt: string;
+    updatedAt: string;
+  }> {
+    if (user.role !== 'ADMIN') {
+      throw new ApiError(
+        ErrorCode.CHAT_FORBIDDEN,
+        HttpStatus.FORBIDDEN,
+        'Only an admin can start a conversation with a teacher or guardian.',
+      );
+    }
+
+    const peer = await this.prisma.user.findUnique({ where: { id: peerId } });
+    if (
+      !peer ||
+      (peerRole === 'TEACHER' && peer.role !== 'TEACHER') ||
+      (peerRole === 'GUARDIAN' && peer.role !== 'GUARDIAN')
+    ) {
+      throw new ApiError(
+        ErrorCode.USER_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'The person you are trying to message could not be found.',
+      );
+    }
+
+    if (peer.organizationId !== user.organizationId) {
+      throw new ApiError(
+        ErrorCode.CHAT_FORBIDDEN,
+        HttpStatus.FORBIDDEN,
+        'You can only message people from your own organization.',
+      );
+    }
+
+    const thread = await this.prisma.adminChatThread.upsert({
+      where: {
+        adminId_peerId_peerRole: {
+          adminId: user.id,
+          peerId,
+          peerRole,
+        },
+      },
+      update: {},
+      create: { adminId: user.id, peerId, peerRole },
+    });
+
+    return {
+      id: thread.id,
+      type: 'ADMIN',
+      adminId: thread.adminId,
+      peerId: thread.peerId,
+      peerRole: thread.peerRole,
+      createdAt: thread.createdAt.toISOString(),
+      updatedAt: thread.updatedAt.toISOString(),
+    };
+  }
+
   async listThreads(user: User): Promise<
     Array<{
       id: string;
-      courseOfferingId: string;
-      teacherId: string;
-      studentId: string;
+      type: ThreadKind;
+      courseOfferingId: string | null;
+      teacherId: string | null;
+      studentId: string | null;
       createdAt: string;
       updatedAt: string;
       className: string | null;
@@ -88,11 +192,11 @@ export class ChatService {
       unreadCount: number;
     }>
   > {
-    const where =
+    const classWhere =
       user.role === 'TEACHER' ? { teacherId: user.id } : { studentId: user.id };
 
-    const threads = await this.prisma.chatThread.findMany({
-      where,
+    const classThreads = await this.prisma.chatThread.findMany({
+      where: classWhere,
       include: {
         offering: {
           select: {
@@ -119,12 +223,40 @@ export class ChatService {
       orderBy: { updatedAt: 'desc' },
     });
 
-    return threads.map((thread) => {
+    const adminThreads =
+      user.role === 'STUDENT'
+        ? []
+        : await this.prisma.adminChatThread.findMany({
+            where:
+              user.role === 'ADMIN'
+                ? { adminId: user.id }
+                : { peerId: user.id },
+            include: {
+              admin: { select: { id: true, name: true } },
+              peer: { select: { id: true, name: true } },
+              messages: {
+                orderBy: { createdAt: 'desc' },
+                take: 1,
+                select: { text: true, authorId: true },
+              },
+              _count: {
+                select: {
+                  messages: {
+                    where: { authorId: { not: user.id }, readAt: null },
+                  },
+                },
+              },
+            },
+            orderBy: { updatedAt: 'desc' },
+          });
+
+    const classMapped = classThreads.map((thread) => {
       const isTeacher = user.role === 'TEACHER';
       const peer = isTeacher ? thread.student : thread.teacher;
       const lastMessage = thread.messages[0] ?? null;
       return {
         id: thread.id,
+        type: 'CLASS' as const,
         courseOfferingId: thread.courseOfferingId,
         teacherId: thread.teacherId,
         studentId: thread.studentId,
@@ -139,6 +271,35 @@ export class ChatService {
         unreadCount: thread._count.messages,
       };
     });
+
+    const adminMapped = adminThreads.map((thread) => {
+      const isAdmin = user.role === 'ADMIN';
+      const peer = isAdmin ? thread.peer : thread.admin;
+      const lastMessage = thread.messages[0] ?? null;
+      return {
+        id: thread.id,
+        type: 'ADMIN' as const,
+        courseOfferingId: null,
+        teacherId: null,
+        studentId: null,
+        createdAt: thread.createdAt.toISOString(),
+        updatedAt: thread.updatedAt.toISOString(),
+        className: isAdmin
+          ? thread.peerRole === 'GUARDIAN'
+            ? 'Parent / Guardian'
+            : 'Teacher'
+          : 'School admin',
+        peerId: peer.id,
+        peerName: peer.name,
+        lastMessage: lastMessage?.text ?? null,
+        lastMessageAuthorId: lastMessage?.authorId ?? null,
+        unreadCount: thread._count.messages,
+      };
+    });
+
+    return [...classMapped, ...adminMapped].sort((a, b) =>
+      b.updatedAt.localeCompare(a.updatedAt),
+    );
   }
 
   async getMessages(
@@ -157,15 +318,17 @@ export class ChatService {
     }>;
     nextCursor: string | null;
   }> {
-    await this.assertParticipant(threadId, userId);
+    const kind = await this.resolveThreadKind(threadId);
+    await this.assertParticipant(threadId, userId, kind);
+    const messagesModel = this.messageModel(kind);
 
     const pageSize = Math.max(1, Math.min(200, Number(limit) || 100));
 
     const cursor = before
-      ? await this.prisma.chatMessage.findUnique({ where: { id: before } })
+      ? await messagesModel.findUnique({ where: { id: before } })
       : null;
 
-    const messages = await this.prisma.chatMessage.findMany({
+    const messages = await messagesModel.findMany({
       where: {
         threadId,
         ...(cursor
@@ -212,16 +375,25 @@ export class ChatService {
     readAt: string | null;
     createdAt: string;
   }> {
-    await this.assertParticipant(threadId, userId);
+    const kind = await this.resolveThreadKind(threadId);
+    await this.assertParticipant(threadId, userId, kind);
+    const messagesModel = this.messageModel(kind);
 
-    const message = await this.prisma.chatMessage.create({
+    const message = await messagesModel.create({
       data: { threadId, authorId: userId, text },
     });
 
-    await this.prisma.chatThread.update({
-      where: { id: threadId },
-      data: { updatedAt: new Date() },
-    });
+    if (kind === 'ADMIN') {
+      await this.prisma.adminChatThread.update({
+        where: { id: threadId },
+        data: { updatedAt: new Date() },
+      });
+    } else {
+      await this.prisma.chatThread.update({
+        where: { id: threadId },
+        data: { updatedAt: new Date() },
+      });
+    }
 
     return {
       id: message.id,
@@ -234,12 +406,19 @@ export class ChatService {
   }
 
   async markRead(threadId: string, userId: string): Promise<void> {
-    await this.assertParticipant(threadId, userId);
+    const kind = await this.resolveThreadKind(threadId);
+    await this.assertParticipant(threadId, userId, kind);
 
-    await this.prisma.chatMessage.updateMany({
+    await this.messageModel(kind).updateMany({
       where: { threadId, authorId: { not: userId }, readAt: null },
       data: { readAt: new Date() },
     });
+  }
+
+  private messageModel(kind: ThreadKind): MessageModel {
+    return kind === 'ADMIN'
+      ? this.prisma.adminChatMessage
+      : this.prisma.chatMessage;
   }
 
   private async assertApprovedEnrollment(
@@ -259,10 +438,50 @@ export class ChatService {
     }
   }
 
+  private async resolveThreadKind(threadId: string): Promise<ThreadKind> {
+    const [classThread, adminThread] = await Promise.all([
+      this.prisma.chatThread.findUnique({ where: { id: threadId } }),
+      this.prisma.adminChatThread.findUnique({ where: { id: threadId } }),
+    ]);
+
+    if (adminThread) return 'ADMIN';
+    if (classThread) return 'CLASS';
+
+    throw new ApiError(
+      ErrorCode.THREAD_NOT_FOUND,
+      HttpStatus.NOT_FOUND,
+      'This conversation could not be found.',
+    );
+  }
+
   private async assertParticipant(
     threadId: string,
     userId: string,
+    kind?: ThreadKind,
   ): Promise<void> {
+    const resolvedKind = kind ?? (await this.resolveThreadKind(threadId));
+
+    if (resolvedKind === 'ADMIN') {
+      const thread = await this.prisma.adminChatThread.findUnique({
+        where: { id: threadId },
+      });
+      if (!thread) {
+        throw new ApiError(
+          ErrorCode.THREAD_NOT_FOUND,
+          HttpStatus.NOT_FOUND,
+          'This conversation could not be found.',
+        );
+      }
+      if (thread.adminId !== userId && thread.peerId !== userId) {
+        throw new ApiError(
+          ErrorCode.THREAD_NOT_PARTICIPANT,
+          HttpStatus.FORBIDDEN,
+          'You are not a participant in this conversation.',
+        );
+      }
+      return;
+    }
+
     const thread = await this.prisma.chatThread.findUnique({
       where: { id: threadId },
     });
