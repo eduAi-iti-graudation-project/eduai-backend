@@ -481,6 +481,21 @@ export class MeetingsService {
       return { status: meeting.transcriptStatus };
     }
 
+    // The frontend sends startMs = Date.now() (~1.7 trillion), but the DB
+    // column is a 32-bit integer (max ~2.1 billion).  Convert absolute epoch
+    // timestamps to *relative* offsets from the meeting's scheduled start so
+    // the values always fit.
+    const meetingBaseMs = meeting.scheduledStart.getTime();
+    const MAX_INT32 = 2_147_483_647;
+    const toRelative = (ms: number): number => {
+      if (ms > 1_000_000_000_000) {
+        // Absolute epoch-ms — convert to offset from meeting start
+        return Math.max(0, Math.min(ms - meetingBaseMs, MAX_INT32));
+      }
+      // Already relative or zero
+      return Math.min(Math.max(ms, 0), MAX_INT32);
+    };
+
     await this.prisma.$transaction(async (tx) => {
       if (replace) {
         await tx.meetingTranscript.deleteMany({ where: { meetingId: meeting.id } });
@@ -514,13 +529,17 @@ export class MeetingsService {
 
       let idx = 0;
       for (const s of segments) {
-        const key = `${s.startMs ?? 0}|${s.text}`;
+        const relStart = toRelative(s.startMs ?? 0);
+        const relEnd = s.endMs
+          ? toRelative(s.endMs)
+          : relStart + 3000;
+        const key = `${relStart}|${s.text}`;
         if (!replace && existingKeys.has(key)) continue;
         toInsert.push({
           meetingId: meeting.id,
           order: existingCount + idx,
-          startMs: s.startMs ?? 0,
-          endMs: s.endMs ?? (s.startMs ?? 0) + 3000,
+          startMs: relStart,
+          endMs: relEnd,
           text: s.text,
         });
         idx++;
@@ -528,6 +547,9 @@ export class MeetingsService {
 
       if (toInsert.length > 0) {
         await tx.meetingTranscript.createMany({ data: toInsert });
+        this.logger.log(
+          `[transcript] saved ${toInsert.length} segments for meeting ${meetingId}`,
+        );
       }
 
       await tx.meeting.update({
