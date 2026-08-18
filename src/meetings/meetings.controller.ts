@@ -9,8 +9,12 @@ import {
   Patch,
   Post,
   Query,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
-import { ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
+import { ApiConsumes, ApiBody, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { MeetingsService } from './meetings.service';
 import { Roles } from '../auth/roles.decorator';
 import { AllowGuardianless } from '../auth/allow-guardianless.decorator';
@@ -27,6 +31,7 @@ import {
   ChatHistoryResponseDto,
   ChatMessageResponseDto,
   TranscriptResponseDto,
+  SaveTranscriptDto,
 } from './dto';
 
 @ApiTags('meetings')
@@ -137,6 +142,37 @@ export class MeetingsController {
     return this.meetingsService.getRecording(user, id);
   }
 
+  @Roles('TEACHER', 'ADMIN')
+  @Post(':id/recording/upload')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: 200 * 1024 * 1024 },
+    }),
+  )
+  @ApiOperation({ summary: 'Upload a recording video file for a meeting (host only)' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', format: 'binary' },
+      },
+    },
+  })
+  async uploadRecording(
+    @Param('id', ParseUUIDPipe) id: string,
+    @UploadedFile() file: Express.Multer.File,
+    @CurrentUser() user: User,
+  ): Promise<MeetingDetailDto> {
+    return this.meetingsService.uploadRecording(
+      user,
+      id,
+      file.buffer,
+      file.originalname,
+    );
+  }
+
   @Roles('TEACHER', 'ADMIN', 'STUDENT', 'GUARDIAN')
   @Get(':id/messages')
   @AllowGuardianless()
@@ -190,7 +226,7 @@ export class MeetingsController {
   @ApiOperation({ summary: 'Save live transcript segments captured during the call' })
   async saveTranscript(
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: { segments: { startMs: number; text: string }[] },
+    @Body() dto: SaveTranscriptDto,
     @CurrentUser() user: User,
   ) {
     return this.meetingsService.saveLiveTranscript(user, id, dto.segments ?? []);

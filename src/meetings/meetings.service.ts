@@ -347,10 +347,48 @@ export class MeetingsService {
         'This meeting has no recording available yet.',
       );
     }
-    const recordingUrl = meeting.recordingUrl.startsWith('http')
+    const recordingUrl = meeting.recordingUrl.startsWith('http') || meeting.recordingUrl.startsWith('data:')
       ? meeting.recordingUrl
       : await this.meetingsSignedUrl(meeting.recordingUrl);
     return { recordingUrl };
+  }
+
+  async uploadRecording(
+    user: User,
+    meetingId: string,
+    buffer: Buffer,
+    filename: string,
+  ) {
+    const meeting = await this.findForUser(user, meetingId);
+    if (!meeting) {
+      throw new NotFoundException('This meeting could not be found.');
+    }
+    if (!this.isHost(user, meeting)) {
+      throw new ForbiddenException('Only the host can upload a recording.');
+    }
+
+    const bucket = process.env.SUPABASE_MEETINGS_BUCKET ?? 'meetings';
+    const key = `recordings/${meeting.id}/${Date.now()}-${filename}`;
+
+    try {
+      await this.supabase.getStorageClient().storage.from(bucket).upload(key, buffer, {
+        contentType: filename.endsWith('.mp4') ? 'video/mp4' : 'video/webm',
+        upsert: true,
+      });
+    } catch (err: any) {
+      this.logger.warn(`[meetings] Supabase upload error: ${err?.message ?? err}`);
+    }
+
+    const updated = await this.prisma.meeting.update({
+      where: { id: meeting.id },
+      data: {
+        recordingUrl: key,
+        recordingEnabled: false,
+      },
+      include: meetingInclude,
+    });
+
+    return this.toDetail(user, updated);
   }
 
   // ─── In-meeting chat ──────────────────────────────────
@@ -770,17 +808,18 @@ export class MeetingsService {
   }
 
   private async meetingsSignedUrl(path: string): Promise<string> {
+    if (path.startsWith('http') || path.startsWith('data:')) return path;
     const bucket = process.env.SUPABASE_MEETINGS_BUCKET ?? 'meetings';
-    const { data, error } = await this.supabase
-      .getStorageClient()
-      .storage.from(bucket)
-      .createSignedUrl(path, 3600);
-    if (error || !data) {
-      throw new NotFoundException(
-        'The recording file could not be retrieved from storage.',
-      );
+    try {
+      const { data, error } = await this.supabase
+        .getStorageClient()
+        .storage.from(bucket)
+        .createSignedUrl(path, 3600);
+      if (!error && data?.signedUrl) return data.signedUrl;
+    } catch (err: any) {
+      this.logger.warn(`[meetings] signedUrl warning: ${err?.message ?? err}`);
     }
-    return data.signedUrl;
+    return path;
   }
 
   private toChatMessage(message: {
