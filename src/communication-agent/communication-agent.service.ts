@@ -329,9 +329,10 @@ export class CommunicationAgentService {
       );
       await this.notificationsService.notifyUser(
         studentId,
-        'AGENT_ALERT',
+        'PRACTICE_READY',
         `New practice recommended for you`,
         `We found one area to work on: "${focus}". Open Study Lab → Practice questions to train on it before the next assessment.`,
+        { generationId },
       );
     } catch (err: unknown) {
       this.logger.error(

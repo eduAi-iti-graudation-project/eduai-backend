@@ -36,14 +36,14 @@ Given:
 - Ratio: ${Math.round((pointsAwarded / maxPoints) * 100)}%
 
 Return valid JSON matching this schema:
-{ "feedback": "string — 2-4 sentences of specific, actionable feedback explaining why the student received this score and how to improve." }
+{ "feedback": "string — structured markdown: ONE bolded takeaway sentence stating the score and the main reason, then a short '### To improve' bullet list of 2-3 concrete actions. Keep it concise." }
 
 Guidelines:
 1. Explain why the student received this score
 2. Reference specific parts of their submission
-3. Suggest concrete improvements
+3. Suggest concrete improvements as short bullets
 4. Be encouraging but honest
-5. Keep feedback to 2-4 sentences
+5. Keep the whole feedback short (one takeaway sentence + 2-3 bullets)
 ` + FORMATTING_RULES,
     userPrompt: `Student submission:\n${submissionContent.slice(0, 3000)}`,
     schema: FeedbackSchema,

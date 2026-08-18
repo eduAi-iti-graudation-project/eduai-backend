@@ -10,6 +10,7 @@ import { ProviderService } from '../common/ai/provider.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { QuizzesService } from '../quizzes/quizzes.service';
 import { HomeworkHelperAgent } from '../homework-helper/homework-helper.agent';
+import { NotificationsService } from '../notifications/notifications.service';
 import { ApiError } from '../common/errors/api-error';
 import { ErrorCode } from '../common/errors/codes';
 import {
@@ -58,6 +59,7 @@ export class StruggleSignalsService {
     private readonly provider: ProviderService,
     private readonly quizzesService: QuizzesService,
     private readonly homeworkAgent: HomeworkHelperAgent,
+    private readonly notifications: NotificationsService,
   ) {
     this.extractor = createStruggleSignalExtractor((systemPrompt, userPrompt) =>
       this.provider.chat(systemPrompt, userPrompt),
@@ -523,6 +525,14 @@ export class StruggleSignalsService {
       where: { id: quizGeneration.quizId },
       data: { status: 'PUBLISHED' },
     });
+
+    await this.notifications.notifyUser(
+      signal.studentId,
+      'QUIZ_READY',
+      'A practice quiz is ready for you',
+      `We noticed "${signal.concept}" came up in class and could use a little practice. A short follow-up quiz is waiting for you — open it from your Quizzes page.`,
+      { quizId: quizGeneration.quizId, concept: signal.concept },
+    );
 
     const updated = await this.prisma.struggleSignal.updateMany({
       where: { id: signal.id, status: { in: ['PENDING', 'FAILED'] } },

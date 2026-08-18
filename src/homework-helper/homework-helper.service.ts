@@ -189,6 +189,11 @@ export class HomeworkHelperService {
         (threadId
           ? `\n\nYou can reply to them in the class chat thread: ${threadId}`
           : ''),
+      {
+        threadId: threadId ?? null,
+        studentId,
+        studentName: student?.name ?? 'Student',
+      },
     );
   }
 }

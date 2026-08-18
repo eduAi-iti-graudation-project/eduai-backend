@@ -66,7 +66,7 @@ const DIAGNOSER_PROMPT =
   'Reference the actual numbers. Keep every bullet short (a few words), never sentences longer than ~15 words.\n' +
   'Return valid JSON with EXACTLY these fields:\n' +
   '{\n' +
-  '  "reason": "string — one paragraph (3-5 sentences) explaining what the numbers show",\n' +
+  '  "reason": "string — a structured markdown brief: open with ONE bolded takeaway sentence, then 1-2 short labelled sections (### Key numbers, ### What is driving this) with 2-4 bullets each",\n' +
   '  "headline": "string — short one-line verdict, e.g. "Omar is at risk in English Literature"",\n' +
   '  "highlights": ["string — 3-5 short factual bullets citing the numbers"],\n' +
   '  "strengths": ["string — 1-3 skills done well, with percentage when known"],\n' +
@@ -88,38 +88,38 @@ Respond with ONLY valid JSON: {"flagged": true|false, "reason": "string", "confi
 const TEACHER_ADVISOR_PROMPT = `You are a teacher advisor. Given a student diagnosis and their actual performance numbers, provide detailed analysis, skill gaps, interventions, and resource suggestions.
 Return valid JSON with EXACTLY these fields:
 {
-  "analysis": "string — detailed analysis grounded in the numbers",
-  "skillGaps": ["string array of identified skill gaps"],
-  "interventions": ["string array of suggested interventions"],
-  "resourceSuggestions": ["string array of recommended resources"]
+  "analysis": "string — structured markdown analysis grounded in the numbers. Open with ONE bolded takeaway sentence, then use labelled sections with bullet lists, e.g. "### Key numbers" (cite the averages and gaps), "### Strengths", "### Main concerns", "### What is driving the score". Never write one dense paragraph.",
+  "skillGaps": ["string array of identified skill gaps, each short"],
+  "interventions": ["string array of suggested interventions, each short and concrete"],
+  "resourceSuggestions": ["string array of recommended resources, each short"]
 }
-Do not omit any fields.`;
+Do not omit any fields.${FORMATTING_RULES}`;
 
 const PARENT_LIAISON_PROMPT = `You are a parent liaison. Given a student diagnosis, write an empathetic, specific message for the parent and suggest home support strategies.
 Return valid JSON with EXACTLY these fields:
 {
-  "message": "string with empathetic message for the parent",
-  "homeSupport": ["string array of home support strategies"]
+  "message": "string — structured markdown message: open with ONE bolded, empathetic takeaway, then a short "### What you can do at home" bullet list of 2-3 concrete actions. Keep it warm and short.",
+  "homeSupport": ["string array of home support strategies, each short and concrete"]
 }
-Do not omit any fields.`;
+Do not omit any fields.${FORMATTING_RULES}`;
 
 const PEER_COACH_PROMPT = `You are a peer coach for teachers. Given class statistics showing a class-wide issue, provide constructive feedback, pattern analysis, and actionable strategies.
 Return valid JSON with EXACTLY these fields:
 {
-  "feedback": "string with constructive feedback",
-  "patternAnalysis": "string describing observed patterns",
-  "strategies": ["string array of actionable strategies"]
+  "feedback": "string — structured markdown: open with ONE bolded takeaway, then a short "### Patterns" bullet list citing the class numbers",
+  "patternAnalysis": "string — 2-3 short bullets describing observed patterns",
+  "strategies": ["string array of actionable strategies, each short and concrete"]
 }
-Do not omit any fields.`;
+Do not omit any fields.${FORMATTING_RULES}`;
 
 const MANAGEMENT_ADVISOR_PROMPT = `You are a school management advisor. Given class statistics, provide a concise summary, class trend, and recommendation for administration.
 Return valid JSON with EXACTLY these fields:
 {
-  "summary": "string with concise summary",
-  "classTrend": "string describing class trend over time",
-  "recommendation": "string with recommendation for administration"
+  "summary": "string — structured markdown: ONE bolded takeaway, then a short "### Highlights" bullet list citing the class numbers",
+  "classTrend": "string — one or two short bullets describing class trend over time",
+  "recommendation": "string — one short, concrete recommendation for administration"
 }
-Do not omit any fields.`;
+Do not omit any fields.${FORMATTING_RULES}`;
 
 const REVIEWER_PROMPT = `You are the final reviewer of a school's communication department. You are given a flagged verdict, the diagnosis brief, and the draft messages for the teacher, the guardian, and (when present) the management summary.
 Check that:
@@ -232,7 +232,7 @@ export class CommunicationWorkflow {
             this.teacherAdvisor.generate(this.teacherAdvisorPrompt(input, explanation.reason), {
               structuredOutput: { schema: TeacherStudentContentSchema },
             }).then((r) => r.object),
-          this.buildTeacherStudentContent(input, explanation.reason),
+          this.buildTeacherStudentContent(input),
         ),
         this.safeStructured<GuardianStudentContent>(
           'guardian content',
@@ -240,7 +240,7 @@ export class CommunicationWorkflow {
             this.parentLiaison.generate(this.parentLiaisonPrompt(input, explanation.reason), {
               structuredOutput: { schema: GuardianStudentContentSchema },
             }).then((r) => r.object),
-          this.buildGuardianContent(input, explanation.reason),
+          this.buildGuardianContent(input),
         ),
         teacherIssue
           ? this.safeStructured<TeacherFeedback>(
@@ -487,15 +487,23 @@ export class CommunicationWorkflow {
 
   private buildTeacherStudentContent(
     input: CommunicationWorkflowInput,
-    reason: string,
   ): TeacherStudentContent {
-    const { studentName, decision, studentStats, classStats, criterionStats } = input;
+    const { studentName, decision, studentStats, classStats, criterionStats } =
+      input;
     const below = criterionStats
       .filter((c) => c.last3AvgPct < 60)
       .slice(0, 3)
       .map((c) => c.criteriaDescription);
     return {
-      analysis: `${studentName} is showing a ${decision.type.toLowerCase().replace('_', ' ')} pattern (${Math.round(studentStats.last3AvgPct)}% vs class ${Math.round(classStats.classAvgPct)}%). ${reason}`,
+      analysis:
+        `**${studentName} is showing a ${decision.type.toLowerCase().replace('_', ' ')} pattern (${Math.round(studentStats.last3AvgPct)}% vs class ${Math.round(classStats.classAvgPct)}%).**\n\n` +
+        `### Key numbers\n` +
+        `- Average of the last ${studentStats.count} graded submissions: **${Math.round(studentStats.last3AvgPct)}%**\n` +
+        `- Class average: **${Math.round(classStats.classAvgPct)}%**\n` +
+        (below.length > 0 ? `- Weakest areas: ${below.join(', ')}\n` : '') +
+        `\n### Recommended next steps\n` +
+        `- Generate the recommended practice set and have the student complete it\n` +
+        `- Hold a 1:1 check-in to identify the root cause`,
       skillGaps:
         below.length > 0 ? below : ['Core concepts need reinforcement'],
       interventions: [
@@ -511,10 +519,14 @@ export class CommunicationWorkflow {
 
   private buildGuardianContent(
     input: CommunicationWorkflowInput,
-    reason: string,
   ): GuardianStudentContent {
     return {
-      message: `We have observed that ${input.studentName} is having difficulty in at least one area (${input.decision.type.toLowerCase().replace('_', ' ')}). ${reason} We are adding a recommended practice set in Study Lab and will follow up with you.`,
+      message:
+        `**We have observed that ${input.studentName} is having difficulty in ${input.decision.type.toLowerCase().replace('_', ' ')}.**\n\n` +
+        `### What you can do at home\n` +
+        `- Help your child complete the recommended practice set in Study Lab\n` +
+        `- Create a quiet, consistent study schedule this week\n` +
+        `- Reach out to the teacher with any questions after the alert`,
       homeSupport: [
         'Help your child complete the recommended practice set in Study Lab',
         'Create a quiet, consistent study schedule this week',
@@ -523,10 +535,12 @@ export class CommunicationWorkflow {
     };
   }
 
-  private buildTeacherFeedback(input: CommunicationWorkflowInput): TeacherFeedback {
+  private buildTeacherFeedback(
+    input: CommunicationWorkflowInput,
+  ): TeacherFeedback {
     const className = input.offeringName ?? 'the class';
     return {
-      feedback: `The class average in ${className} is ${Math.round(input.classStats.classAvgPct)}% across ${input.classStats.studentCount} students.`,
+      feedback: `**The class average in ${className} is ${Math.round(input.classStats.classAvgPct)}% across ${input.classStats.studentCount} students.**`,
       patternAnalysis: `${input.classStats.belowAverageCount} of ${input.classStats.studentCount} students are below target.`,
       strategies: [
         'Re-teach the weakest criteria to the whole class',
@@ -536,10 +550,12 @@ export class CommunicationWorkflow {
     };
   }
 
-  private buildManagementSummary(input: CommunicationWorkflowInput): ManagementSummary {
+  private buildManagementSummary(
+    input: CommunicationWorkflowInput,
+  ): ManagementSummary {
     const className = input.offeringName ?? 'the class';
     return {
-      summary: `Class ${className} is averaging ${Math.round(input.classStats.classAvgPct)}% with ${input.classStats.belowAverageCount} of ${input.classStats.studentCount} students below target.`,
+      summary: `**Class ${className} is averaging ${Math.round(input.classStats.classAvgPct)}% with ${input.classStats.belowAverageCount} of ${input.classStats.studentCount} students below target.**`,
       classTrend: 'The class needs structured intervention this term.',
       recommendation:
         'Monitor the next assessment and provide targeted support for the weakest criteria.',
