@@ -188,7 +188,7 @@ export class StruggleSignalsService {
       let targetStudentId: string | null = participants.find((p) => p.user.role === 'STUDENT')?.userId ?? null;
 
       if (!targetStudentId && meeting.courseOfferingId) {
-        const enrollment = await this.prisma.courseEnrollment.findFirst({
+        const enrollment = await this.prisma.enrollment.findFirst({
           where: { courseOfferingId: meeting.courseOfferingId, status: 'APPROVED' },
           select: { studentId: true },
         });
