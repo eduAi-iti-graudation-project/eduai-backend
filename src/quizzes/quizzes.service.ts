@@ -5,6 +5,7 @@ import { QuizzesGradingService } from './quizzes-grading.service';
 import { QuizViolationsService } from './quiz-violations.service';
 import { QuizGenerationAgent } from './agents/quiz-generation.agent';
 import { MaterialsService } from '../materials/materials.service';
+import { type QuizAgentStep } from './dto';
 import { ApiError } from '../common/errors/api-error';
 import { ErrorCode } from '../common/errors/codes';
 import { ProviderService } from '../common/ai/provider.service';
