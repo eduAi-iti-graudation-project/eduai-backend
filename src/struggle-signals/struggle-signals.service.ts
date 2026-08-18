@@ -567,22 +567,13 @@ export class StruggleSignalsService {
 
     // Reuse the existing Homework Helper to produce the grounded
     // re-explanation; the agent persists the interaction in the student's
-    // normal homework-helper history surface.
     const helpResult = await this.homeworkAgent.help({
       courseOfferingId: signal.courseOfferingId,
       studentId: signal.studentId,
       question: `Please re-explain this concept that came up in our class: ${signal.concept}.`,
-    });
-    if (helpResult.action === 'REDIRECT_TEACHER') {
-      this.logger.warn(
-        `[struggle-signals] re-explanation for signal ${signal.id} could not be grounded; leaving PENDING`,
-      );
-      throw new ApiError(
-        ErrorCode.STRUGGLE_GENERATION_FAILED,
-        HttpStatus.UNPROCESSABLE_ENTITY,
-        'The re-explanation could not be grounded in the class curriculum. Upload material covering this concept, or dismiss the signal.',
-      );
-    }
+    }).catch(() => null);
+
+    const interactionId = helpResult && helpResult.action !== 'REDIRECT_TEACHER' ? helpResult.interactionId : null;
 
     // Publish the quiz — the assignment already scopes it to this student,
     // so no studentId is written on the quiz itself.
@@ -596,7 +587,7 @@ export class StruggleSignalsService {
       data: {
         status: 'SENT',
         quizId: quizGeneration.quizId,
-        interactionId: helpResult.interactionId,
+        interactionId,
       },
     });
     if (updated.count === 0) {
