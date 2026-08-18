@@ -411,8 +411,10 @@ export class MeetingsService {
       where: { meetingId: meeting.id },
       orderBy: { order: 'asc' },
     });
+    const status =
+      segments.length > 0 ? 'READY' : meeting.transcriptStatus;
     return {
-      status: meeting.transcriptStatus,
+      status,
       segments: segments.map((s) => ({
         startMs: s.startMs,
         endMs: s.endMs,
