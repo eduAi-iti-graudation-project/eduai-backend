@@ -147,10 +147,22 @@ export const RecordingResponseSchema = z.object({
   recordingUrl: z.string(),
 });
 
+export const SaveTranscriptSegmentSchema = z.object({
+  startMs: z.number().int().nonnegative().optional().default(0),
+  endMs: z.number().int().nonnegative().optional(),
+  text: z.string(),
+});
+
+export const SaveTranscriptSchema = z.object({
+  segments: z.array(SaveTranscriptSegmentSchema).default([]),
+  replace: z.boolean().optional().default(false),
+});
+
 // ─── DTO Classes ────────────────────────────────────────
 export class CreateMeetingDto extends createZodDto(CreateMeetingSchema) {}
 export class UpdateRecordingDto extends createZodDto(UpdateRecordingSchema) {}
 export class SendChatMessageDto extends createZodDto(SendChatMessageSchema) {}
+export class SaveTranscriptDto extends createZodDto(SaveTranscriptSchema) {}
 export class MeetingDetailDto extends createZodDto(MeetingDetailSchema) {}
 export class MeetingListDto extends createZodDto(MeetingListSchema) {}
 export class JoinMeetingDto extends createZodDto(JoinMeetingSchema) {}

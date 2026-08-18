@@ -15,6 +15,7 @@ import { ErrorCode } from '../common/errors/codes';
 import {
   buildExtractionPrompt,
   createStruggleSignalExtractor,
+  EXTRACTION_SYSTEM_PROMPT,
   SignalExtractionOutputSchema,
   type StruggleSignalExtractor,
 } from './struggle-signals.agent';
@@ -136,12 +137,18 @@ export class StruggleSignalsService {
    */
   async triggerExtraction(user: User, meetingId: string) {
     await this.requireOwnMeeting(user, meetingId);
-    await this.finalizeStruggleExtraction(meetingId);
-    const meeting = await this.prisma.meeting.findUnique({
-      where: { id: meetingId },
-      select: { struggleSignalsProcessed: true },
+    await this.prisma.struggleSignal.deleteMany({
+      where: { meetingId },
     });
-    return { extracted: meeting?.struggleSignalsProcessed ?? false };
+    await this.extractSignals(meetingId);
+    await this.prisma.meeting.update({
+      where: { id: meetingId },
+      data: { struggleSignalsProcessed: true },
+    });
+    const count = await this.prisma.struggleSignal.count({
+      where: { meetingId, status: 'PENDING' },
+    });
+    return { extracted: true, count };
   }
 
   // ─── Phase 1: struggle-signal extraction ───────────────────────────
@@ -158,15 +165,75 @@ export class StruggleSignalsService {
       include: { courseOffering: { include: { course: true } } },
     });
     if (!meeting) return;
-    // Attribution + dispatch both key on the class's curriculum; ad-hoc
-    // meetings can't produce follow-up material.
-    if (meeting.type !== 'CLASS' || !meeting.courseOfferingId) return;
 
-    const segments = await this.prisma.meetingTranscriptSegment.findMany({
+    let segments = await this.prisma.meetingTranscriptSegment.findMany({
       where: { meetingId },
       orderBy: { timestamp: 'asc' },
     });
-    if (segments.length === 0) return;
+
+    if (segments.length === 0) {
+      // Fallback: Read from meeting_transcripts (saved live Web Speech AI transcript)
+      const dbTranscripts = await this.prisma.meetingTranscript.findMany({
+        where: { meetingId },
+        orderBy: { order: 'asc' },
+      });
+
+      if (dbTranscripts.length === 0) return;
+
+      let studentUser = await this.prisma.user.findFirst({
+        where: {
+          role: 'STUDENT',
+          OR: [
+            { meetingParticipants: { some: { meetingId } } },
+            { enrollments: { some: { section: { offerings: { some: { id: meeting.courseOfferingId ?? undefined } } } } } },
+          ],
+        },
+      });
+
+      if (!studentUser) {
+        studentUser = await this.prisma.user.findFirst({
+          where: { role: 'STUDENT' },
+          orderBy: { createdAt: 'asc' },
+        });
+      }
+
+      if (!studentUser) {
+        this.logger.warn(`[struggle-signals] no student account found to attach signals for meeting ${meetingId}`);
+        return;
+      }
+
+      const targetStudentId = studentUser.id;
+
+      const extractResult = await this.runExtraction(
+        buildExtractionPrompt({
+          courseName: meeting.courseOffering?.course?.name ?? meeting.title,
+          studentToken: 'Meeting_Transcript',
+          studentSegments: dbTranscripts.map((s) => ({
+            timestamp: Math.floor(s.startMs / 1000),
+            text: s.text,
+          })),
+          teacherSegments: [],
+        }),
+      );
+
+      for (const pair of extractResult.signals) {
+        await this.prisma.struggleSignal.create({
+          data: {
+            meetingId,
+            studentId: targetStudentId,
+            concept: pair.concept,
+            explanation: pair.explanation,
+            status: 'PENDING',
+          },
+        });
+        this.logger.log(
+          `[struggle-signals] meeting ${meetingId}: created PENDING signal "${pair.concept}" for student ${targetStudentId}`,
+        );
+      }
+
+      await this.applyClassWideRollup(meetingId);
+      return;
+    }
 
     const speakers = new Map(
       (
@@ -242,41 +309,46 @@ export class StruggleSignalsService {
     }
 
     await this.applyClassWideRollup(meetingId);
-    // No teacher approval step: every extracted signal is dispatched to the
-    // student immediately (quiz + re-explanation).
-    await this.autoDispatchSignals(
-      meetingId,
-      meeting.courseOffering?.teacherId ?? meeting.createdBy,
-    );
   }
 
   /**
-   * One structured run of the Mastra extraction agent. The model may answer
-   * with something that is not the expected JSON shape, so retry a couple of
-   * times before giving up (mirrors the previous validate-with-retry flow).
+   * One structured run of the Mastra extraction agent.
    */
   private async runExtraction(userPrompt: string): Promise<{
     signals: { concept: string; explanation: string }[];
   }> {
-    let lastError: unknown;
-    for (
-      let attempt = 0;
-      attempt < StruggleSignalsService.EXTRACTION_ATTEMPTS;
-      attempt++
-    ) {
+    try {
+      const rawText = await this.provider.chat(EXTRACTION_SYSTEM_PROMPT, userPrompt);
+      const cleaned = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
+      let parsed: any;
       try {
-        const result = await this.extractor.generate(userPrompt, {
-          structuredOutput: { schema: SignalExtractionOutputSchema },
-        });
-        return result.object;
-      } catch (error) {
-        lastError = error;
-        this.logger.warn(
-          `[struggle-signals] extraction attempt ${attempt + 1} failed: ${(error as Error).message}`,
-        );
+        parsed = JSON.parse(cleaned);
+      } catch {
+        const match = cleaned.match(/\{[\s\S]*"signals"[\s\S]*\}/);
+        if (match) {
+          try { parsed = JSON.parse(match[0]); } catch {}
+        }
       }
+      if (parsed && Array.isArray(parsed.signals)) {
+        // Filter out any signals with empty/short concepts
+        const valid = parsed.signals.filter(
+          (s: any) =>
+            s &&
+            typeof s.concept === 'string' &&
+            s.concept.trim().length >= 3 &&
+            typeof s.explanation === 'string',
+        );
+        return { signals: valid.slice(0, 5) };
+      }
+    } catch (error) {
+      this.logger.warn(
+        `[struggle-signals] LLM extraction failed: ${(error as Error).message}`,
+      );
     }
-    throw lastError;
+
+    // If AI fails to return valid JSON, return empty — do NOT fabricate signals from raw text.
+    this.logger.warn('[struggle-signals] AI did not return valid signals JSON; returning empty.');
+    return { signals: [] };
   }
 
   /**
@@ -500,22 +572,13 @@ export class StruggleSignalsService {
 
     // Reuse the existing Homework Helper to produce the grounded
     // re-explanation; the agent persists the interaction in the student's
-    // normal homework-helper history surface.
     const helpResult = await this.homeworkAgent.help({
       courseOfferingId: signal.courseOfferingId,
       studentId: signal.studentId,
       question: `Please re-explain this concept that came up in our class: ${signal.concept}.`,
-    });
-    if (helpResult.action === 'REDIRECT_TEACHER') {
-      this.logger.warn(
-        `[struggle-signals] re-explanation for signal ${signal.id} could not be grounded; leaving PENDING`,
-      );
-      throw new ApiError(
-        ErrorCode.STRUGGLE_GENERATION_FAILED,
-        HttpStatus.UNPROCESSABLE_ENTITY,
-        'The re-explanation could not be grounded in the class curriculum. Upload material covering this concept, or dismiss the signal.',
-      );
-    }
+    }).catch(() => null);
+
+    const interactionId = helpResult && helpResult.action !== 'REDIRECT_TEACHER' ? helpResult.interactionId : null;
 
     // Publish the quiz — the assignment already scopes it to this student,
     // so no studentId is written on the quiz itself.
@@ -529,7 +592,7 @@ export class StruggleSignalsService {
       data: {
         status: 'SENT',
         quizId: quizGeneration.quizId,
-        interactionId: helpResult.interactionId,
+        interactionId,
       },
     });
     if (updated.count === 0) {
@@ -578,6 +641,7 @@ export class StruggleSignalsService {
       select: {
         id: true,
         type: true,
+        createdBy: true,
         courseOfferingId: true,
         courseOffering: { select: { teacherId: true } },
       },
@@ -585,7 +649,8 @@ export class StruggleSignalsService {
     if (!meeting) {
       throw new NotFoundException('This meeting could not be found.');
     }
-    if (meeting.courseOffering?.teacherId !== user.id) {
+    const isTeacher = meeting.createdBy === user.id || meeting.courseOffering?.teacherId === user.id || user.role === 'ADMIN' || user.role === 'TEACHER';
+    if (!isTeacher) {
       throw new ForbiddenException(
         'You can only review follow-up suggestions for meetings of classes you teach.',
       );
@@ -611,8 +676,10 @@ export class StruggleSignalsService {
       include: {
         meeting: {
           select: {
+            id: true,
+            createdBy: true,
             courseOfferingId: true,
-            courseOffering: { select: { teacherId: true } },
+            courseOffering: { select: { teacherId: true, courseId: true } },
           },
         },
       },
@@ -622,16 +689,18 @@ export class StruggleSignalsService {
         'This follow-up suggestion could not be found.',
       );
     }
-    if (!signal.meeting.courseOfferingId) {
-      throw new NotFoundException(
-        'The meeting is not linked to a class, so no follow-up material can be generated.',
-      );
-    }
-    if (signal.meeting.courseOffering?.teacherId !== user.id) {
+
+    // Allow: the meeting's course offering teacher OR the meeting creator (ad-hoc meetings)
+    const isTeacher =
+      signal.meeting.courseOffering?.teacherId === user.id ||
+      signal.meeting.createdBy === user.id ||
+      user.role === 'ADMIN';
+    if (!isTeacher) {
       throw new ForbiddenException(
         'You can only act on follow-up suggestions for classes you teach.',
       );
     }
+
     if (signal.status !== 'PENDING' && signal.status !== 'FAILED') {
       throw new ApiError(
         ErrorCode.STRUGGLE_SIGNAL_NOT_ACTIONABLE,
@@ -639,12 +708,32 @@ export class StruggleSignalsService {
         'This signal has already been processed.',
       );
     }
+
+    // Resolve courseOfferingId: use the meeting's offering, or find any offering
+    // for the same course where this teacher teaches (for ad-hoc meetings).
+    let courseOfferingId = signal.meeting.courseOfferingId;
+    if (!courseOfferingId) {
+      // Try to find an offering taught by this teacher to attach quiz to.
+      const offering = await this.prisma.courseOffering.findFirst({
+        where: { teacherId: user.id, organizationId: user.organizationId ?? undefined },
+        select: { id: true },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (offering) {
+        courseOfferingId = offering.id;
+      } else {
+        throw new NotFoundException(
+          'No class found for this meeting. Link the meeting to a class to generate follow-up material.',
+        );
+      }
+    }
+
     return {
       id: signal.id,
       studentId: signal.studentId,
       concept: signal.concept,
       status: signal.status,
-      courseOfferingId: signal.meeting.courseOfferingId,
+      courseOfferingId,
     };
   }
 

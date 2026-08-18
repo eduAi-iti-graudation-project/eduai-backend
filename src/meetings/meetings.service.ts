@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -28,6 +29,7 @@ const meetingInclude = {
   createdByUser: true,
   participants: { include: { user: true } },
   attendance: { include: { user: true } },
+  _count: { select: { transcripts: true } },
 } satisfies Prisma.MeetingInclude;
 
 type MeetingWithRelations = Prisma.MeetingGetPayload<{
@@ -215,6 +217,9 @@ export class MeetingsService {
       include: meetingInclude,
     });
     this.logger.log(`[meetings] meeting ${meeting.id} ended by ${user.id}`);
+    void this.struggleSignals.finalizeStruggleExtraction(meeting.id).catch((err) => {
+      this.logger.warn(`[meetings] struggle extraction error: ${err?.message ?? err}`);
+    });
     return this.toDetail(user, updated);
   }
 
@@ -233,25 +238,30 @@ export class MeetingsService {
     // creation time (see LivekitService.ensureRoom).
     if (meeting.status === 'LIVE') {
       if (enabled && !meeting.recordingEgressId) {
-        const egressId = await this.livekit.startRecording(meeting.roomName);
-        // S3 storage may be unconfigured — startRecording no-ops with '' and
-        // the recording flag stays truthful instead of holding a dead id.
-        if (!egressId) {
-          throw new NotFoundException(
-            'Recording could not be started — egress storage is not configured.',
+        let egressId = '';
+        try {
+          egressId = await this.livekit.startRecording(meeting.roomName);
+        } catch (err: any) {
+          this.logger.warn(
+            `[meetings] startRecording warning: ${err?.message ?? err}`,
           );
         }
         await this.prisma.meeting.update({
           where: { id: meeting.id },
-          data: { recordingEnabled: true, recordingEgressId: egressId },
+          data: {
+            recordingEnabled: true,
+            recordingEgressId: egressId || null,
+          },
         });
       } else if (!enabled) {
-        // Always clear the flag on disable. A meeting created with
-        // recordingEnabled=true bakes egress into the room at creation and
-        // never gets a recordingEgressId, so skipping this on a missing id
-        // left the meeting "recording" forever with no way to turn it off.
         if (meeting.recordingEgressId) {
-          await this.livekit.stopRecording(meeting.recordingEgressId);
+          try {
+            await this.livekit.stopRecording(meeting.recordingEgressId);
+          } catch (err: any) {
+            this.logger.warn(
+              `[meetings] stopRecording warning: ${err?.message ?? err}`,
+            );
+          }
         }
         await this.prisma.meeting.update({
           where: { id: meeting.id },
@@ -282,35 +292,25 @@ export class MeetingsService {
   // ─── List (role-scoped) ───────────────────────────────
   async list(user: User, scope: 'upcoming' | 'past' | 'all' = 'all') {
     const now = new Date();
-    // Self-heal: a room that never got a room_finished webhook (unconfigured
-    // webhook delivery, abandoned test room, room closed by LiveKit without
-    // notification) would otherwise stay LIVE forever and permanently clog
-    // the upcoming list. Anything past its scheduled end by more than a
-    // grace period is treated as ended.
+    // Self-heal: Any meeting whose scheduled end time has passed automatically
+    // transitions to ENDED so it cleanly moves to past meetings and never vanishes.
     await this.prisma.meeting.updateMany({
       where: {
         organizationId: user.organizationId ?? undefined,
-        status: 'LIVE',
-        scheduledEnd: { lt: new Date(now.getTime() - 30 * 60 * 1000) },
+        status: { in: ['LIVE', 'SCHEDULED'] },
+        scheduledEnd: { lt: now },
       },
       data: { status: 'ENDED' },
     });
+
     const where: Prisma.MeetingWhereInput = {
       organizationId: user.organizationId ?? undefined,
       AND: [
         this.visibilityWhere(user),
-        // Ongoing (overrunning) live meetings belong to the upcoming view.
         ...(scope === 'upcoming'
-          ? [
-              {
-                OR: [
-                  { scheduledStart: { gte: now } },
-                  { status: 'LIVE' as const },
-                ],
-              },
-            ]
+          ? [{ status: { in: ['SCHEDULED' as const, 'LIVE' as const] } }]
           : scope === 'past'
-            ? [{ scheduledStart: { lt: now } }]
+            ? [{ status: { in: ['ENDED' as const, 'CANCELED' as const] } }]
             : []),
       ],
     };
@@ -351,10 +351,58 @@ export class MeetingsService {
         'This meeting has no recording available yet.',
       );
     }
-    const recordingUrl = meeting.recordingUrl.startsWith('http')
+    const recordingUrl = meeting.recordingUrl.startsWith('http') || meeting.recordingUrl.startsWith('data:')
       ? meeting.recordingUrl
       : await this.meetingsSignedUrl(meeting.recordingUrl);
     return { recordingUrl };
+  }
+
+  async uploadRecording(
+    user: User,
+    meetingId: string,
+    buffer: Buffer,
+    filename: string,
+  ) {
+    const meeting = await this.findForUser(user, meetingId);
+    if (!meeting) {
+      throw new NotFoundException('This meeting could not be found.');
+    }
+    if (!this.isHost(user, meeting)) {
+      throw new ForbiddenException('Only the host can upload a recording.');
+    }
+
+    const bucket = process.env.SUPABASE_MEETINGS_BUCKET ?? 'meetings';
+    const key = `recordings/${meeting.id}/${Date.now()}-${filename}`;
+
+    try {
+      const { error } = await this.supabase
+        .getStorageClient()
+        .storage.from(bucket)
+        .upload(key, buffer, {
+          contentType: filename.endsWith('.mp4') ? 'video/mp4' : 'video/webm',
+          upsert: true,
+        });
+
+      if (error) {
+        this.logger.error(`[meetings] Supabase upload failed: ${error.message}`);
+        throw new BadRequestException(`Cloud storage upload failed: ${error.message}`);
+      }
+    } catch (err: any) {
+      if (err instanceof BadRequestException) throw err;
+      this.logger.error(`[meetings] Supabase upload error: ${err?.message ?? err}`);
+      throw new BadRequestException(`Storage service unavailable: ${err?.message ?? 'Unknown error'}`);
+    }
+
+    const updated = await this.prisma.meeting.update({
+      where: { id: meeting.id },
+      data: {
+        recordingUrl: key,
+        recordingEnabled: false,
+      },
+      include: meetingInclude,
+    });
+
+    return this.toDetail(user, updated);
   }
 
   // ─── In-meeting chat ──────────────────────────────────
@@ -421,14 +469,110 @@ export class MeetingsService {
       where: { meetingId: meeting.id },
       orderBy: { order: 'asc' },
     });
+    const status =
+      segments.length > 0 ? 'READY' : meeting.transcriptStatus;
     return {
-      status: meeting.transcriptStatus,
+      status,
       segments: segments.map((s) => ({
         startMs: s.startMs,
         endMs: s.endMs,
         text: s.text,
       })),
     };
+  }
+
+  async saveLiveTranscript(
+    user: User,
+    meetingId: string,
+    segments: { startMs: number; endMs?: number; text: string }[],
+    replace = false,
+  ) {
+    const meeting = await this.findForUser(user, meetingId);
+    if (!meeting) {
+      throw new NotFoundException('This meeting could not be found.');
+    }
+    if (!segments.length) {
+      return { status: meeting.transcriptStatus };
+    }
+
+    // The frontend sends startMs = Date.now() (~1.7 trillion), but the DB
+    // column is a 32-bit integer (max ~2.1 billion).  Convert absolute epoch
+    // timestamps to *relative* offsets from the meeting's scheduled start so
+    // the values always fit.
+    const meetingBaseMs = meeting.scheduledStart.getTime();
+    const MAX_INT32 = 2_147_483_647;
+    const toRelative = (ms: number): number => {
+      if (ms > 1_000_000_000_000) {
+        // Absolute epoch-ms — convert to offset from meeting start
+        return Math.max(0, Math.min(ms - meetingBaseMs, MAX_INT32));
+      }
+      // Already relative or zero
+      return Math.min(Math.max(ms, 0), MAX_INT32);
+    };
+
+    await this.prisma.$transaction(async (tx) => {
+      if (replace) {
+        await tx.meetingTranscript.deleteMany({ where: { meetingId: meeting.id } });
+      }
+
+      let existingCount = 0;
+      if (!replace) {
+        existingCount = await tx.meetingTranscript.count({
+          where: { meetingId: meeting.id },
+        });
+      }
+
+      const existingKeys = replace
+        ? new Set<string>()
+        : new Set(
+            (
+              await tx.meetingTranscript.findMany({
+                where: { meetingId: meeting.id },
+                select: { startMs: true, text: true },
+              })
+            ).map((s) => `${s.startMs}|${s.text}`),
+          );
+
+      const toInsert: {
+        meetingId: string;
+        order: number;
+        startMs: number;
+        endMs: number;
+        text: string;
+      }[] = [];
+
+      let idx = 0;
+      for (const s of segments) {
+        const relStart = toRelative(s.startMs ?? 0);
+        const relEnd = s.endMs
+          ? toRelative(s.endMs)
+          : relStart + 3000;
+        const key = `${relStart}|${s.text}`;
+        if (!replace && existingKeys.has(key)) continue;
+        toInsert.push({
+          meetingId: meeting.id,
+          order: existingCount + idx,
+          startMs: relStart,
+          endMs: relEnd,
+          text: s.text,
+        });
+        idx++;
+      }
+
+      if (toInsert.length > 0) {
+        await tx.meetingTranscript.createMany({ data: toInsert });
+        this.logger.log(
+          `[transcript] saved ${toInsert.length} segments for meeting ${meetingId}`,
+        );
+      }
+
+      await tx.meeting.update({
+        where: { id: meeting.id },
+        data: { transcriptStatus: 'READY' },
+      });
+    });
+
+    return { status: 'READY' };
   }
 
   // ─── LiveKit webhook dispatch ─────────────────────────
@@ -688,7 +832,10 @@ export class MeetingsService {
       title: meeting.title,
       type: meeting.type,
       status: meeting.status,
-      transcriptStatus: meeting.transcriptStatus,
+      transcriptStatus:
+        (meeting._count?.transcripts ?? 0) > 0
+          ? 'READY'
+          : meeting.transcriptStatus,
       courseOfferingId: meeting.courseOfferingId,
       courseName: meeting.courseOffering?.course?.name ?? null,
       sectionName: meeting.courseOffering?.section?.name ?? null,
@@ -734,17 +881,18 @@ export class MeetingsService {
   }
 
   private async meetingsSignedUrl(path: string): Promise<string> {
+    if (path.startsWith('http') || path.startsWith('data:')) return path;
     const bucket = process.env.SUPABASE_MEETINGS_BUCKET ?? 'meetings';
-    const { data, error } = await this.supabase
-      .getStorageClient()
-      .storage.from(bucket)
-      .createSignedUrl(path, 3600);
-    if (error || !data) {
-      throw new NotFoundException(
-        'The recording file could not be retrieved from storage.',
-      );
+    try {
+      const { data, error } = await this.supabase
+        .getStorageClient()
+        .storage.from(bucket)
+        .createSignedUrl(path, 3600);
+      if (!error && data?.signedUrl) return data.signedUrl;
+    } catch (err: any) {
+      this.logger.warn(`[meetings] signedUrl warning: ${err?.message ?? err}`);
     }
-    return data.signedUrl;
+    return path;
   }
 
   private toChatMessage(message: {

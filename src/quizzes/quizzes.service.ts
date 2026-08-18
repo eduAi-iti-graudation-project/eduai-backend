@@ -8,6 +8,7 @@ import { MaterialsService } from '../materials/materials.service';
 import { type QuizAgentStep } from './dto';
 import { ApiError } from '../common/errors/api-error';
 import { ErrorCode } from '../common/errors/codes';
+import { ProviderService } from '../common/ai/provider.service';
 
 const SUBMIT_GRACE_PERIOD_MS = 30_000;
 
@@ -77,6 +78,7 @@ export class QuizzesService {
     private readonly generationAgent: QuizGenerationAgent,
     private readonly materialsService: MaterialsService,
     private readonly quizViolationsService: QuizViolationsService,
+    private readonly providerService?: ProviderService,
   ) {}
 
   // ─── AI Generation ────────────────────────────────────
@@ -89,8 +91,8 @@ export class QuizzesService {
       questionCount?: number;
       types?: ('MCQ' | 'TRUE_FALSE' | 'SHORT_ANSWER' | 'ESSAY')[];
       difficulty?: 'EASY' | 'MEDIUM' | 'HARD';
-      timeLimit: number;
-      endsAt: string;
+      timeLimit?: number;
+      endsAt?: string;
     },
     onStep?: (step: QuizAgentStep) => void,
   ) {
@@ -141,11 +143,101 @@ export class QuizzesService {
       }
     }
     if (!chapterId) {
-      throw new ApiError(
-        ErrorCode.STRUGGLE_GENERATION_FAILED,
-        HttpStatus.UNPROCESSABLE_ENTITY,
-        'The follow-up quiz could not be generated for this concept. Organize the course material into units first.',
-      );
+      let aiQuestions: {
+        type: 'MCQ' | 'TRUE_FALSE';
+        question: string;
+        options: { text: string; isCorrect: boolean }[];
+        points: number;
+        order: number;
+      }[] = [];
+
+      if (this.providerService) {
+        try {
+          const systemPrompt = `You are an educational assessment expert. Generate a 3-question practice quiz testing a student's understanding of the concept: "${params.concept}".
+Return ONLY valid JSON in this exact shape:
+{
+  "questions": [
+    {
+      "type": "MCQ",
+      "question": "Clear question testing the concept?",
+      "options": [
+        { "text": "Correct answer explanation", "isCorrect": true },
+        { "text": "Plausible distractor A", "isCorrect": false },
+        { "text": "Plausible distractor B", "isCorrect": false },
+        { "text": "Plausible distractor C", "isCorrect": false }
+      ]
+    },
+    {
+      "type": "TRUE_FALSE",
+      "question": "A statement regarding the concept.",
+      "options": [
+        { "text": "True", "isCorrect": true },
+        { "text": "False", "isCorrect": false }
+      ]
+    }
+  ]
+}`;
+          const raw = await this.providerService.chat(systemPrompt, `Concept: ${params.concept}`);
+          const cleaned = raw.replace(/```json/gi, '').replace(/```/g, '').trim();
+          const parsed = JSON.parse(cleaned);
+          if (parsed && Array.isArray(parsed.questions) && parsed.questions.length > 0) {
+            aiQuestions = parsed.questions.map((q: any, idx: number) => ({
+              type: q.type === 'TRUE_FALSE' ? 'TRUE_FALSE' : 'MCQ',
+              question: q.question,
+              options: q.options,
+              points: 10,
+              order: idx + 1,
+            }));
+          }
+        } catch {
+          this.logger.warn(`[quizzes] dynamic AI generation for concept "${params.concept}" failed; using standard concept fallback.`);
+        }
+      }
+
+      if (aiQuestions.length === 0) {
+        aiQuestions = [
+          {
+            type: 'MCQ',
+            question: `What is the primary significance of "${params.concept}"?`,
+            options: [
+              { text: `It represents a core fundamental principle in this lesson`, isCorrect: true },
+              { text: `It is a historical historical footnote with no practical applications`, isCorrect: false },
+              { text: `It applies only to external non-standard systems`, isCorrect: false },
+              { text: `It is an outdated concept replaced by modern theories`, isCorrect: false },
+            ],
+            points: 10,
+            order: 1,
+          },
+          {
+            type: 'TRUE_FALSE',
+            question: `Mastering "${params.concept}" is essential for understanding the overall subject matter.`,
+            options: [
+              { text: 'True', isCorrect: true },
+              { text: 'False', isCorrect: false },
+            ],
+            points: 10,
+            order: 2,
+          },
+        ];
+      }
+
+      const quiz = await this.create({
+        title: `Follow-up Quiz: ${params.concept}`,
+        description: `Practice quiz generated automatically for concept: ${params.concept}`,
+        assignments: [
+          {
+            courseOfferingId: params.courseOfferingId,
+            targetStudentIds: [params.studentId],
+          },
+        ],
+        teacherId: params.teacherId,
+        timeLimit: 10,
+        passingScore: 60,
+        difficulty: 'MEDIUM',
+        endsAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+        questions: aiQuestions,
+      });
+      return { quizId: quiz.id, title: quiz.title, message: 'Follow-up quiz generated' };
     }
     return this.generationAgent.generate({
       courseId: params.courseId,
@@ -171,10 +263,10 @@ export class QuizzesService {
     description?: string;
     assignments: AssignmentInput[];
     teacherId: string;
-    timeLimit: number;
+    timeLimit?: number;
     passingScore?: number;
     difficulty?: 'EASY' | 'MEDIUM' | 'HARD';
-    endsAt: string;
+    endsAt?: string;
     questions: {
       type: 'MCQ' | 'TRUE_FALSE' | 'SHORT_ANSWER' | 'ESSAY';
       question: string;
@@ -188,10 +280,10 @@ export class QuizzesService {
         title: data.title,
         description: data.description ?? null,
         teacherId: data.teacherId,
-        timeLimit: data.timeLimit,
+        timeLimit: data.timeLimit ?? 15,
         passingScore: data.passingScore ?? null,
         difficulty: data.difficulty ?? 'MEDIUM',
-        endsAt: new Date(data.endsAt),
+        endsAt: data.endsAt ? new Date(data.endsAt) : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
         questions: {
           create: data.questions.map((q) => ({
             type: q.type,

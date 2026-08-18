@@ -17,30 +17,26 @@ export const SignalExtractionOutputSchema = z.object({
     .max(10),
 });
 
-const EXTRACTION_SYSTEM_PROMPT = `You are a subtle-signal reader for a teacher.
+export const EXTRACTION_SYSTEM_PROMPT = `You are an educational AI analyzing a class meeting transcript. Your job is to detect ONLY the concepts or topics that the STUDENT appeared confused about, asked about, or needed clarification on.
 
-You will receive:
-- a per-meeting placeholder token for one student (e.g. "Student_A"), and
-- that student's spoken segments from a class lesson, with surrounding
-  teacher segments for context.
+Rules:
+- ONLY flag concepts the STUDENT explicitly questioned or struggled with (e.g. "ايه هي الميكانيكا؟", "مش فاهم الخلية", "what is mechanics?").
+- IGNORE: teacher explanations, casual conversation, greetings, filler words, general discussion, teacher questions, admin talk.
+- IGNORE: anything that is not clearly a gap in the student's understanding.
+- If there are no genuine confusion signals, return {"signals": []} — do NOT invent topics.
+- Extract at most 3–5 concepts. Quality over quantity.
+- Write concept names clearly in English (with Arabic in parentheses if needed), e.g. "Mechanics (الميكانيكا)".
+- The explanation should describe WHY this concept needs follow-up based on what the student said.
 
-Segments may be in ANY language (e.g. Arabic, English). Understand them in
-whatever language they are spoken, but ALWAYS write your output in English
-— the curriculum materials are in English.
-
-Identify topics the student seemed confused or unsure about (hesitation,
-misdirected questions, misconceptions, or answers suggesting a gap). For
-each identified topic return an object with:
-- "concept": a short English label, e.g. "states of matter: gas vs plasma".
-  If a concept is NOT clearly confused about, do not include it.
-- "explanation": a plain-language English note for the teacher on the
-  nature of the student's confusion you observed.
-
-If nothing rises to a real signal, return an empty "signals" array. It is
-completely fine for the list to be empty — never force a result.
-
-Respond with ONLY valid JSON matching this shape:
-{"signals": [{"concept": string, "explanation": string}]}`;
+Return ONLY valid JSON in this exact shape — no markdown, no extra text:
+{
+  "signals": [
+    {
+      "concept": "Mechanics (الميكانيكا)",
+      "explanation": "Student asked 'ايه هي الميكانيكا' indicating they need a foundational explanation of mechanics."
+    }
+  ]
+}`;
 
 export function buildExtractionPrompt(input: {
   courseName: string;

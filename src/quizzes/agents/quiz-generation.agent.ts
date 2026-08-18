@@ -64,12 +64,14 @@ export class QuizGenerationAgent {
       questionCount?: number;
       types?: ('MCQ' | 'TRUE_FALSE' | 'SHORT_ANSWER' | 'ESSAY')[];
       difficulty?: 'EASY' | 'MEDIUM' | 'HARD';
-      timeLimit: number;
-      endsAt: string;
+      timeLimit?: number;
+      endsAt?: string;
     },
     onStep?: (step: QuizAgentStep) => void,
   ): Promise<{ quizId: string; title: string; message: string }> {
     onStep?.('thinking');
+    const timeLimit = params.timeLimit ?? 15;
+    const endsAt = params.endsAt ?? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
     const chapter = params.chapterId
       ? await this.prisma.materialChapter.findUnique({
           where: { id: params.chapterId },
@@ -104,8 +106,8 @@ export class QuizGenerationAgent {
       `Target question count: ${params.questionCount ?? 5}`,
       params.types ? `Question types: ${params.types.join(', ')}` : null,
       `Difficulty: ${params.difficulty ?? 'MEDIUM'}`,
-      `Time limit: ${params.timeLimit} minutes`,
-      `Closes at: ${params.endsAt}`,
+      `Time limit: ${timeLimit} minutes`,
+      `Closes at: ${endsAt}`,
     ]
       .filter(Boolean)
       .join('\n');
@@ -224,8 +226,8 @@ export class QuizGenerationAgent {
             assignments: params.assignments,
             teacherId: params.teacherId,
             difficulty: params.difficulty ?? 'MEDIUM',
-            timeLimit: params.timeLimit,
-            endsAt: params.endsAt,
+            timeLimit,
+            endsAt,
             questions: result.questions.map((q, idx) => ({
               ...q,
               points: q.points ?? 1,
