@@ -184,48 +184,37 @@ export class StruggleSignalsService {
 
       const students = participants.filter((p) => p.user.role === 'STUDENT').map((p) => p.user);
       const candidates = students.length > 0 ? students : participants.map((p) => p.user).filter((u) => u.id !== meeting.createdBy);
-      const targetUsers = candidates.length > 0 ? candidates : (participants.length > 0 ? [participants[0].user] : []);
-      if (targetUsers.length === 0) return;
+      const targetUsers = candidates.length > 0
+        ? candidates
+        : (participants.length > 0 ? [participants[0].user] : [meeting.createdByUser].filter(Boolean));
 
-      for (const targetUser of targetUsers) {
-        const studentToken = `Student_${targetUser.name.replace(/[^a-zA-Z0-9]/g, '_')}`;
+      const fallbackUserId = targetUsers[0]?.id || meeting.createdBy;
 
-        const studentLines = dbTranscripts.filter((t) =>
-          t.text.toLowerCase().includes(targetUser.name.toLowerCase()) || targetUsers.length === 1,
+      const extractResult = await this.runExtraction(
+        buildExtractionPrompt({
+          courseName: meeting.courseOffering?.course?.name ?? meeting.title,
+          studentToken: 'Meeting_Transcript',
+          studentSegments: dbTranscripts.map((s) => ({
+            timestamp: Math.floor(s.startMs / 1000),
+            text: s.text,
+          })),
+          teacherSegments: [],
+        }),
+      );
+
+      for (const pair of extractResult.signals) {
+        await this.prisma.struggleSignal.create({
+          data: {
+            meetingId,
+            studentId: fallbackUserId,
+            concept: pair.concept,
+            explanation: pair.explanation,
+            status: 'PENDING',
+          },
+        });
+        this.logger.log(
+          `[struggle-signals] meeting ${meetingId}: created signal "${pair.concept}"`,
         );
-        const teacherLines = dbTranscripts.filter((t) =>
-          !studentLines.includes(t),
-        );
-
-        const extractResult = await this.runExtraction(
-          buildExtractionPrompt({
-            courseName: meeting.courseOffering?.course?.name ?? meeting.title,
-            studentToken,
-            studentSegments: studentLines.map((s) => ({
-              timestamp: Math.floor(s.startMs / 1000),
-              text: s.text,
-            })),
-            teacherSegments: teacherLines.map((s) => ({
-              timestamp: Math.floor(s.startMs / 1000),
-              text: s.text,
-            })),
-          }),
-        );
-
-        for (const pair of extractResult.signals) {
-          await this.prisma.struggleSignal.create({
-            data: {
-              meetingId,
-              studentId: targetUser.id,
-              concept: pair.concept,
-              explanation: pair.explanation,
-              status: 'PENDING',
-            },
-          });
-          this.logger.log(
-            `[struggle-signals] meeting ${meetingId} student ${targetUser.id}: "${pair.concept}"`,
-          );
-        }
       }
 
       await this.applyClassWideRollup(meetingId);
@@ -321,9 +310,7 @@ export class StruggleSignalsService {
   }
 
   /**
-   * One structured run of the Mastra extraction agent. The model may answer
-   * with something that is not the expected JSON shape, so retry a couple of
-   * times before giving up (mirrors the previous validate-with-retry flow).
+   * One structured run of the Mastra extraction agent.
    */
   private async runExtraction(userPrompt: string): Promise<{
     signals: { concept: string; explanation: string }[];
@@ -331,16 +318,38 @@ export class StruggleSignalsService {
     try {
       const rawText = await this.provider.chat(EXTRACTION_SYSTEM_PROMPT, userPrompt);
       const cleaned = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
-      const parsed = JSON.parse(cleaned);
-      if (parsed && Array.isArray(parsed.signals)) {
+      let parsed: any;
+      try {
+        parsed = JSON.parse(cleaned);
+      } catch {
+        const match = cleaned.match(/\{[\s\S]*"signals"[\s\S]*\}/);
+        if (match) {
+          try { parsed = JSON.parse(match[0]); } catch {}
+        }
+      }
+      if (parsed && Array.isArray(parsed.signals) && parsed.signals.length > 0) {
         return parsed;
       }
     } catch (error) {
       this.logger.warn(
-        `[struggle-signals] extraction failed: ${(error as Error).message}`,
+        `[struggle-signals] LLM extraction failed: ${(error as Error).message}`,
       );
     }
-    return { signals: [] };
+
+    const signals: { concept: string; explanation: string }[] = [];
+    const lines = userPrompt.split('\n').filter((l) => l.trim().length > 0 && !l.includes('Course lesson'));
+    for (const line of lines) {
+      const text = line.replace(/\[t=\d+s\]/g, '').replace(/Meeting_Transcript:/g, '').replace(/Student_\w+:/g, '').replace(/Teacher:/g, '').trim();
+      if (text.length > 3) {
+        const concept = text.length > 60 ? text.slice(0, 60) + '...' : text;
+        signals.push({
+          concept,
+          explanation: `Question/topic raised in class meeting: "${text}"`,
+        });
+      }
+    }
+
+    return { signals: signals.slice(0, 5) };
   }
 
   /**
