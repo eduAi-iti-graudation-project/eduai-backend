@@ -28,6 +28,7 @@ const meetingInclude = {
   createdByUser: true,
   participants: { include: { user: true } },
   attendance: { include: { user: true } },
+  _count: { select: { transcripts: true } },
 } satisfies Prisma.MeetingInclude;
 
 type MeetingWithRelations = Prisma.MeetingGetPayload<{
@@ -233,25 +234,30 @@ export class MeetingsService {
     // creation time (see LivekitService.ensureRoom).
     if (meeting.status === 'LIVE') {
       if (enabled && !meeting.recordingEgressId) {
-        const egressId = await this.livekit.startRecording(meeting.roomName);
-        // S3 storage may be unconfigured — startRecording no-ops with '' and
-        // the recording flag stays truthful instead of holding a dead id.
-        if (!egressId) {
-          throw new NotFoundException(
-            'Recording could not be started — egress storage is not configured.',
+        let egressId = '';
+        try {
+          egressId = await this.livekit.startRecording(meeting.roomName);
+        } catch (err: any) {
+          this.logger.warn(
+            `[meetings] startRecording warning: ${err?.message ?? err}`,
           );
         }
         await this.prisma.meeting.update({
           where: { id: meeting.id },
-          data: { recordingEnabled: true, recordingEgressId: egressId },
+          data: {
+            recordingEnabled: true,
+            recordingEgressId: egressId || null,
+          },
         });
       } else if (!enabled) {
-        // Always clear the flag on disable. A meeting created with
-        // recordingEnabled=true bakes egress into the room at creation and
-        // never gets a recordingEgressId, so skipping this on a missing id
-        // left the meeting "recording" forever with no way to turn it off.
         if (meeting.recordingEgressId) {
-          await this.livekit.stopRecording(meeting.recordingEgressId);
+          try {
+            await this.livekit.stopRecording(meeting.recordingEgressId);
+          } catch (err: any) {
+            this.logger.warn(
+              `[meetings] stopRecording warning: ${err?.message ?? err}`,
+            );
+          }
         }
         await this.prisma.meeting.update({
           where: { id: meeting.id },
@@ -715,7 +721,10 @@ export class MeetingsService {
       title: meeting.title,
       type: meeting.type,
       status: meeting.status,
-      transcriptStatus: meeting.transcriptStatus,
+      transcriptStatus:
+        (meeting._count?.transcripts ?? 0) > 0
+          ? 'READY'
+          : meeting.transcriptStatus,
       courseOfferingId: meeting.courseOfferingId,
       courseName: meeting.courseOffering?.course?.name ?? null,
       sectionName: meeting.courseOffering?.section?.name ?? null,
