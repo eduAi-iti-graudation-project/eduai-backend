@@ -371,12 +371,22 @@ export class MeetingsService {
     const key = `recordings/${meeting.id}/${Date.now()}-${filename}`;
 
     try {
-      await this.supabase.getStorageClient().storage.from(bucket).upload(key, buffer, {
-        contentType: filename.endsWith('.mp4') ? 'video/mp4' : 'video/webm',
-        upsert: true,
-      });
+      const { error } = await this.supabase
+        .getStorageClient()
+        .storage.from(bucket)
+        .upload(key, buffer, {
+          contentType: filename.endsWith('.mp4') ? 'video/mp4' : 'video/webm',
+          upsert: true,
+        });
+
+      if (error) {
+        this.logger.error(`[meetings] Supabase upload failed: ${error.message}`);
+        throw new BadRequestException(`Cloud storage upload failed: ${error.message}`);
+      }
     } catch (err: any) {
-      this.logger.warn(`[meetings] Supabase upload error: ${err?.message ?? err}`);
+      if (err instanceof BadRequestException) throw err;
+      this.logger.error(`[meetings] Supabase upload error: ${err?.message ?? err}`);
+      throw new BadRequestException(`Storage service unavailable: ${err?.message ?? 'Unknown error'}`);
     }
 
     const updated = await this.prisma.meeting.update({
