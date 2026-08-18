@@ -138,7 +138,7 @@ export class StruggleSignalsService {
   async triggerExtraction(user: User, meetingId: string) {
     await this.requireOwnMeeting(user, meetingId);
     await this.prisma.struggleSignal.deleteMany({
-      where: { meetingId, status: { in: ['PENDING', 'FAILED'] } },
+      where: { meetingId },
     });
     await this.extractSignals(meetingId);
     await this.prisma.meeting.update({
@@ -180,33 +180,31 @@ export class StruggleSignalsService {
 
       if (dbTranscripts.length === 0) return;
 
-      const participants = await this.prisma.meetingParticipant.findMany({
-        where: { meetingId },
-        include: { user: true },
+      let studentUser = await this.prisma.user.findFirst({
+        where: {
+          role: 'STUDENT',
+          OR: [
+            { meetingParticipants: { some: { meetingId } } },
+            { enrollments: { some: { courseOfferingId: meeting.courseOfferingId ?? undefined } } },
+          ],
+        },
+        select: { id: true, name: true },
       });
 
-      let targetStudentId: string | null = participants.find((p) => p.user.role === 'STUDENT')?.userId ?? null;
-
-      if (!targetStudentId && meeting.courseOfferingId) {
-        const enrollment = await this.prisma.enrollment.findFirst({
-          where: { courseOfferingId: meeting.courseOfferingId, status: 'APPROVED' },
-          select: { studentId: true },
-        });
-        if (enrollment) targetStudentId = enrollment.studentId;
-      }
-
-      if (!targetStudentId) {
-        const anyStudent = await this.prisma.user.findFirst({
+      if (!studentUser) {
+        studentUser = await this.prisma.user.findFirst({
           where: { role: 'STUDENT' },
-          select: { id: true },
+          select: { id: true, name: true },
+          orderBy: { createdAt: 'asc' },
         });
-        targetStudentId = anyStudent?.id ?? null;
       }
 
-      if (!targetStudentId) {
+      if (!studentUser) {
         this.logger.warn(`[struggle-signals] no student account found to attach signals for meeting ${meetingId}`);
         return;
       }
+
+      const targetStudentId = studentUser.id;
 
       const extractResult = await this.runExtraction(
         buildExtractionPrompt({
