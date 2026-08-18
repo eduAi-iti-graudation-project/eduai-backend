@@ -7,8 +7,16 @@ import {
   Patch,
   Post,
   Query,
+  Res,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
-import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiBody, ApiConsumes, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import type { Response } from 'express';
 import { OrganizationsService } from './organizations.service';
 import {
   ApproveRequestDto,
@@ -19,6 +27,7 @@ import {
 import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { SkipSubscriptionCheck } from '../auth/skip-subscription.decorator';
+import { Public } from '../auth/public.decorator';
 import { ApiError } from '../common/errors/api-error';
 import { ErrorCode } from '../common/errors/codes';
 
@@ -35,6 +44,62 @@ export class OrganizationsController {
   })
   getMyOrganization(@CurrentUser('organizationId') organizationId: string) {
     return this.organizationsService.getOrganizationSummary(organizationId);
+  }
+
+  @Public()
+  @Get(':id/logo')
+  @ApiOperation({ summary: 'Stream a school logo' })
+  async getLogo(@Param('id') id: string, @Res() res: Response) {
+    const organization = await this.organizationsService.getLogoById(id);
+    if (!organization?.logoUrl) {
+      throw new ApiError(
+        ErrorCode.AVATAR_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'Logo not found.',
+      );
+    }
+    const expected = path.resolve(process.cwd(), organization.logoUrl);
+    if (!fs.existsSync(expected)) {
+      throw new ApiError(
+        ErrorCode.AVATAR_NOT_FOUND,
+        HttpStatus.NOT_FOUND,
+        'Logo not found.',
+      );
+    }
+    const ext = path.extname(expected).toLowerCase();
+    res.setHeader('Content-Type', ext === '.png' ? 'image/png' : 'image/jpeg');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.sendFile(expected, (err) => {
+      if (err) {
+        res
+          .status(HttpStatus.NOT_FOUND)
+          .send({ error: 'AVATAR_NOT_FOUND', message: 'Logo not found.' });
+      }
+    });
+  }
+
+  @Roles('ADMIN')
+  @Post('me/logo')
+  @UseInterceptors(
+    FileInterceptor('photo', {
+      storage: memoryStorage(),
+      limits: { fileSize: 5 * 1024 * 1024 },
+    }),
+  )
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: 'Upload the school logo shown on reports' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: { photo: { type: 'string', format: 'binary' } },
+      required: ['photo'],
+    },
+  })
+  uploadLogo(
+    @CurrentUser('organizationId') organizationId: string,
+    @UploadedFile() photo: Express.Multer.File | undefined,
+  ) {
+    return this.organizationsService.uploadLogo(organizationId, photo);
   }
 
   @Roles('ADMIN')

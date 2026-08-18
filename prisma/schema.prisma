@@ -1072,6 +1072,10 @@ model Notification {
   readAt    DateTime?
   createdAt DateTime            @default(now())
 
+  // Structured routing payload (e.g. { threadId, studentId, quizId }) so the
+  // app can deep-link to the exact page the notification refers to.
+  data Json?
+
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("notifications")
