@@ -183,4 +183,16 @@ export class MeetingsController {
   ): Promise<TranscriptResponseDto> {
     return this.meetingsService.getTranscript(user, id);
   }
+
+  @Roles('TEACHER', 'ADMIN', 'STUDENT', 'GUARDIAN')
+  @Post(':id/transcript')
+  @AllowGuardianless()
+  @ApiOperation({ summary: 'Save live transcript segments captured during the call' })
+  async saveTranscript(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: { segments: { startMs: number; text: string }[] },
+    @CurrentUser() user: User,
+  ) {
+    return this.meetingsService.saveLiveTranscript(user, id, dto.segments ?? []);
+  }
 }

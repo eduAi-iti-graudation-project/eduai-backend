@@ -421,6 +421,41 @@ export class MeetingsService {
     };
   }
 
+  async saveLiveTranscript(
+    user: User,
+    meetingId: string,
+    segments: { startMs: number; endMs?: number; text: string }[],
+  ) {
+    const meeting = await this.findForUser(user, meetingId);
+    if (!meeting) {
+      throw new NotFoundException('This meeting could not be found.');
+    }
+    if (!segments.length) {
+      return { status: meeting.transcriptStatus };
+    }
+
+    const existingCount = await this.prisma.meetingTranscript.count({
+      where: { meetingId: meeting.id },
+    });
+
+    await this.prisma.meetingTranscript.createMany({
+      data: segments.map((s, idx) => ({
+        meetingId: meeting.id,
+        order: existingCount + idx,
+        startMs: s.startMs ?? 0,
+        endMs: s.endMs ?? (s.startMs + 3000),
+        text: s.text,
+      })),
+    });
+
+    await this.prisma.meeting.update({
+      where: { id: meeting.id },
+      data: { transcriptStatus: 'READY' },
+    });
+
+    return { status: 'READY' };
+  }
+
   // ─── LiveKit webhook dispatch ─────────────────────────
   async handleLivekitEvent(event: WebhookEvent) {
     const roomName = event.room?.name;
