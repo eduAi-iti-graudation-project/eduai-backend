@@ -217,6 +217,9 @@ export class MeetingsService {
       include: meetingInclude,
     });
     this.logger.log(`[meetings] meeting ${meeting.id} ended by ${user.id}`);
+    void this.struggleSignals.finalizeStruggleExtraction(meeting.id).catch((err) => {
+      this.logger.warn(`[meetings] struggle extraction error: ${err?.message ?? err}`);
+    });
     return this.toDetail(user, updated);
   }
 
