@@ -329,8 +329,16 @@ export class StruggleSignalsService {
           try { parsed = JSON.parse(match[0]); } catch {}
         }
       }
-      if (parsed && Array.isArray(parsed.signals) && parsed.signals.length > 0) {
-        return parsed;
+      if (parsed && Array.isArray(parsed.signals)) {
+        // Filter out any signals with empty/short concepts
+        const valid = parsed.signals.filter(
+          (s: any) =>
+            s &&
+            typeof s.concept === 'string' &&
+            s.concept.trim().length >= 3 &&
+            typeof s.explanation === 'string',
+        );
+        return { signals: valid.slice(0, 5) };
       }
     } catch (error) {
       this.logger.warn(
@@ -338,20 +346,9 @@ export class StruggleSignalsService {
       );
     }
 
-    const signals: { concept: string; explanation: string }[] = [];
-    const lines = userPrompt.split('\n').filter((l) => l.trim().length > 0 && !l.includes('Course lesson'));
-    for (const line of lines) {
-      const text = line.replace(/\[t=\d+s\]/g, '').replace(/Meeting_Transcript:/g, '').replace(/Student_\w+:/g, '').replace(/Teacher:/g, '').trim();
-      if (text.length > 3) {
-        const concept = text.length > 60 ? text.slice(0, 60) + '...' : text;
-        signals.push({
-          concept,
-          explanation: `Question/topic raised in class meeting: "${text}"`,
-        });
-      }
-    }
-
-    return { signals: signals.slice(0, 5) };
+    // If AI fails to return valid JSON, return empty — do NOT fabricate signals from raw text.
+    this.logger.warn('[struggle-signals] AI did not return valid signals JSON; returning empty.');
+    return { signals: [] };
   }
 
   /**
@@ -679,8 +676,10 @@ export class StruggleSignalsService {
       include: {
         meeting: {
           select: {
+            id: true,
+            createdBy: true,
             courseOfferingId: true,
-            courseOffering: { select: { teacherId: true } },
+            courseOffering: { select: { teacherId: true, courseId: true } },
           },
         },
       },
@@ -690,16 +689,18 @@ export class StruggleSignalsService {
         'This follow-up suggestion could not be found.',
       );
     }
-    if (!signal.meeting.courseOfferingId) {
-      throw new NotFoundException(
-        'The meeting is not linked to a class, so no follow-up material can be generated.',
-      );
-    }
-    if (signal.meeting.courseOffering?.teacherId !== user.id) {
+
+    // Allow: the meeting's course offering teacher OR the meeting creator (ad-hoc meetings)
+    const isTeacher =
+      signal.meeting.courseOffering?.teacherId === user.id ||
+      signal.meeting.createdBy === user.id ||
+      user.role === 'ADMIN';
+    if (!isTeacher) {
       throw new ForbiddenException(
         'You can only act on follow-up suggestions for classes you teach.',
       );
     }
+
     if (signal.status !== 'PENDING' && signal.status !== 'FAILED') {
       throw new ApiError(
         ErrorCode.STRUGGLE_SIGNAL_NOT_ACTIONABLE,
@@ -707,12 +708,32 @@ export class StruggleSignalsService {
         'This signal has already been processed.',
       );
     }
+
+    // Resolve courseOfferingId: use the meeting's offering, or find any offering
+    // for the same course where this teacher teaches (for ad-hoc meetings).
+    let courseOfferingId = signal.meeting.courseOfferingId;
+    if (!courseOfferingId) {
+      // Try to find an offering taught by this teacher to attach quiz to.
+      const offering = await this.prisma.courseOffering.findFirst({
+        where: { teacherId: user.id, organizationId: user.organizationId ?? undefined },
+        select: { id: true },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (offering) {
+        courseOfferingId = offering.id;
+      } else {
+        throw new NotFoundException(
+          'No class found for this meeting. Link the meeting to a class to generate follow-up material.',
+        );
+      }
+    }
+
     return {
       id: signal.id,
       studentId: signal.studentId,
       concept: signal.concept,
       status: signal.status,
-      courseOfferingId: signal.meeting.courseOfferingId,
+      courseOfferingId,
     };
   }
 

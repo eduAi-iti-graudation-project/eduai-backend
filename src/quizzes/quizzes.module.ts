@@ -4,12 +4,10 @@ import { QuizzesService } from './quizzes.service';
 import { QuizzesGradingService } from './quizzes-grading.service';
 import { QuizViolationsService } from './quiz-violations.service';
 import { QuizGenerationAgent } from './agents/quiz-generation.agent';
-import { MaterialsModule } from '../materials/materials.module';
-import { NotificationsModule } from '../notifications/notifications.module';
-import { ReportsModule } from '../reports/reports.module';
+import { AiModule } from '../common/ai/ai.module';
 
 @Module({
-  imports: [MaterialsModule, NotificationsModule, ReportsModule],
+  imports: [MaterialsModule, NotificationsModule, ReportsModule, AiModule],
   controllers: [QuizzesController],
   providers: [
     QuizzesService,

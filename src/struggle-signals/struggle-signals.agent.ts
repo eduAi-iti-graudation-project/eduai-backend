@@ -17,23 +17,26 @@ export const SignalExtractionOutputSchema = z.object({
     .max(10),
 });
 
-export const EXTRACTION_SYSTEM_PROMPT = `You are an educational AI analyzing a meeting transcript to extract key concepts, questions, or topics discussed that require follow-up.
+export const EXTRACTION_SYSTEM_PROMPT = `You are an educational AI analyzing a class meeting transcript. Your job is to detect ONLY the concepts or topics that the STUDENT appeared confused about, asked about, or needed clarification on.
 
-You will receive spoken transcript lines from a class meeting (in Arabic or English).
+Rules:
+- ONLY flag concepts the STUDENT explicitly questioned or struggled with (e.g. "ايه هي الميكانيكا؟", "مش فاهم الخلية", "what is mechanics?").
+- IGNORE: teacher explanations, casual conversation, greetings, filler words, general discussion, teacher questions, admin talk.
+- IGNORE: anything that is not clearly a gap in the student's understanding.
+- If there are no genuine confusion signals, return {"signals": []} — do NOT invent topics.
+- Extract at most 3–5 concepts. Quality over quantity.
+- Write concept names clearly in English (with Arabic in parentheses if needed), e.g. "Mechanics (الميكانيكا)".
+- The explanation should describe WHY this concept needs follow-up based on what the student said.
 
-Identify key topics, questions, or concepts mentioned in the transcript that students need follow-up on (e.g. questions like "ايه هي الميكانيكا", "ايه هي الخليه", "what is mechanics").
-
-For each identified topic, return JSON in this exact shape:
+Return ONLY valid JSON in this exact shape — no markdown, no extra text:
 {
   "signals": [
     {
       "concept": "Mechanics (الميكانيكا)",
-      "explanation": "Question/discussion regarding the core concepts of mechanics."
+      "explanation": "Student asked 'ايه هي الميكانيكا' indicating they need a foundational explanation of mechanics."
     }
   ]
-}
-
-Write concepts clearly. Respond ONLY with valid JSON. Do not include markdown codeblocks or conversational text.`;
+}`;
 
 export function buildExtractionPrompt(input: {
   courseName: string;
