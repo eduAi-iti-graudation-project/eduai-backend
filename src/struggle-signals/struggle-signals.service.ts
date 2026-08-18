@@ -182,13 +182,7 @@ export class StruggleSignalsService {
         include: { user: true },
       });
 
-      const students = participants.filter((p) => p.user.role === 'STUDENT').map((p) => p.user);
-      const candidates = students.length > 0 ? students : participants.map((p) => p.user).filter((u) => u.id !== meeting.createdBy);
-      const targetUsers = candidates.length > 0
-        ? candidates
-        : (participants.length > 0 ? [participants[0].user] : [meeting.createdByUser].filter(Boolean));
-
-      const fallbackUserId = targetUsers[0]?.id || meeting.createdBy;
+      const fallbackUserId = participants[0]?.userId || meeting.createdBy;
 
       const extractResult = await this.runExtraction(
         buildExtractionPrompt({
