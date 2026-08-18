@@ -185,16 +185,14 @@ export class StruggleSignalsService {
           role: 'STUDENT',
           OR: [
             { meetingParticipants: { some: { meetingId } } },
-            { enrollments: { some: { courseOfferingId: meeting.courseOfferingId ?? undefined } } },
+            { enrollments: { some: { offeringId: meeting.courseOfferingId ?? undefined } } },
           ],
         },
-        select: { id: true, name: true },
       });
 
       if (!studentUser) {
         studentUser = await this.prisma.user.findFirst({
           where: { role: 'STUDENT' },
-          select: { id: true, name: true },
           orderBy: { createdAt: 'asc' },
         });
       }
