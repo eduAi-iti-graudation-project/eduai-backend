@@ -70,6 +70,30 @@ enum AttendanceStatus {
   EXCUSED
 }
 
+enum SessionStatus {
+  OPEN
+  CLOSED
+  EXPIRED
+}
+
+enum TeacherAttendanceSource {
+  SELF
+  ADMIN
+}
+
+enum FineType {
+  ATTENDANCE
+  LATE
+  OTHER
+}
+
+enum FineStatus {
+  PAID
+  PARTIAL
+  POSTPONED
+  UNPAID
+}
+
 enum ReportStatus {
   NEW
   SENT
@@ -164,6 +188,9 @@ model Organization {
   // Login identity domain for school-provisioned accounts (students/guardians).
   // Derived at creation as slugify(name) + ".org"; editable by admins.
   emailDomain          String?
+  // School logo shown in generated reports and admin UI. Stored as a local
+  // filesystem path (mirrors user avatarUrl) and served via GET /:id/logo.
+  logoUrl              String?
   groupId              String?            @db.Uuid
   group                SchoolGroup?       @relation(fields: [groupId], references: [id], onDelete: SetNull)
   stripeCustomerId     String?            @unique
@@ -185,6 +212,8 @@ model Organization {
   studentDocuments   StudentDocument[]
   joinRequests       JoinRequest[]
   broadcasts         Broadcast[]
+  attendanceSessions AttendanceSession[]
+  teacherFines       TeacherFine[]
 
   @@index([groupId])
   @@map("organizations")
@@ -413,25 +442,28 @@ model CourseOffering {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  organization     Organization              @relation(fields: [organizationId], references: [id])
-  course           Course                    @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  section          Section                   @relation(fields: [sectionId], references: [id], onDelete: Cascade)
-  teacher          User                      @relation("CourseOfferingTeacher", fields: [teacherId], references: [id])
-  assignments      Assignment[]
-  materials        Material[]
-  chapters         MaterialChapter[]
-  quizAssignments  QuizAssignment[]
-  alerts           Alert[]
-  chatThreads      ChatThread[]
-  teacherLogs      ClassTeacherLog[]
-  analyses         StudentAnalysis[]
-  homeworkHelp     HomeworkHelpInteraction[]
-  timetableSlots   TimetableSlot[]
-  studyGenerations StudyGeneration[]
-  meetings         Meeting[]
-  labs             Lab[]
-  labOfferings     LabOffering[]
-  materialScopes   MaterialSectionScope[]
+  organization       Organization              @relation(fields: [organizationId], references: [id])
+  course             Course                    @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  section            Section                   @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  teacher            User                      @relation("CourseOfferingTeacher", fields: [teacherId], references: [id])
+  assignments        Assignment[]
+  materials          Material[]
+  chapters           MaterialChapter[]
+  quizAssignments    QuizAssignment[]
+  alerts             Alert[]
+  chatThreads        ChatThread[]
+  teacherLogs        ClassTeacherLog[]
+  analyses           StudentAnalysis[]
+  homeworkHelp       HomeworkHelpInteraction[]
+  timetableSlots     TimetableSlot[]
+  studyGenerations   StudyGeneration[]
+  meetings           Meeting[]
+  labs               Lab[]
+  labOfferings       LabOffering[]
+  materialScopes     MaterialSectionScope[]
+  attendance         Attendance[]
+  attendanceSessions AttendanceSession[]
+  teacherAttendance  TeacherAttendance[]
 
   @@unique([courseId, sectionId])
   @@index([organizationId])
@@ -703,6 +735,10 @@ model User {
   joinRequestsCreated       JoinRequest[]              @relation("JoinRequestUser")
   createdMaterials          Material[]                 @relation("MaterialsCreatedBy")
   aiChatConversations       AiChatConversation[]       @relation("AiChatOwner")
+  attendanceSessions        AttendanceSession[]        @relation("AttendanceSessionTeacher")
+  teacherAttendance         TeacherAttendance[]        @relation("TeacherAttendanceTeacher")
+  teacherFines              TeacherFine[]              @relation("TeacherFines")
+  teacherFinesIssued        TeacherFine[]              @relation("TeacherFinesIssuedBy")
 
   @@index([organizationId])
   @@map("users")
@@ -724,20 +760,95 @@ model Enrollment {
 }
 
 model Attendance {
-  id        String           @id @default(uuid()) @db.Uuid
-  studentId String           @db.Uuid
-  sectionId String           @db.Uuid
-  date      DateTime         @db.Date
-  status    AttendanceStatus
-  createdAt DateTime         @default(now())
-  updatedAt DateTime         @updatedAt
+  id               String           @id @default(uuid()) @db.Uuid
+  studentId        String           @db.Uuid
+  sectionId        String           @db.Uuid
+  // Per-session check-in: attendance is recorded per course offering (a
+  // specific class period). Null on legacy rows created before sessions.
+  courseOfferingId String?          @db.Uuid
+  date             DateTime         @db.Date
+  status           AttendanceStatus
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
 
   // Relations
-  student User    @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  section Section @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  student        User            @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  section        Section         @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  courseOffering CourseOffering? @relation(fields: [courseOfferingId], references: [id], onDelete: Cascade)
 
-  @@unique([studentId, sectionId, date])
+  @@unique([studentId, courseOfferingId, date])
+  @@index([studentId, sectionId, date])
   @@map("attendance")
+}
+
+model AttendanceSession {
+  id               String        @id @default(uuid()) @db.Uuid
+  organizationId   String        @db.Uuid
+  courseOfferingId String        @db.Uuid
+  teacherId        String        @db.Uuid
+  date             DateTime      @db.Date
+  // One-time QR token handed to the student's phone. Short-lived (15 min)
+  // and returned to the owning teacher so the QR can be re-rendered.
+  token            String        @unique
+  status           SessionStatus @default(OPEN)
+  openedAt         DateTime      @default(now())
+  expiresAt        DateTime
+  closedAt         DateTime?
+  createdAt        DateTime      @default(now())
+
+  organization    Organization        @relation(fields: [organizationId], references: [id])
+  courseOffering  CourseOffering      @relation(fields: [courseOfferingId], references: [id], onDelete: Cascade)
+  teacher         User                @relation("AttendanceSessionTeacher", fields: [teacherId], references: [id])
+  teacherCheckins TeacherAttendance[]
+
+  @@index([organizationId])
+  @@index([courseOfferingId])
+  @@map("attendance_sessions")
+}
+
+model TeacherAttendance {
+  id               String                  @id @default(uuid()) @db.Uuid
+  teacherId        String                  @db.Uuid
+  courseOfferingId String                  @db.Uuid
+  date             DateTime                @db.Date
+  status           AttendanceStatus        @default(PRESENT)
+  source           TeacherAttendanceSource @default(SELF)
+  sessionId        String?                 @db.Uuid
+  checkedInAt      DateTime                @default(now())
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
+
+  teacher        User               @relation("TeacherAttendanceTeacher", fields: [teacherId], references: [id], onDelete: Cascade)
+  courseOffering CourseOffering     @relation(fields: [courseOfferingId], references: [id], onDelete: Cascade)
+  session        AttendanceSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+
+  @@unique([teacherId, courseOfferingId, date])
+  @@index([courseOfferingId])
+  @@map("teacher_attendance")
+}
+
+model TeacherFine {
+  id             String     @id @default(uuid()) @db.Uuid
+  organizationId String     @db.Uuid
+  teacherId      String     @db.Uuid
+  amount         Decimal    @db.Decimal(10, 2)
+  reason         String
+  type           FineType   @default(ATTENDANCE)
+  status         FineStatus @default(UNPAID)
+  amountPaid     Decimal?   @db.Decimal(10, 2)
+  dueDate        DateTime?
+  issuedById     String     @db.Uuid
+  paidAt         DateTime?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  teacher      User         @relation("TeacherFines", fields: [teacherId], references: [id], onDelete: Cascade)
+  issuedBy     User         @relation("TeacherFinesIssuedBy", fields: [issuedById], references: [id])
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([teacherId])
+  @@index([organizationId])
+  @@map("teacher_fines")
 }
 
 model Material {
@@ -964,6 +1075,10 @@ model Notification {
   readAt    DateTime?
   createdAt DateTime            @default(now())
 
+  // Structured routing payload (e.g. { threadId, studentId, quizId }) so the
+  // app can deep-link to the exact page the notification refers to.
+  data Json?
+
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("notifications")
@@ -986,22 +1101,22 @@ model StudentReport {
 }
 
 model Quiz {
-  id           String     @id @default(uuid()) @db.Uuid
+  id           String         @id @default(uuid()) @db.Uuid
   title        String
   description  String?
-  teacherId    String     @db.Uuid
+  teacherId    String         @db.Uuid
   timeLimit    Int?
   passingScore Int?
-  status       QuizStatus @default(DRAFT)
+  status       QuizStatus     @default(DRAFT)
   difficulty   QuizDifficulty @default(MEDIUM)
   // MANUAL = created by hand in the editor; AI = produced by the generation
   // agent (assignments are fixed at generation time and locked in the editor).
-  source       QuizSource @default(MANUAL)
+  source       QuizSource     @default(MANUAL)
   // When set, the quiz stops being visible to students at this time (frontend
   // already surfaces "Closes at"; the backend now enforces it too).
   endsAt       DateTime?
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
 
   teacher     User             @relation("TeacherQuizzes", fields: [teacherId], references: [id], onDelete: Cascade)
   assignments QuizAssignment[]
@@ -1089,20 +1204,20 @@ model QuizQuestion {
 }
 
 model QuizAttempt {
-  id          String        @id @default(uuid()) @db.Uuid
-  quizId      String        @db.Uuid
-  studentId   String        @db.Uuid
-  startedAt   DateTime      @default(now())
-  submittedAt DateTime?
-  totalScore  Int?
-  status      AttemptStatus @default(IN_PROGRESS)
-  violations  Json          @default("[]")
+  id                  String        @id @default(uuid()) @db.Uuid
+  quizId              String        @db.Uuid
+  studentId           String        @db.Uuid
+  startedAt           DateTime      @default(now())
+  submittedAt         DateTime?
+  totalScore          Int?
+  status              AttemptStatus @default(IN_PROGRESS)
+  violations          Json          @default("[]")
   // Set when the QUIZ_VIOLATION alert + three-tier report have been produced
   // for this attempt — guarantees one report per attempt.
   violationReportedAt DateTime?
-  quiz    Quiz         @relation(fields: [quizId], references: [id], onDelete: Cascade)
-  student User         @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  answers QuizAnswer[]
+  quiz                Quiz          @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  student             User          @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  answers             QuizAnswer[]
 
   @@unique([quizId, studentId])
   @@map("quiz_attempts")
@@ -1157,26 +1272,26 @@ model HomeworkHelpInteraction {
 }
 
 model StudyGeneration {
-  id                     String   @id @default(uuid()) @db.Uuid
-  studentId              String   @db.Uuid
-  courseOfferingId       String   @db.Uuid
-  kind                   String
-  materialKind           String?
-  preset                 String?
-  theme                  Json?
-  topic                  String
-  status                 String   @default("PROCESSING")
-  stage                  String   @default("QUEUED")
-  error                  String?
-  sources                Json     @default("[]")
-  payload                Json?
-  audioUrl               String?
-  fileUrl                String?
-  durationSeconds        Int?
-  recommendedForAnalysisId String? @db.Uuid
-  createdAt              DateTime @default(now())
-  updatedAt              DateTime @updatedAt
-  completedAt            DateTime?
+  id                       String    @id @default(uuid()) @db.Uuid
+  studentId                String    @db.Uuid
+  courseOfferingId         String    @db.Uuid
+  kind                     String
+  materialKind             String?
+  preset                   String?
+  theme                    Json?
+  topic                    String
+  status                   String    @default("PROCESSING")
+  stage                    String    @default("QUEUED")
+  error                    String?
+  sources                  Json      @default("[]")
+  payload                  Json?
+  audioUrl                 String?
+  fileUrl                  String?
+  durationSeconds          Int?
+  recommendedForAnalysisId String?   @db.Uuid
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+  completedAt              DateTime?
 
   student        User             @relation(fields: [studentId], references: [id], onDelete: Cascade)
   offering       CourseOffering   @relation(fields: [courseOfferingId], references: [id], onDelete: Cascade)
@@ -1224,12 +1339,12 @@ enum AdminChatPeerRole {
 }
 
 model AdminChatThread {
-  id        String             @id @default(uuid()) @db.Uuid
-  adminId   String             @db.Uuid
-  peerId    String             @db.Uuid
+  id        String            @id @default(uuid()) @db.Uuid
+  adminId   String            @db.Uuid
+  peerId    String            @db.Uuid
   peerRole  AdminChatPeerRole
-  createdAt DateTime           @default(now())
-  updatedAt DateTime           @updatedAt
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
 
   admin    User               @relation("AdminChatAdmin", fields: [adminId], references: [id], onDelete: Cascade)
   peer     User               @relation("AdminChatPeer", fields: [peerId], references: [id], onDelete: Cascade)
@@ -1240,12 +1355,12 @@ model AdminChatThread {
 }
 
 model AdminChatMessage {
-  id        String   @id @default(uuid()) @db.Uuid
-  threadId  String   @db.Uuid
-  authorId  String   @db.Uuid
+  id        String    @id @default(uuid()) @db.Uuid
+  threadId  String    @db.Uuid
+  authorId  String    @db.Uuid
   text      String
   readAt    DateTime?
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
 
   thread AdminChatThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
   author User            @relation(fields: [authorId], references: [id], onDelete: Cascade)
@@ -1264,16 +1379,16 @@ enum AiChatKind {
 // one conversation owned by a user; messages append in order. The assistant
 // chat scopes by courseOfferingId, the guardian chat by studentId.
 model AiChatConversation {
-  id               String      @id @default(uuid()) @db.Uuid
-  userId           String      @db.Uuid
+  id               String     @id @default(uuid()) @db.Uuid
+  userId           String     @db.Uuid
   kind             AiChatKind
-  courseOfferingId String?     @db.Uuid
-  studentId        String?     @db.Uuid
+  courseOfferingId String?    @db.Uuid
+  studentId        String?    @db.Uuid
   title            String?
-  createdAt        DateTime    @default(now())
-  updatedAt        DateTime    @updatedAt
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
 
-  user     User              @relation("AiChatOwner", fields: [userId], references: [id], onDelete: Cascade)
+  user     User            @relation("AiChatOwner", fields: [userId], references: [id], onDelete: Cascade)
   messages AiChatMessage[]
 
   @@index([userId, updatedAt(sort: Desc)])
@@ -1297,19 +1412,19 @@ model AiChatMessage {
 }
 
 model Broadcast {
-  id             String    @id @default(uuid()) @db.Uuid
+  id             String     @id @default(uuid()) @db.Uuid
   title          String
   body           String?
   targetRoles    UserRole[]
-  targetGradeId  String?   @db.Uuid
-  createdById    String    @db.Uuid
-  organizationId String    @db.Uuid
-  deliveredCount Int       @default(0)
-  createdAt      DateTime  @default(now())
+  targetGradeId  String?    @db.Uuid
+  createdById    String     @db.Uuid
+  organizationId String     @db.Uuid
+  deliveredCount Int        @default(0)
+  createdAt      DateTime   @default(now())
 
-  createdBy    User          @relation("BroadcastsCreated", fields: [createdById], references: [id], onDelete: Cascade)
-  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  grade        GradeLevel?   @relation(fields: [targetGradeId], references: [id], onDelete: SetNull)
+  createdBy    User         @relation("BroadcastsCreated", fields: [createdById], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  grade        GradeLevel?  @relation(fields: [targetGradeId], references: [id], onDelete: SetNull)
 
   @@index([organizationId, createdAt])
   @@map("broadcasts")

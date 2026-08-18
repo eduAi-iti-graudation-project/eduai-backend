@@ -37,6 +37,7 @@ describe('SubscriptionGuard', () => {
       createdAt,
       trialReminderSentAt: null,
       trialExpiredSentAt: null,
+      logoUrl: null,
     };
   }
 

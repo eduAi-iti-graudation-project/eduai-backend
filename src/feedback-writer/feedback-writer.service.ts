@@ -67,6 +67,9 @@ export class FeedbackWriterService {
     if (writtenCount > 0) {
       const submission = await this.prisma.submission.findUnique({
         where: { id: submissionId },
+        include: {
+          assignment: { include: { offering: { select: { id: true } } } },
+        },
       });
       if (submission) {
         this.notificationsService
@@ -75,6 +78,11 @@ export class FeedbackWriterService {
             'FEEDBACK_READY',
             'Your assignment feedback is ready',
             `AI feedback has been generated for your submission. View it in your grades.`,
+            {
+              submissionId: submission.id,
+              assignmentId: submission.assignmentId,
+              classId: submission.assignment?.offering?.id ?? null,
+            },
           )
           .catch((err) =>
             this.logger.error(

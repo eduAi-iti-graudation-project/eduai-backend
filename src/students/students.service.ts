@@ -14,6 +14,22 @@ function academicYearOf(date: Date): string {
   return `${start}-${start + 1}`;
 }
 
+/**
+ * Collects a course offering's visible materials, merging the legacy direct
+ * relation with materials scoped to the offering via MaterialSectionScope
+ * (course/section-level uploads). Deduplicates by material id.
+ */
+function collectMaterials(o: {
+  materials: { id: string; title: string }[];
+  materialScopes: { material: { id: string; title: string } }[];
+}): [string, string][] {
+  const byId = new Map<string, string>();
+  for (const m of o.materials) byId.set(m.id, m.title);
+  for (const scope of o.materialScopes)
+    byId.set(scope.material.id, scope.material.title);
+  return [...byId.entries()];
+}
+
 @Injectable()
 export class StudentsService {
   constructor(
@@ -212,6 +228,9 @@ export class StudentsService {
             course: true,
             teacher: true,
             materials: { select: { id: true, title: true } },
+            materialScopes: {
+              select: { material: { select: { id: true, title: true } } },
+            },
             quizAssignments: {
               select: { id: true, targetStudentIds: true },
             },
@@ -248,10 +267,15 @@ export class StudentsService {
         name: s.name,
         description: s.description ?? (s.gradeLevel ? s.gradeLevel.name : null),
         teacherName: teacherNames.join(', '),
-        materialCount: s.offerings.reduce((n, o) => n + o.materials.length, 0),
+        materialCount: s.offerings.reduce(
+          (n, o) => n + collectMaterials(o).length,
+          0,
+        ),
         materialTitles: [
           ...new Set(
-            s.offerings.flatMap((o) => o.materials.map((m) => m.title)),
+            s.offerings.flatMap((o) =>
+              collectMaterials(o).map(([, title]) => title),
+            ),
           ),
         ],
         quizCount: s.offerings.reduce((n, o) => n + quizCountFor(o), 0),
@@ -293,6 +317,9 @@ export class StudentsService {
             course: true,
             teacher: true,
             materials: { select: { id: true, title: true } },
+            materialScopes: {
+              select: { material: { select: { id: true, title: true } } },
+            },
             quizAssignments: {
               select: { id: true, targetStudentIds: true },
             },
@@ -323,8 +350,8 @@ export class StudentsService {
         description: o.course.description,
         colorTag: o.course.colorTag,
         teacherName: o.teacher?.name ?? null,
-        materialCount: o.materials.length,
-        materialTitles: o.materials.map((m) => m.title),
+        materialCount: collectMaterials(o).length,
+        materialTitles: collectMaterials(o).map(([, title]) => title),
         quizCount: quizCountFor(o),
         assignments: o.assignments.map((a) => ({
           id: a.id,

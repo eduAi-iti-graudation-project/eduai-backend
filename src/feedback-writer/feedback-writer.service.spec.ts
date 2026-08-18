@@ -85,6 +85,8 @@ describe('FeedbackWriterService', () => {
     prisma.submission.findUnique.mockResolvedValue({
       id: 'submission-1',
       studentId: 'student-1',
+      assignmentId: 'assignment-1',
+      assignment: { offering: { id: 'class-1' } },
     });
 
     mockLlm.generateStructured
@@ -107,6 +109,11 @@ describe('FeedbackWriterService', () => {
       'FEEDBACK_READY',
       'Your assignment feedback is ready',
       expect.any(String),
+      {
+        submissionId: 'submission-1',
+        assignmentId: 'assignment-1',
+        classId: 'class-1',
+      },
     );
   });
 

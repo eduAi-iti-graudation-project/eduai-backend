@@ -469,9 +469,10 @@ describe('CommunicationAgentService', () => {
     );
     expect(mockNotifications.notifyUser).toHaveBeenCalledWith(
       'student-1',
-      'AGENT_ALERT',
+      'PRACTICE_READY',
       expect.stringContaining('recommended'),
       expect.any(String),
+      expect.objectContaining({ generationId: 'gen-1' }),
     );
     expect(mockStudyLab.recommend).toHaveBeenCalledWith(
       'student-1',

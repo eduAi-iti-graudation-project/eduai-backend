@@ -36,6 +36,14 @@ export class AlertsController {
     return this.alertsService.findByGuardian(guardianId);
   }
 
+  @Get('student')
+  @Roles('STUDENT')
+  @ApiOperation({ summary: 'List ACTIVE alerts for the signed-in student' })
+  @ApiOkResponse({ type: AlertDto, isArray: true })
+  findByStudent(@CurrentUser('id') studentId: string) {
+    return this.alertsService.findByStudent(studentId);
+  }
+
   @Get('teacher-flags')
   @Roles('TEACHER', 'ADMIN')
   @ApiOperation({

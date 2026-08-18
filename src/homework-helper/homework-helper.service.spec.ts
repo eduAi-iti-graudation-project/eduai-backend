@@ -193,6 +193,11 @@ describe('HomeworkHelperService', () => {
         'HOMEWORK_HELP_REDIRECT',
         'Sam L. needs your help',
         expect.stringContaining('thread-1'),
+        {
+          threadId: 'thread-1',
+          studentId: 'student-2',
+          studentName: 'Sam L.',
+        },
       );
     });
 
@@ -221,6 +226,11 @@ describe('HomeworkHelperService', () => {
         'HOMEWORK_HELP_REDIRECT',
         'A student needs your help',
         expect.stringContaining('Why did I get this grade?'),
+        {
+          threadId: null,
+          studentId: 'student-4',
+          studentName: 'Student',
+        },
       );
     });
   });

@@ -134,7 +134,7 @@ const ADMIN_SECTION_TITLES: Record<string, string> = {
   pass_rate_trend: 'Pass rate per week',
   alerts_created: 'Alerts created per week',
   user_growth: 'Students & teachers per bucket',
-  teacher_workload: 'Pending reviews per teacher',
+  teacher_workload: 'Students & pending reviews per teacher',
   alert_status_split: 'Alert status distribution',
 };
 
@@ -1957,7 +1957,7 @@ export class InsightsService {
     series.sort((a, b) => b.value - a.value);
     return {
       key: 'teacher_workload',
-      title: 'Pending reviews per teacher',
+      title: 'Students & pending reviews per teacher',
       chartType: 'bar',
       series,
     };

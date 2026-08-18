@@ -1,5 +1,7 @@
 import { Injectable, HttpStatus } from '@nestjs/common';
 import { randomBytes } from 'crypto';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { PrismaService } from '../prisma/prisma.service';
 import { SupabaseService } from '../auth/supabase.service';
 import type { InviteMemberDto } from './dto';
@@ -95,6 +97,7 @@ export class OrganizationsService {
       subscriptionTier: owner.subscriptionTier,
       seatLimit: organization.group ? null : organization.seatLimit,
       userCount,
+      logoUrl: organization.logoUrl ?? null,
     };
   }
 
@@ -345,5 +348,71 @@ export class OrganizationsService {
     });
 
     return { id: user.id, email: user.email, role: user.role };
+  }
+
+  async getLogoById(organizationId: string) {
+    return this.prisma.organization.findUnique({
+      where: { id: organizationId },
+      select: { logoUrl: true },
+    });
+  }
+
+  async uploadLogo(
+    organizationId: string,
+    file: Express.Multer.File | undefined,
+  ) {
+    if (!file || !file.mimetype.startsWith('image/')) {
+      throw new ApiError(
+        ErrorCode.PHOTO_INVALID,
+        HttpStatus.BAD_REQUEST,
+        'The logo must be a JPEG or PNG image.',
+      );
+    }
+    const ext =
+      file.mimetype === 'image/png'
+        ? 'png'
+        : file.mimetype === 'image/jpeg' || file.mimetype === 'image/jpg'
+          ? 'jpg'
+          : null;
+    if (!ext) {
+      throw new ApiError(
+        ErrorCode.PHOTO_INVALID,
+        HttpStatus.BAD_REQUEST,
+        'The logo must be a JPEG or PNG image.',
+      );
+    }
+    const dir = path.resolve(
+      process.cwd(),
+      process.env.PHOTO_UPLOAD_DIR ?? 'uploads/photos',
+    );
+    fs.mkdirSync(dir, { recursive: true });
+    const fileName = `org-logo-${organizationId}-${Date.now()}.${ext}`;
+    const fileUrl = path.join(dir, fileName);
+    try {
+      fs.writeFileSync(fileUrl, file.buffer);
+    } catch {
+      throw new ApiError(
+        ErrorCode.PHOTO_UPLOAD_FAILED,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+        'Could not save the logo. Please try again.',
+      );
+    }
+    const existing = await this.prisma.organization.findUnique({
+      where: { id: organizationId },
+      select: { logoUrl: true },
+    });
+    const updated = await this.prisma.organization.update({
+      where: { id: organizationId },
+      data: { logoUrl: fileUrl },
+      select: { logoUrl: true },
+    });
+    if (existing?.logoUrl && existing.logoUrl !== fileUrl) {
+      try {
+        fs.unlinkSync(existing.logoUrl);
+      } catch {
+        /* best-effort cleanup */
+      }
+    }
+    return updated;
   }
 }

@@ -134,6 +134,7 @@ describe('OrganizationsService', () => {
         subscriptionTier: 'TRIAL',
         seatLimit: 50,
         userCount: 7,
+        logoUrl: null,
       });
     });
 
@@ -168,6 +169,7 @@ describe('OrganizationsService', () => {
         subscriptionTier: 'ENTERPRISE',
         seatLimit: null,
         userCount: 7,
+        logoUrl: null,
       });
     });
   });

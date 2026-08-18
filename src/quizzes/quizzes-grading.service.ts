@@ -57,7 +57,7 @@ export class QuizzesGradingService {
         'Return valid JSON with EXACTLY these fields:\n' +
         '{\n' +
         '  "pointsAwarded": 0-{maxPoints},\n' +
-        '  "feedback": "string with specific, actionable feedback"\n' +
+        '  "feedback": "string — structured markdown: ONE bolded takeaway sentence, then a short "### To improve" bullet list of 1-3 concrete actions. Keep it concise."\n' +
         '}\n' +
         'Do not omit any fields.' +
         FORMATTING_RULES,

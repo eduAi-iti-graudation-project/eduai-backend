@@ -9,6 +9,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ProviderService } from '../common/ai/provider.service';
 import { QuizzesService } from '../quizzes/quizzes.service';
 import { HomeworkHelperAgent } from '../homework-helper/homework-helper.agent';
+import { NotificationsService } from '../notifications/notifications.service';
 import { ErrorCode } from '../common/errors/codes';
 import type { User } from '@prisma/client';
 
@@ -65,6 +66,7 @@ const mockPrisma = {
 const mockProvider = { chat: jest.fn() };
 const mockQuizzes = { generate: jest.fn(), generateForConcept: jest.fn() };
 const mockHomework = { help: jest.fn() };
+const mockNotifications = { notifyUser: jest.fn() };
 
 /** The fake gateway must answer with the JSON payload the extraction agent
  *  declares in its output schema (concept + explanation). */
@@ -92,6 +94,7 @@ describe('StruggleSignalsService', () => {
         { provide: ProviderService, useValue: mockProvider },
         { provide: QuizzesService, useValue: mockQuizzes },
         { provide: HomeworkHelperAgent, useValue: mockHomework },
+        { provide: NotificationsService, useValue: mockNotifications },
       ],
     }).compile();
     service = module.get(StruggleSignalsService);
@@ -468,6 +471,13 @@ describe('StruggleSignalsService', () => {
       where: { id: 'sig-1', status: { in: ['PENDING', 'FAILED'] } },
       data: { status: 'SENT', quizId: 'quiz-1', interactionId: 'int-1' },
     });
+    expect(mockNotifications.notifyUser).toHaveBeenCalledWith(
+      studentA.id,
+      'QUIZ_READY',
+      expect.stringContaining('practice quiz'),
+      expect.stringContaining('states of matter'),
+      { quizId: 'quiz-1', concept: 'states of matter' },
+    );
     expect(result).toEqual({ id: 'sig-1', status: 'SENT', quizId: 'quiz-1' });
   });
 
