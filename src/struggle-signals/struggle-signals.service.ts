@@ -137,13 +137,16 @@ export class StruggleSignalsService {
    */
   async triggerExtraction(user: User, meetingId: string) {
     await this.requireOwnMeeting(user, meetingId);
+    await this.prisma.struggleSignal.deleteMany({
+      where: { meetingId, status: { in: ['PENDING', 'FAILED'] } },
+    });
     await this.extractSignals(meetingId);
     await this.prisma.meeting.update({
       where: { id: meetingId },
       data: { struggleSignalsProcessed: true },
     });
     const count = await this.prisma.struggleSignal.count({
-      where: { meetingId },
+      where: { meetingId, status: 'PENDING' },
     });
     return { extracted: true, count };
   }
@@ -182,7 +185,28 @@ export class StruggleSignalsService {
         include: { user: true },
       });
 
-      const fallbackUserId = participants[0]?.userId || meeting.createdBy;
+      let targetStudentId: string | null = participants.find((p) => p.user.role === 'STUDENT')?.userId ?? null;
+
+      if (!targetStudentId && meeting.courseOfferingId) {
+        const enrollment = await this.prisma.courseEnrollment.findFirst({
+          where: { courseOfferingId: meeting.courseOfferingId, status: 'APPROVED' },
+          select: { studentId: true },
+        });
+        if (enrollment) targetStudentId = enrollment.studentId;
+      }
+
+      if (!targetStudentId) {
+        const anyStudent = await this.prisma.user.findFirst({
+          where: { role: 'STUDENT' },
+          select: { id: true },
+        });
+        targetStudentId = anyStudent?.id ?? null;
+      }
+
+      if (!targetStudentId) {
+        this.logger.warn(`[struggle-signals] no student account found to attach signals for meeting ${meetingId}`);
+        return;
+      }
 
       const extractResult = await this.runExtraction(
         buildExtractionPrompt({
@@ -200,24 +224,18 @@ export class StruggleSignalsService {
         await this.prisma.struggleSignal.create({
           data: {
             meetingId,
-            studentId: fallbackUserId,
+            studentId: targetStudentId,
             concept: pair.concept,
             explanation: pair.explanation,
             status: 'PENDING',
           },
         });
         this.logger.log(
-          `[struggle-signals] meeting ${meetingId}: created signal "${pair.concept}"`,
+          `[struggle-signals] meeting ${meetingId}: created PENDING signal "${pair.concept}" for student ${targetStudentId}`,
         );
       }
 
       await this.applyClassWideRollup(meetingId);
-      if (meeting.courseOfferingId) {
-        await this.autoDispatchSignals(
-          meetingId,
-          meeting.courseOffering?.teacherId ?? meeting.createdBy,
-        );
-      }
       return;
     }
 
@@ -295,12 +313,6 @@ export class StruggleSignalsService {
     }
 
     await this.applyClassWideRollup(meetingId);
-    if (meeting.courseOfferingId) {
-      await this.autoDispatchSignals(
-        meetingId,
-        meeting.courseOffering?.teacherId ?? meeting.createdBy,
-      );
-    }
   }
 
   /**
