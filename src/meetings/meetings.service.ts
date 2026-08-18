@@ -234,12 +234,25 @@ export class MeetingsService {
     if (meeting.status === 'LIVE') {
       if (enabled && !meeting.recordingEgressId) {
         const egressId = await this.livekit.startRecording(meeting.roomName);
+        // S3 storage may be unconfigured — startRecording no-ops with '' and
+        // the recording flag stays truthful instead of holding a dead id.
+        if (!egressId) {
+          throw new NotFoundException(
+            'Recording could not be started — egress storage is not configured.',
+          );
+        }
         await this.prisma.meeting.update({
           where: { id: meeting.id },
           data: { recordingEnabled: true, recordingEgressId: egressId },
         });
-      } else if (!enabled && meeting.recordingEgressId) {
-        await this.livekit.stopRecording(meeting.recordingEgressId);
+      } else if (!enabled) {
+        // Always clear the flag on disable. A meeting created with
+        // recordingEnabled=true bakes egress into the room at creation and
+        // never gets a recordingEgressId, so skipping this on a missing id
+        // left the meeting "recording" forever with no way to turn it off.
+        if (meeting.recordingEgressId) {
+          await this.livekit.stopRecording(meeting.recordingEgressId);
+        }
         await this.prisma.meeting.update({
           where: { id: meeting.id },
           data: { recordingEnabled: false, recordingEgressId: null },
@@ -513,6 +526,7 @@ export class MeetingsService {
             data: {
               recordingUrl: this.storageKeyFromLocation(location),
               recordingEgressId: null,
+              recordingEnabled: false,
             },
           });
         }
@@ -531,6 +545,7 @@ export class MeetingsService {
           where: { id: meeting.id },
           data: {
             recordingEgressId: null,
+            recordingEnabled: false,
             transcriptStatus: 'FAILED',
           },
         });

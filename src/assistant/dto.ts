@@ -7,7 +7,8 @@ const MessageSchema = z.object({
 });
 
 export const ChatSchema = z.object({
-  courseOfferingId: z.string().uuid(),
+  courseOfferingId: z.string().uuid().optional(),
+  conversationId: z.string().uuid().optional(),
   messages: z.array(MessageSchema),
   newMessage: z.string().min(1),
 });
@@ -71,6 +72,7 @@ const SavedQuizSchema = z.object({
 
 const ChatResponseSchema = z.object({
   reply: z.string(),
+  conversationId: z.string().uuid(),
   quiz: QuizSchema.optional(),
   savedQuiz: SavedQuizSchema.optional(),
   rubric: RubricDraftSchema.optional(),

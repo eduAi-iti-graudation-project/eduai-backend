@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { CommunicationAgentService } from './communication-agent.service';
+import { CommunicationWorkflow } from './communication-workflow';
 import { PrismaService } from '../prisma/prisma.service';
-import { LlmService } from '../common/llm/llm.service';
 import { ReportsService } from '../reports/reports.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { StudyLabService } from '../study-lab/study-lab.service';
@@ -40,8 +40,8 @@ describe('CommunicationAgentService', () => {
     },
   };
 
-  const mockLlm = {
-    generateStructured: jest.fn(),
+  const mockWorkflow = {
+    run: jest.fn(),
   };
 
   const mockReports = {
@@ -153,27 +153,45 @@ describe('CommunicationAgentService', () => {
         : Promise.resolve(profileGrades(decliningGrades)),
     );
 
-    mockLlm.generateStructured.mockResolvedValue({
-      reason: 'The numbers show a clear decline across recent submissions.',
-      analysis: 'needs support on fundamentals',
-      skillGaps: ['fractions'],
-      interventions: ['extra practice'],
-      resourceSuggestions: ['Khan Academy'],
-      message: 'Your child needs some support.',
-      homeSupport: ['set a study routine'],
-      feedback: 'Try breaking content into smaller steps.',
-      patternAnalysis: 'The class trend is flat.',
-      strategies: ['mix retrieval practice'],
-      summary: 'The class is performing below expectations.',
-      classTrend: 'holding steady',
-      recommendation: 'Monitor the next batch of assignments.',
-    });
+    mockWorkflow.run.mockImplementation(async (input: { decision: { type: string } }) => ({
+      explanation: {
+        reason: 'The numbers show a clear decline across recent submissions.',
+        headline: `${'Sam Learner'} is at risk`,
+        highlights: ['3 recent submissions'],
+        strengths: ['—'],
+        concerns: ['Overall performance below target'],
+        recommendation: 'Assign the recommended practice set.',
+      },
+      decision: input.decision,
+      council: null,
+      review: null,
+      teacherContent: {
+        analysis: 'needs support on fundamentals',
+        skillGaps: ['fractions'],
+        interventions: ['extra practice'],
+        resourceSuggestions: ['Khan Academy'],
+      },
+      guardianContent: {
+        message: 'Your child needs some support.',
+        homeSupport: ['set a study routine'],
+      },
+      teacherFeedback: {
+        feedback: 'Try breaking content into smaller steps.',
+        patternAnalysis: 'The class trend is flat.',
+        strategies: ['mix retrieval practice'],
+      },
+      managementSummary: {
+        summary: 'The class is performing below expectations.',
+        classTrend: 'holding steady',
+        recommendation: 'Monitor the next batch of assignments.',
+      },
+    }));
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         CommunicationAgentService,
         { provide: PrismaService, useValue: mockPrisma },
-        { provide: LlmService, useValue: mockLlm },
+        { provide: CommunicationWorkflow, useValue: mockWorkflow },
         { provide: ReportsService, useValue: mockReports },
         { provide: NotificationsService, useValue: mockNotifications },
         { provide: StudyLabService, useValue: mockStudyLab },
@@ -190,7 +208,7 @@ describe('CommunicationAgentService', () => {
     await service.analyze('missing');
 
     expect(mockPrisma.organization.findUnique).not.toHaveBeenCalled();
-    expect(mockLlm.generateStructured).not.toHaveBeenCalled();
+    expect(mockWorkflow.run).not.toHaveBeenCalled();
   });
 
   it('skips the agent for ACTIVE orgs below Trial/Enterprise', async () => {
@@ -202,7 +220,7 @@ describe('CommunicationAgentService', () => {
     await service.analyze('sub-1');
 
     expect(mockPrisma.submission.count).not.toHaveBeenCalled();
-    expect(mockLlm.generateStructured).not.toHaveBeenCalled();
+    expect(mockWorkflow.run).not.toHaveBeenCalled();
   });
 
   it('runs the agent during trial (full access policy)', async () => {
@@ -227,7 +245,7 @@ describe('CommunicationAgentService', () => {
     await service.analyze('sub-1');
 
     expect(mockPrisma.studentAnalysis.create).not.toHaveBeenCalled();
-    expect(mockLlm.generateStructured).not.toHaveBeenCalled();
+    expect(mockWorkflow.run).not.toHaveBeenCalled();
   });
 
   it('records a no-issue analysis without any LLM calls when nothing trips', async () => {
@@ -253,7 +271,7 @@ describe('CommunicationAgentService', () => {
 
     await service.analyze('sub-1');
 
-    expect(mockLlm.generateStructured).not.toHaveBeenCalled();
+    expect(mockWorkflow.run).not.toHaveBeenCalled();
     const analysisCalls = mockPrisma.studentAnalysis.create.mock
       .calls as unknown as { data: { diagnosis: { decision: string } } }[][];
     expect(analysisCalls[0][0].data.diagnosis.decision).toBe('none');
@@ -285,7 +303,7 @@ describe('CommunicationAgentService', () => {
     expect(alertCalls[0][0].data.type).toBe('FAILING');
     expect(alertCalls[0][0].data.studentId).toBe('student-1');
     // explanation + teacher-content + guardian-content
-    expect(mockLlm.generateStructured).toHaveBeenCalledTimes(3);
+    expect(mockWorkflow.run).toHaveBeenCalledTimes(1);
     mockReports.generate.mockResolvedValue({ id: 'report-1' });
     expect(mockReports.generate).toHaveBeenCalledWith('student-1', 'alert-1');
   });
@@ -343,7 +361,7 @@ describe('CommunicationAgentService', () => {
     }[][];
     expect(alertCalls[0][0].data.type).toBe('WEAK_CRITERION');
     expect(alertCalls[0][0].data.studentId).toBe('student-1');
-    expect(mockLlm.generateStructured).toHaveBeenCalledTimes(3);
+    expect(mockWorkflow.run).toHaveBeenCalledTimes(1);
 
     const analysisCalls = mockPrisma.studentAnalysis.create.mock
       .calls as unknown as {
@@ -365,7 +383,7 @@ describe('CommunicationAgentService', () => {
     });
   });
 
-  it('passes criterion stats to the explanation LLM prompt', async () => {
+  it('passes criterion stats and weak criteria to the workflow input', async () => {
     mockPrisma.organization.findUnique.mockResolvedValue({
       subscriptionStatus: 'TRIALING',
       subscriptionTier: 'TRIAL',
@@ -385,15 +403,12 @@ describe('CommunicationAgentService', () => {
 
     await service.analyze('sub-1');
 
-    const calls = mockLlm.generateStructured.mock.calls as unknown as Array<
-      Array<{ userPrompt: string }>
-    >;
-    const prompt = JSON.parse(calls[0][0].userPrompt) as {
+    const input = mockWorkflow.run.mock.calls[0][0] as {
       criterionStats: { criteriaId: string; count: number }[];
       weakCriteria: { description: string }[];
     };
-    expect(prompt.criterionStats).toHaveLength(2);
-    expect(prompt.weakCriteria[0].description).toBe('Using evidence');
+    expect(input.criterionStats).toHaveLength(2);
+    expect(input.weakCriteria[0].description).toBe('Using evidence');
   });
 
   it('downgrades a repeated weak criterion to CONSISTENT_STRUGGLE when an alert is already active', async () => {
@@ -436,12 +451,11 @@ describe('CommunicationAgentService', () => {
     expect(alertCalls[0][0].data.type).toBe('CONSISTENT_STRUGGLE');
   });
 
-  it('falls back to deterministic content and still alerts, notifies, and recommends practice when the LLM fails', async () => {
+  it('still alerts, notifies, and recommends practice from the workflow content', async () => {
     mockPrisma.organization.findUnique.mockResolvedValue({
       subscriptionStatus: 'TRIALING',
       subscriptionTier: 'TRIAL',
     });
-    mockLlm.generateStructured.mockRejectedValue(new Error('upstream 503'));
     mockStudyLab.recommend.mockResolvedValue('gen-1');
 
     await service.analyze('sub-1');

@@ -8,6 +8,7 @@ const mockGenerate = jest.fn();
 const mockRefine = jest.fn();
 const mockRegenerate = jest.fn();
 const mockDelete = jest.fn();
+const mockDeleteMany = jest.fn();
 
 const teacher = {
   id: 'teacher-0001',
@@ -51,6 +52,7 @@ describe('LabsController (SSE)', () => {
       refine: mockRefine,
       regenerate: mockRegenerate,
       delete: mockDelete,
+      deleteMany: mockDeleteMany,
     } as unknown as LabsService);
   });
 
@@ -235,5 +237,20 @@ describe('LabsController (SSE)', () => {
 
     expect(mockDelete).toHaveBeenCalledWith(teacher, 'lab-0001');
     expect(result).toEqual({ id: 'lab-0001' });
+  });
+
+  it('DELETE /labs/bulk delegates to the service and returns the deleted count', async () => {
+    mockDeleteMany.mockResolvedValue({ deleted: 2 });
+
+    const result = await controller.deleteMany(
+      { ids: ['lab-0001', 'lab-0002'] },
+      teacher,
+    );
+
+    expect(mockDeleteMany).toHaveBeenCalledWith(teacher, [
+      'lab-0001',
+      'lab-0002',
+    ]);
+    expect(result).toEqual({ deleted: 2 });
   });
 });

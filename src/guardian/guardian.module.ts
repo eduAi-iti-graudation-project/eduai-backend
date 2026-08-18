@@ -7,5 +7,6 @@ import { MailerModule } from '../common/mailer/mailer.module';
   imports: [MailerModule],
   providers: [GuardianService],
   controllers: [GuardianController],
+  exports: [GuardianService],
 })
 export class GuardianModule {}

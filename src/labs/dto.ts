@@ -61,6 +61,17 @@ const RefineLabSchema = z.object({
 });
 export class RefineLabDto extends createZodDto(RefineLabSchema) {}
 
+const BulkDeleteLabsSchema = z.object({
+  ids: z
+    .array(z.string().uuid())
+    .min(1)
+    .max(50)
+    .describe(
+      'The labs to hard-delete. All must be owned by the requesting teacher — a single non-owned or missing id fails the whole request.',
+    ),
+});
+export class BulkDeleteLabsDto extends createZodDto(BulkDeleteLabsSchema) {}
+
 // ─── Responses ──────────────────────────────────────────
 const ReviewFlagsSchema = z.object({
   flags: z.array(z.string()),

@@ -702,6 +702,7 @@ model User {
   joinRequestsDecided       JoinRequest[]              @relation("JoinRequestDecidedBy")
   joinRequestsCreated       JoinRequest[]              @relation("JoinRequestUser")
   createdMaterials          Material[]                 @relation("MaterialsCreatedBy")
+  aiChatConversations       AiChatConversation[]       @relation("AiChatOwner")
 
   @@index([organizationId])
   @@map("users")
@@ -1096,7 +1097,9 @@ model QuizAttempt {
   totalScore  Int?
   status      AttemptStatus @default(IN_PROGRESS)
   violations  Json          @default("[]")
-
+  // Set when the QUIZ_VIOLATION alert + three-tier report have been produced
+  // for this attempt — guarantees one report per attempt.
+  violationReportedAt DateTime?
   quiz    Quiz         @relation(fields: [quizId], references: [id], onDelete: Cascade)
   student User         @relation(fields: [studentId], references: [id], onDelete: Cascade)
   answers QuizAnswer[]
@@ -1249,6 +1252,48 @@ model AdminChatMessage {
 
   @@index([threadId, createdAt])
   @@map("admin_chat_messages")
+}
+
+enum AiChatKind {
+  ASSISTANT
+  GUARDIAN
+  ADMIN
+}
+
+// Persistent AI-assistant conversations (ChatGPT-style history). Each row is
+// one conversation owned by a user; messages append in order. The assistant
+// chat scopes by courseOfferingId, the guardian chat by studentId.
+model AiChatConversation {
+  id               String      @id @default(uuid()) @db.Uuid
+  userId           String      @db.Uuid
+  kind             AiChatKind
+  courseOfferingId String?     @db.Uuid
+  studentId        String?     @db.Uuid
+  title            String?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+
+  user     User              @relation("AiChatOwner", fields: [userId], references: [id], onDelete: Cascade)
+  messages AiChatMessage[]
+
+  @@index([userId, updatedAt(sort: Desc)])
+  @@index([courseOfferingId])
+  @@index([studentId])
+  @@map("ai_chat_conversations")
+}
+
+model AiChatMessage {
+  id             String   @id @default(uuid()) @db.Uuid
+  conversationId String   @db.Uuid
+  role           String
+  content        String
+  sources        Json?
+  createdAt      DateTime @default(now())
+
+  conversation AiChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+  @@map("ai_chat_messages")
 }
 
 model Broadcast {

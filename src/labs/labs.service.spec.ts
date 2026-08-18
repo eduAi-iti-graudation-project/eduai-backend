@@ -18,6 +18,7 @@ const mockLabUpdate = jest.fn();
 const mockLabFindFirst = jest.fn();
 const mockLabFindMany = jest.fn();
 const mockLabDelete = jest.fn();
+const mockLabDeleteMany = jest.fn();
 
 const teacher = {
   id: 'teacher-0001',
@@ -115,6 +116,7 @@ describe('LabsService', () => {
     );
     mockLabFindMany.mockResolvedValue([]);
     mockLabDelete.mockResolvedValue(labRow);
+    mockLabDeleteMany.mockResolvedValue({ count: 0 });
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -141,6 +143,7 @@ describe('LabsService', () => {
               findFirst: mockLabFindFirst,
               findMany: mockLabFindMany,
               delete: mockLabDelete,
+              deleteMany: mockLabDeleteMany,
             },
           },
         },
@@ -882,6 +885,62 @@ describe('LabsService', () => {
         code: 'LAB_NOT_FOUND',
       });
       expect(mockLabDelete).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('deleteMany', () => {
+    it('deletes every owned lab and returns the count', async () => {
+      mockLabFindMany.mockResolvedValue([
+        { id: 'lab-0001' },
+        { id: 'lab-0002' },
+      ]);
+      mockLabDeleteMany.mockResolvedValue({ count: 2 });
+
+      const result = await service.deleteMany(teacher, [
+        'lab-0001',
+        'lab-0002',
+      ]);
+
+      const findManyCalls = mockLabFindMany.mock.calls as [
+        { where: Record<string, unknown> },
+      ][];
+      expect(findManyCalls[0][0].where).toEqual({
+        id: { in: ['lab-0001', 'lab-0002'] },
+        organizationId: 'org-0001',
+        createdBy: 'teacher-0001',
+      });
+      expect(mockLabDeleteMany).toHaveBeenCalledWith({
+        where: { id: { in: ['lab-0001', 'lab-0002'] } },
+      });
+      expect(result).toEqual({ deleted: 2 });
+    });
+
+    it('deduplicates repeated ids before deleting', async () => {
+      mockLabFindMany.mockResolvedValue([{ id: 'lab-0001' }]);
+      mockLabDeleteMany.mockResolvedValue({ count: 1 });
+
+      const result = await service.deleteMany(teacher, [
+        'lab-0001',
+        'lab-0001',
+      ]);
+
+      const findManyCalls = mockLabFindMany.mock.calls as [
+        { where: Record<string, unknown> },
+      ][];
+      expect(findManyCalls[0][0].where.id).toEqual({ in: ['lab-0001'] });
+      expect(mockLabDeleteMany).toHaveBeenCalledWith({
+        where: { id: { in: ['lab-0001'] } },
+      });
+      expect(result).toEqual({ deleted: 1 });
+    });
+
+    it('fails the whole request when any id is missing or not owned', async () => {
+      mockLabFindMany.mockResolvedValue([{ id: 'lab-0001' }]);
+
+      await expect(
+        service.deleteMany(teacher, ['lab-0001', 'lab-9999']),
+      ).rejects.toMatchObject({ code: 'LAB_NOT_FOUND' });
+      expect(mockLabDeleteMany).not.toHaveBeenCalled();
     });
   });
 

@@ -16,6 +16,7 @@ import { RequiresTier } from '../auth/requires-tier.decorator';
 import { Roles } from '../auth/roles.decorator';
 import { ApiError } from '../common/errors/api-error';
 import {
+  BulkDeleteLabsDto,
   GenerateLabDto,
   LabDto,
   RefineLabDto,
@@ -168,6 +169,16 @@ export class LabsController {
     @CurrentUser() user: User,
   ) {
     return this.labsService.reject(user, id, dto.notes);
+  }
+
+  @Delete('bulk')
+  @Roles('TEACHER')
+  @ApiOperation({
+    summary:
+      'Hard-delete multiple labs the teacher owns, any status. All ids must be owned — a single missing or foreign lab fails the whole request. Returns the number of labs deleted.',
+  })
+  deleteMany(@Body() dto: BulkDeleteLabsDto, @CurrentUser() user: User) {
+    return this.labsService.deleteMany(user, dto.ids);
   }
 
   @Delete(':id')

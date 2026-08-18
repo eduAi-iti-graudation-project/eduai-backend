@@ -110,6 +110,28 @@ export const StudentProfileSchema = z.object({
 
 export type StudentProfile = z.infer<typeof StudentProfileSchema>;
 
+export const CouncilVerdictSchema = z.object({
+  flagged: z.boolean(),
+  reason: z.string().min(1),
+  confidence: z.enum(['LOW', 'MEDIUM', 'HIGH']),
+});
+
+export type CouncilVerdict = z.infer<typeof CouncilVerdictSchema>;
+
+export const ReviewerSchema = z.object({
+  approved: z.boolean(),
+  note: z.string(),
+});
+
+export type ReviewerAssessment = z.infer<typeof ReviewerSchema>;
+
+export type FlaggedVerdict = {
+  flagged: true;
+  type: 'FAILING' | 'DOWNWARD_TREND' | 'CONSISTENT_STRUGGLE' | 'WEAK_CRITERION';
+  severity: 'MEDIUM' | 'HIGH';
+  attribution: 'STUDENT' | 'CLASS' | 'BOTH';
+};
+
 export const ClassContextSchema = z.object({
   className: z.string(),
   teacherName: z.string(),

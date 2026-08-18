@@ -50,6 +50,9 @@ import { LabsModule } from './labs/labs.module';
 import { MigrationModule } from './migration/migration.module';
 import { JoinRequestsModule } from './join-requests/join-requests.module';
 import { GuardianModule } from './guardian/guardian.module';
+import { GuardianChatModule } from './guardian-chat/guardian-chat.module';
+import { AdminChatModule } from './admin-chat/admin-chat.module';
+import { AiChatModule } from './ai-chat/ai-chat.module';
 import { ClassesModule } from './classes/classes.module';
 import { GradeConsoleModule } from './grade-console/grade-console.module';
 
@@ -100,6 +103,9 @@ import { GradeConsoleModule } from './grade-console/grade-console.module';
     MigrationModule,
     JoinRequestsModule,
     GuardianModule,
+    GuardianChatModule,
+    AdminChatModule,
+    AiChatModule,
     ClassesModule,
     GradeConsoleModule,
     LabsModule,
