@@ -185,7 +185,7 @@ export class StruggleSignalsService {
           role: 'STUDENT',
           OR: [
             { meetingParticipants: { some: { meetingId } } },
-            { enrollments: { some: { offeringId: meeting.courseOfferingId ?? undefined } } },
+            { enrollments: { some: { section: { offerings: { some: { id: meeting.courseOfferingId ?? undefined } } } } } },
           ],
         },
       });
