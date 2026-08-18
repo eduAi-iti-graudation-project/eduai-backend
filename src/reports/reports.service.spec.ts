@@ -16,6 +16,12 @@ describe('ReportsService', () => {
       findMany: jest.fn(),
       findFirst: jest.fn(),
     },
+    user: {
+      findUnique: jest.fn(),
+    },
+    organization: {
+      findUnique: jest.fn(),
+    },
   };
 
   const mockLlmService = {
@@ -199,6 +205,80 @@ describe('ReportsService', () => {
       await expect(service.findOne('r1', student)).rejects.toMatchObject({
         code: 'REPORT_NOT_FOUND',
       });
+    });
+  });
+
+  describe('getHtmlDocument', () => {
+    const report = {
+      id: 'r1',
+      studentId: 'student-1',
+      alertId: 'alert-1',
+      createdAt: new Date('2026-08-18'),
+      parentSection: {
+        message: 'Parent update **45%**',
+        homeSupport: ['Routine'],
+      },
+      teacherSection: {
+        analysis: 'Detailed analysis',
+        skillGaps: ['Fractions'],
+        interventions: ['Tutoring'],
+        resourceSuggestions: ['Exercises'],
+      },
+      managementSection: {
+        summary: 'Summary',
+        classTrend: 'Trend',
+        recommendation: 'Recommendation',
+      },
+    };
+
+    beforeEach(() => {
+      mockPrisma.studentReport.findFirst.mockResolvedValue(report);
+      mockPrisma.user.findUnique.mockResolvedValue({
+        name: 'John Doe',
+        organizationId: 'org-1',
+      });
+      mockPrisma.alert.findUnique.mockResolvedValue({
+        type: 'FAILING',
+        reason: 'Average dropped to **45%**',
+      });
+    });
+
+    it('builds an HTML document with school and student names', async () => {
+      mockPrisma.organization.findUnique.mockResolvedValue({
+        name: 'Green Hills Academy',
+        logoUrl: null,
+      });
+
+      const doc = await service.getHtmlDocument('r1', teacher);
+
+      expect(doc.html).toContain('<!DOCTYPE html>');
+      expect(doc.html).toContain('Green Hills Academy');
+      expect(doc.html).toContain('John Doe');
+      expect(doc.filename).toBe('john-doe-progress-report.html');
+      expect(mockPrisma.studentReport.findFirst).toHaveBeenCalledWith({
+        where: { id: 'r1', student: { organizationId: 'org-1' } },
+      });
+    });
+
+    it('uses the monogram fallback when the organization has no logo', async () => {
+      mockPrisma.organization.findUnique.mockResolvedValue({
+        name: 'Green Hills Academy',
+        logoUrl: null,
+      });
+
+      const doc = await service.getHtmlDocument('r1', teacher);
+
+      expect(doc.html).toContain('logo-fallback');
+      expect(doc.html).toContain('GH');
+      expect(doc.html).not.toContain('data:image');
+    });
+
+    it('rejects when the report is inaccessible', async () => {
+      mockPrisma.studentReport.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.getHtmlDocument('r1', student),
+      ).rejects.toMatchObject({ code: 'REPORT_NOT_FOUND' });
     });
   });
 });
