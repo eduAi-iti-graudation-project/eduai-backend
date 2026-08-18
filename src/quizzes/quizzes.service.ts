@@ -89,8 +89,8 @@ export class QuizzesService {
       questionCount?: number;
       types?: ('MCQ' | 'TRUE_FALSE' | 'SHORT_ANSWER' | 'ESSAY')[];
       difficulty?: 'EASY' | 'MEDIUM' | 'HARD';
-      timeLimit: number;
-      endsAt: string;
+      timeLimit?: number;
+      endsAt?: string;
     },
     onStep?: (step: QuizAgentStep) => void,
   ) {
@@ -206,10 +206,10 @@ export class QuizzesService {
     description?: string;
     assignments: AssignmentInput[];
     teacherId: string;
-    timeLimit: number;
+    timeLimit?: number;
     passingScore?: number;
     difficulty?: 'EASY' | 'MEDIUM' | 'HARD';
-    endsAt: string;
+    endsAt?: string;
     questions: {
       type: 'MCQ' | 'TRUE_FALSE' | 'SHORT_ANSWER' | 'ESSAY';
       question: string;
@@ -223,10 +223,10 @@ export class QuizzesService {
         title: data.title,
         description: data.description ?? null,
         teacherId: data.teacherId,
-        timeLimit: data.timeLimit,
+        timeLimit: data.timeLimit ?? 15,
         passingScore: data.passingScore ?? null,
         difficulty: data.difficulty ?? 'MEDIUM',
-        endsAt: new Date(data.endsAt),
+        endsAt: data.endsAt ? new Date(data.endsAt) : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
         questions: {
           create: data.questions.map((q) => ({
             type: q.type,
