@@ -471,6 +471,7 @@ export class MeetingsService {
     user: User,
     meetingId: string,
     segments: { startMs: number; endMs?: number; text: string }[],
+    replace = false,
   ) {
     const meeting = await this.findForUser(user, meetingId);
     if (!meeting) {
@@ -480,23 +481,59 @@ export class MeetingsService {
       return { status: meeting.transcriptStatus };
     }
 
-    const existingCount = await this.prisma.meetingTranscript.count({
-      where: { meetingId: meeting.id },
-    });
+    await this.prisma.$transaction(async (tx) => {
+      if (replace) {
+        await tx.meetingTranscript.deleteMany({ where: { meetingId: meeting.id } });
+      }
 
-    await this.prisma.meetingTranscript.createMany({
-      data: segments.map((s, idx) => ({
-        meetingId: meeting.id,
-        order: existingCount + idx,
-        startMs: s.startMs ?? 0,
-        endMs: s.endMs ?? (s.startMs + 3000),
-        text: s.text,
-      })),
-    });
+      let existingCount = 0;
+      if (!replace) {
+        existingCount = await tx.meetingTranscript.count({
+          where: { meetingId: meeting.id },
+        });
+      }
 
-    await this.prisma.meeting.update({
-      where: { id: meeting.id },
-      data: { transcriptStatus: 'READY' },
+      const existingKeys = replace
+        ? new Set<string>()
+        : new Set(
+            (
+              await tx.meetingTranscript.findMany({
+                where: { meetingId: meeting.id },
+                select: { startMs: true, text: true },
+              })
+            ).map((s) => `${s.startMs}|${s.text}`),
+          );
+
+      const toInsert: {
+        meetingId: string;
+        order: number;
+        startMs: number;
+        endMs: number;
+        text: string;
+      }[] = [];
+
+      let idx = 0;
+      for (const s of segments) {
+        const key = `${s.startMs ?? 0}|${s.text}`;
+        if (!replace && existingKeys.has(key)) continue;
+        toInsert.push({
+          meetingId: meeting.id,
+          order: existingCount + idx,
+          startMs: s.startMs ?? 0,
+          endMs: s.endMs ?? (s.startMs ?? 0) + 3000,
+          text: s.text,
+        });
+        idx++;
+      }
+
+      if (toInsert.length > 0) {
+        await tx.meetingTranscript.createMany({ data: toInsert });
+      }
+
+      await tx.meeting.update({
+        where: { id: meeting.id },
+        data: { transcriptStatus: 'READY' },
+      });
     });
 
     return { status: 'READY' };

@@ -155,6 +155,7 @@ export const SaveTranscriptSegmentSchema = z.object({
 
 export const SaveTranscriptSchema = z.object({
   segments: z.array(SaveTranscriptSegmentSchema).default([]),
+  replace: z.boolean().optional().default(false),
 });
 
 // ─── DTO Classes ────────────────────────────────────────

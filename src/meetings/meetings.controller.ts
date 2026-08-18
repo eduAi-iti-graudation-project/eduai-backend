@@ -229,6 +229,11 @@ export class MeetingsController {
     @Body() dto: SaveTranscriptDto,
     @CurrentUser() user: User,
   ) {
-    return this.meetingsService.saveLiveTranscript(user, id, dto.segments ?? []);
+    return this.meetingsService.saveLiveTranscript(
+      user,
+      id,
+      dto.segments ?? [],
+      dto.replace ?? false,
+    );
   }
 }
