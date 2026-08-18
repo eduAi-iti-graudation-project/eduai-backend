@@ -15,6 +15,7 @@ import { ErrorCode } from '../common/errors/codes';
 import {
   buildExtractionPrompt,
   createStruggleSignalExtractor,
+  EXTRACTION_SYSTEM_PROMPT,
   SignalExtractionOutputSchema,
   type StruggleSignalExtractor,
 } from './struggle-signals.agent';
