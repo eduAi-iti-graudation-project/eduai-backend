@@ -300,6 +300,83 @@ describe('AlertsService', () => {
     });
   });
 
+  describe('findByStudent', () => {
+    it('returns active alerts for the signed-in student', async () => {
+      mockPrisma.alert.findMany.mockResolvedValue([
+        {
+          id: 'a1',
+          type: 'PERFORMANCE_DROP',
+          reason: 'Score dropped 15 points',
+          status: 'ACTIVE',
+          studentId: 'stu-1',
+          createdAt: new Date('2026-01-01T00:00:00Z'),
+          student: {
+            id: 'stu-1',
+            name: 'Jamie S.',
+            enrollments: [
+              {
+                section: {
+                  name: 'Grade 9B',
+                  gradeLevel: { id: 'g9', level: 9, name: 'Grade 9' },
+                },
+              },
+            ],
+          },
+          offering: { id: 'off-1', teacher: { id: 't1', name: 'Ms. K.' } },
+          analyses: [{ diagnosis: { severity: 'HIGH' } }],
+        },
+        {
+          id: 'a2',
+          type: 'ATTENDANCE_WARNING',
+          reason: 'Absent 3 days',
+          status: 'ACTIVE',
+          studentId: 'stu-1',
+          createdAt: new Date('2026-01-02T00:00:00Z'),
+          student: { id: 'stu-1', name: 'Jamie S.', enrollments: [] },
+          offering: null,
+          analyses: [{ diagnosis: {} }],
+        },
+      ]);
+
+      const result = await service.findByStudent('stu-1');
+
+      expect(mockPrisma.alert.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { status: 'ACTIVE', studentId: 'stu-1' },
+          orderBy: { createdAt: 'desc' },
+        }),
+      );
+      expect(result).toEqual([
+        {
+          id: 'a1',
+          type: 'PERFORMANCE_DROP',
+          reason: 'Score dropped 15 points',
+          status: 'ACTIVE',
+          studentId: 'stu-1',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          studentName: 'Jamie S.',
+          className: 'Grade 9B',
+          grade: { id: 'g9', level: 9, name: 'Grade 9' },
+          teacherName: 'Ms. K.',
+          severity: 'HIGH',
+        },
+        {
+          id: 'a2',
+          type: 'ATTENDANCE_WARNING',
+          reason: 'Absent 3 days',
+          status: 'ACTIVE',
+          studentId: 'stu-1',
+          createdAt: '2026-01-02T00:00:00.000Z',
+          studentName: 'Jamie S.',
+          className: null,
+          grade: null,
+          teacherName: null,
+          severity: null,
+        },
+      ]);
+    });
+  });
+
   describe('findTeacherFlags', () => {
     it('groups CLASS/BOTH analyses by offering and ranks by severity', async () => {
       mockPrisma.studentAnalysis.findMany.mockResolvedValue([

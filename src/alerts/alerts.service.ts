@@ -297,6 +297,63 @@ export class AlertsService {
     };
   }
 
+  /** List ACTIVE alerts for a student. */
+  async findByStudent(studentId: string) {
+    const alerts = await this.prisma.alert.findMany({
+      where: { status: 'ACTIVE', studentId },
+      include: {
+        student: {
+          select: {
+            id: true,
+            name: true,
+            enrollments: {
+              where: { status: 'APPROVED' },
+              include: {
+                section: {
+                  select: {
+                    id: true,
+                    name: true,
+                    gradeLevel: {
+                      select: { id: true, level: true, name: true },
+                    },
+                  },
+                },
+              },
+              take: 1,
+            },
+          },
+        },
+        offering: {
+          select: {
+            id: true,
+            teacher: { select: { id: true, name: true } },
+          },
+        },
+        analyses: {
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          select: { diagnosis: true },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    return alerts.map((a) => ({
+      id: a.id,
+      type: a.type,
+      reason: a.reason,
+      status: a.status,
+      studentId: a.studentId,
+      createdAt: a.createdAt.toISOString(),
+      studentName: a.student.name,
+      className: a.student.enrollments[0]?.section.name ?? null,
+      grade: a.student.enrollments[0]?.section.gradeLevel ?? null,
+      teacherName: a.offering?.teacher?.name ?? null,
+      severity:
+        (a.analyses[0]?.diagnosis as { severity?: string | null } | undefined)
+          ?.severity ?? null,
+    }));
+  }
+
   /** List ACTIVE alerts for the guardian's linked children. */
   async findByGuardian(guardianId: string) {
     const alerts = await this.prisma.alert.findMany({
