@@ -282,35 +282,25 @@ export class MeetingsService {
   // ─── List (role-scoped) ───────────────────────────────
   async list(user: User, scope: 'upcoming' | 'past' | 'all' = 'all') {
     const now = new Date();
-    // Self-heal: a room that never got a room_finished webhook (unconfigured
-    // webhook delivery, abandoned test room, room closed by LiveKit without
-    // notification) would otherwise stay LIVE forever and permanently clog
-    // the upcoming list. Anything past its scheduled end by more than a
-    // grace period is treated as ended.
+    // Self-heal: Any meeting whose scheduled end time has passed automatically
+    // transitions to ENDED so it cleanly moves to past meetings and never vanishes.
     await this.prisma.meeting.updateMany({
       where: {
         organizationId: user.organizationId ?? undefined,
-        status: 'LIVE',
-        scheduledEnd: { lt: new Date(now.getTime() - 30 * 60 * 1000) },
+        status: { in: ['LIVE', 'SCHEDULED'] },
+        scheduledEnd: { lt: now },
       },
       data: { status: 'ENDED' },
     });
+
     const where: Prisma.MeetingWhereInput = {
       organizationId: user.organizationId ?? undefined,
       AND: [
         this.visibilityWhere(user),
-        // Ongoing (overrunning) live meetings belong to the upcoming view.
         ...(scope === 'upcoming'
-          ? [
-              {
-                OR: [
-                  { scheduledStart: { gte: now } },
-                  { status: 'LIVE' as const },
-                ],
-              },
-            ]
+          ? [{ status: { in: ['SCHEDULED' as const, 'LIVE' as const] } }]
           : scope === 'past'
-            ? [{ scheduledStart: { lt: now } }]
+            ? [{ status: { in: ['ENDED' as const, 'CANCELED' as const] } }]
             : []),
       ],
     };
