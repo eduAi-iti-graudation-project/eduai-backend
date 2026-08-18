@@ -188,6 +188,9 @@ model Organization {
   // Login identity domain for school-provisioned accounts (students/guardians).
   // Derived at creation as slugify(name) + ".org"; editable by admins.
   emailDomain          String?
+  // School logo shown in generated reports and admin UI. Stored as a local
+  // filesystem path (mirrors user avatarUrl) and served via GET /:id/logo.
+  logoUrl              String?
   groupId              String?            @db.Uuid
   group                SchoolGroup?       @relation(fields: [groupId], references: [id], onDelete: SetNull)
   stripeCustomerId     String?            @unique

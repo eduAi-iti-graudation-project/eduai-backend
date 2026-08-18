@@ -3,6 +3,7 @@ import { Injectable, Logger, HttpStatus } from '@nestjs/common';
 import { ApiError } from '../common/errors/api-error';
 import { ErrorCode } from '../common/errors/codes';
 import * as nodemailer from 'nodemailer';
+import { Prisma } from '@prisma/client';
 
 @Injectable()
 export class NotificationsService {
@@ -50,9 +51,17 @@ export class NotificationsService {
     type: string,
     title: string,
     body?: string,
+    data?: Record<string, unknown>,
   ): Promise<void> {
     await this.prisma.notification.create({
-      data: { userId, type, channel: 'EMAIL', title, body },
+      data: {
+        userId,
+        type,
+        channel: 'EMAIL',
+        title,
+        body,
+        data: data as Prisma.InputJsonValue | undefined,
+      },
     });
 
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
@@ -92,6 +101,7 @@ export class NotificationsService {
     type: string,
     title: string,
     body?: string,
+    data?: Record<string, unknown>,
   ): Promise<number> {
     const ids = [...new Set(userIds)].filter(Boolean);
     if (ids.length === 0) return 0;
@@ -103,6 +113,7 @@ export class NotificationsService {
         channel: 'EMAIL' as const,
         title,
         body,
+        data: data as Prisma.InputJsonValue | undefined,
       })),
     });
 

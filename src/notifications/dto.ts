@@ -10,6 +10,7 @@ export const NotificationSchema = z.object({
   body: z.string().nullable(),
   readAt: z.string().datetime().nullable(),
   createdAt: z.string().datetime(),
+  data: z.record(z.string(), z.unknown()).nullable(),
 });
 
 export class NotificationDto extends createZodDto(NotificationSchema) {}
