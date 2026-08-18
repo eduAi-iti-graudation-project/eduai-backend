@@ -158,15 +158,81 @@ export class StruggleSignalsService {
       include: { courseOffering: { include: { course: true } } },
     });
     if (!meeting) return;
-    // Attribution + dispatch both key on the class's curriculum; ad-hoc
-    // meetings can't produce follow-up material.
-    if (meeting.type !== 'CLASS' || !meeting.courseOfferingId) return;
 
-    const segments = await this.prisma.meetingTranscriptSegment.findMany({
+    let segments = await this.prisma.meetingTranscriptSegment.findMany({
       where: { meetingId },
       orderBy: { timestamp: 'asc' },
     });
-    if (segments.length === 0) return;
+
+    if (segments.length === 0) {
+      // Fallback: Read from meeting_transcripts (saved live Web Speech AI transcript)
+      const dbTranscripts = await this.prisma.meetingTranscript.findMany({
+        where: { meetingId },
+        orderBy: { order: 'asc' },
+      });
+
+      if (dbTranscripts.length === 0) return;
+
+      const participants = await this.prisma.meetingParticipant.findMany({
+        where: { meetingId },
+        include: { user: true },
+      });
+
+      const students = participants.filter((p) => p.user.role === 'STUDENT').map((p) => p.user);
+      const candidates = students.length > 0 ? students : participants.map((p) => p.user).filter((u) => u.id !== meeting.createdBy);
+      const targetUsers = candidates.length > 0 ? candidates : (participants.length > 0 ? [participants[0].user] : []);
+      if (targetUsers.length === 0) return;
+
+      for (const targetUser of targetUsers) {
+        const studentToken = `Student_${targetUser.name.replace(/[^a-zA-Z0-9]/g, '_')}`;
+
+        const studentLines = dbTranscripts.filter((t) =>
+          t.text.toLowerCase().includes(targetUser.name.toLowerCase()) || targetUsers.length === 1,
+        );
+        const teacherLines = dbTranscripts.filter((t) =>
+          !studentLines.includes(t),
+        );
+
+        const extractResult = await this.runExtraction(
+          buildExtractionPrompt({
+            courseName: meeting.courseOffering?.course?.name ?? meeting.title,
+            studentToken,
+            studentSegments: studentLines.map((s) => ({
+              timestamp: Math.floor(s.startMs / 1000),
+              text: s.text,
+            })),
+            teacherSegments: teacherLines.map((s) => ({
+              timestamp: Math.floor(s.startMs / 1000),
+              text: s.text,
+            })),
+          }),
+        );
+
+        for (const pair of extractResult.signals) {
+          await this.prisma.struggleSignal.create({
+            data: {
+              meetingId,
+              studentId: targetUser.id,
+              concept: pair.concept,
+              explanation: pair.explanation,
+              status: 'PENDING',
+            },
+          });
+          this.logger.log(
+            `[struggle-signals] meeting ${meetingId} student ${targetUser.id}: "${pair.concept}"`,
+          );
+        }
+      }
+
+      await this.applyClassWideRollup(meetingId);
+      if (meeting.courseOfferingId) {
+        await this.autoDispatchSignals(
+          meetingId,
+          meeting.courseOffering?.teacherId ?? meeting.createdBy,
+        );
+      }
+      return;
+    }
 
     const speakers = new Map(
       (
@@ -242,12 +308,12 @@ export class StruggleSignalsService {
     }
 
     await this.applyClassWideRollup(meetingId);
-    // No teacher approval step: every extracted signal is dispatched to the
-    // student immediately (quiz + re-explanation).
-    await this.autoDispatchSignals(
-      meetingId,
-      meeting.courseOffering?.teacherId ?? meeting.createdBy,
-    );
+    if (meeting.courseOfferingId) {
+      await this.autoDispatchSignals(
+        meetingId,
+        meeting.courseOffering?.teacherId ?? meeting.createdBy,
+      );
+    }
   }
 
   /**
@@ -578,6 +644,7 @@ export class StruggleSignalsService {
       select: {
         id: true,
         type: true,
+        createdBy: true,
         courseOfferingId: true,
         courseOffering: { select: { teacherId: true } },
       },
@@ -585,7 +652,8 @@ export class StruggleSignalsService {
     if (!meeting) {
       throw new NotFoundException('This meeting could not be found.');
     }
-    if (meeting.courseOffering?.teacherId !== user.id) {
+    const isTeacher = meeting.createdBy === user.id || meeting.courseOffering?.teacherId === user.id || user.role === 'ADMIN' || user.role === 'TEACHER';
+    if (!isTeacher) {
       throw new ForbiddenException(
         'You can only review follow-up suggestions for meetings of classes you teach.',
       );
