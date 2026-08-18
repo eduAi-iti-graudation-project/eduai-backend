@@ -136,12 +136,15 @@ export class StruggleSignalsService {
    */
   async triggerExtraction(user: User, meetingId: string) {
     await this.requireOwnMeeting(user, meetingId);
-    await this.finalizeStruggleExtraction(meetingId);
-    const meeting = await this.prisma.meeting.findUnique({
+    await this.extractSignals(meetingId);
+    await this.prisma.meeting.update({
       where: { id: meetingId },
-      select: { struggleSignalsProcessed: true },
+      data: { struggleSignalsProcessed: true },
     });
-    return { extracted: meeting?.struggleSignalsProcessed ?? false };
+    const count = await this.prisma.struggleSignal.count({
+      where: { meetingId },
+    });
+    return { extracted: true, count };
   }
 
   // ─── Phase 1: struggle-signal extraction ───────────────────────────
@@ -324,25 +327,19 @@ export class StruggleSignalsService {
   private async runExtraction(userPrompt: string): Promise<{
     signals: { concept: string; explanation: string }[];
   }> {
-    let lastError: unknown;
-    for (
-      let attempt = 0;
-      attempt < StruggleSignalsService.EXTRACTION_ATTEMPTS;
-      attempt++
-    ) {
-      try {
-        const result = await this.extractor.generate(userPrompt, {
-          structuredOutput: { schema: SignalExtractionOutputSchema },
-        });
-        return result.object;
-      } catch (error) {
-        lastError = error;
-        this.logger.warn(
-          `[struggle-signals] extraction attempt ${attempt + 1} failed: ${(error as Error).message}`,
-        );
+    try {
+      const rawText = await this.provider.chat(EXTRACTION_SYSTEM_PROMPT, userPrompt);
+      const cleaned = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
+      const parsed = JSON.parse(cleaned);
+      if (parsed && Array.isArray(parsed.signals)) {
+        return parsed;
       }
+    } catch (error) {
+      this.logger.warn(
+        `[struggle-signals] extraction failed: ${(error as Error).message}`,
+      );
     }
-    throw lastError;
+    return { signals: [] };
   }
 
   /**
